@@ -84,7 +84,7 @@ amazon-ads-bot/
 | **Règles par défaut (003)** | Non chargées. | Seed 003 avec workspace_id réel (script seed-workspace). |
 | **Payload sync** | PDF : profile_ids (array). Code : profileId (string). | Optionnel : accepter profile_ids[]. |
 | **Payload execute** | PDF : recommendation_ids, dry_run. Code : recommendationIds, dryRun. | Alias ou doc (comportement OK). |
-| **Bug** | recommendations.service utilise rules.type. | Remplacer par rules.ruleType. |
+| **Bug** | ~~recommendations.service utilise rules.type~~ | Corrigé : rules.ruleType. |
 
 ### 2.3 Ce qui est totalement manquant
 
@@ -111,10 +111,20 @@ amazon-ads-bot/
 
 ## 3. Plan d'implémentation V1
 
-### Phase A — Minimum backend viable (health, DB, bootstrap)
+### Phase A — Minimum backend viable (health, DB, bootstrap) — DONE (2026-02-01)
 - **Fichiers** : `src/main.ts`, `src/app.module.ts`.
-- **Endpoints** : GET /api/health, /health, /ready, /live (déjà dans SystemModule).
-- **Actions** : Créer main.ts (NestFactory.create(AppModule), listen(PORT)), app.module.ts (imports tous les modules). Vérifier health + DB. Optionnel : script ou doc pour appliquer schéma 001 sur Supabase.
+- **Endpoints** : GET /api/health, GET /api/health/db, /health, /ready, /live (SystemModule).
+- **Checklist Phase A** :
+  - [x] Serveur NestJS démarre (`npm run dev` ou `npm run start`).
+  - [x] Tous les controllers existants enregistrés (system, auth, sync, rules, recommendations, executor, books, metrics, alerts, amazon-client).
+  - [x] GET /api/health et GET /api/health/db répondent.
+  - [x] DB connectivity check au démarrage (SELECT 1) + endpoint GET /api/health/db.
+  - [x] Config ENV : crash si variables critiques manquantes (config/env.ts).
+  - [x] Script `dev` (watch) dans package.json ; `.env.example` conforme au PDF.
+  - [x] **Phase A Fix Build** : `npm run build` passe (alerts Severity, executor entity_key, action log lte, recommendations ruleType, rules dryRun).
+  - [x] **Phase A Fix ENV loading** : `import 'dotenv/config'` en première ligne de `main.ts` pour charger `.env` avant toute import de `env.ts` ; dépendance `dotenv` ajoutée.
+  - [x] **Phase A Fix SSL Supabase — DONE** : variable optionnelle `DATABASE_SSL_CA_PATH` ; chargement du CA depuis fichier, `ssl: { ca, rejectUnauthorized: true }` sur le Pool pg ; GET /api/health/db renvoie `{ ok: true }` quand le CA est présent.
+  - [x] **Phase A — SSL debug logs added** : si `LOG_SSL_DEBUG=true`, logs au boot (DATABASE_SSL_CA_PATH, resolvedPath, existsSync, caLength, rejectUnauthorized) ; jamais le contenu du cert ni DATABASE_URL.
 
 ### Phase B — Auth Amazon
 - Déjà en place. Tester flux OAuth (init → callback → refresh). Vérifier stockage refresh_token_encrypted.
@@ -162,6 +172,11 @@ Aucun code n'est écrit tant que l'utilisateur n'a pas validé le plan. Attendre
 |------|--------------|
 | 2026-02-01 | Création du fichier ; rapport initial (analyse PDF + état backend + plan V1). |
 | 2026-02-01 | Clarification : schéma réel = Supabase (Postgres) ; SQL dans Supabase, backend NestJS s'adapte. Suppression de « Drizzle génère migrations ». |
+| 2026-02-01 | Phase A implémentée : main.ts, app.module.ts, assertDbConnection(), GET /api/health/db, script dev, .env.example. |
+| 2026-02-01 | Phase A Fix Build : export Severity unique (alerts), executor entity_key = type:amazon_id, action log endDate lte, recommendations ruleType, rules dryRun → options ; build OK. |
+| 2026-02-01 | Phase A Fix ENV loading : dotenv/config en première ligne de main.ts pour charger .env avant env.ts ; dépendance dotenv ajoutée. |
+| 2026-02-01 | Phase A Fix SSL Supabase — DONE : DATABASE_SSL_CA_PATH optionnel, getPoolOptions() charge le CA, ssl.rejectUnauthorized: true ; .env.example documenté. |
+| 2026-02-01 | Phase A — SSL debug logs added : LOG_SSL_DEBUG=true affiche (path, resolvedPath, existsSync, caLength, rejectUnauthorized) ; pas de secret. |
 
 ---
 

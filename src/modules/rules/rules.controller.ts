@@ -271,7 +271,7 @@ export class RulesController {
 
     const result = await this.rulesService.evaluateRules(options);
 
-    const message = result.dryRun
+    const message = options.dryRun
       ? `Dry run complete: ${result.details.filter((d) => d.matched).length} matches found`
       : `Evaluation complete: ${result.recommendationsCreated} recommendations created`;
 

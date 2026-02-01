@@ -2,6 +2,7 @@ import { Module, Global } from '@nestjs/common';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema';
+import { getPoolOptions } from '@/config/database';
 
 export const DATABASE_CONNECTION = 'DATABASE_CONNECTION';
 
@@ -11,13 +12,7 @@ export const DATABASE_CONNECTION = 'DATABASE_CONNECTION';
     {
       provide: DATABASE_CONNECTION,
       useFactory: () => {
-        const pool = new Pool({
-          connectionString: process.env.DATABASE_URL,
-          max: 20,
-          idleTimeoutMillis: 30000,
-          connectionTimeoutMillis: 2000,
-        });
-
+        const pool = new Pool(getPoolOptions());
         return drizzle(pool, { schema });
       },
     },

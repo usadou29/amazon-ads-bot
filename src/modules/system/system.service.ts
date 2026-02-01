@@ -83,6 +83,18 @@ export class SystemService {
   }
 
   /**
+   * Vérification minimale DB : SELECT 1.
+   * Utilisé par GET /api/health/db pour retourner { ok: true }. Lance si la DB ne répond pas.
+   */
+  async getHealthDb(): Promise<{ ok: boolean }> {
+    const result = await this.checkDatabase();
+    if (result.status !== 'ok') {
+      throw new Error(result.message ?? 'Database connection failed');
+    }
+    return { ok: true };
+  }
+
+  /**
    * Verifie l'etat de sante du systeme
    */
   async getHealth(): Promise<HealthStatus> {

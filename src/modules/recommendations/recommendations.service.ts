@@ -115,7 +115,7 @@ export class RecommendationsService {
         rule: {
           id: rules.id,
           name: rules.name,
-          type: rules.type,
+          type: rules.ruleType,
         },
       })
       .from(recommendations)
@@ -148,7 +148,7 @@ export class RecommendationsService {
         rule: {
           id: rules.id,
           name: rules.name,
-          type: rules.type,
+          type: rules.ruleType,
         },
       })
       .from(recommendations)

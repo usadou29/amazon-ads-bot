@@ -1,3 +1,3 @@
 export * from './alerts.module';
 export * from './alerts.service';
-export * from './telegram.service';
+export { TelegramService, SEVERITY_LEVELS, TelegramMessage, SendMessageResult } from './telegram.service';

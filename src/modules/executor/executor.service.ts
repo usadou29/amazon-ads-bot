@@ -6,13 +6,18 @@ import {
   actionLog,
   systemConfig,
   keywords,
+  adGroups,
+  campaigns,
+  marketplaceProfiles,
+  adAccounts,
   Recommendation,
   ActionLogEntry,
   NewActionLogEntry,
   KillSwitchConfig,
 } from '@/db/schema';
-import { eq, and, gte, sql } from 'drizzle-orm';
+import { eq, and, gte, lte, sql } from 'drizzle-orm';
 import { validateBidChange, GUARDS } from '@/config/guards';
+import { extractAmazonId } from '@/utils/entity-key';
 import { AmazonClientService } from '@/modules/amazon-client';
 import { Marketplace } from '@/config/amazon';
 
@@ -301,6 +306,7 @@ export class ExecutorService {
 
   /**
    * Execute un ajustement d'enchere
+   * entity_key format: type:amazon_id (ex: keyword:123456789)
    */
   private async executeAdjustBid(
     recommendation: Recommendation,
@@ -308,19 +314,16 @@ export class ExecutorService {
     dryRun: boolean,
     executedBy: string,
   ): Promise<ExecuteActionResult> {
-    // Parser l'entity key pour obtenir les IDs
-    const entityInfo = this.parseEntityKey(recommendation.entityKey);
+    const amazonKeywordId = extractAmazonId(recommendation.entityKey);
+    if (amazonKeywordId === null) {
+      throw new BadRequestException(`Invalid entity_key for keyword: ${recommendation.entityKey}`);
+    }
 
-    // Recuperer le keyword actuel
-    const [keyword] = await this.db
-      .select()
-      .from(keywords)
-      .where(eq(keywords.id, entityInfo.keywordId))
-      .limit(1);
-
-    if (!keyword) {
+    const ctx = await this.getKeywordContextByEntityKey(recommendation.workspaceId, amazonKeywordId);
+    if (!ctx) {
       throw new NotFoundException(`Keyword not found for entity ${recommendation.entityKey}`);
     }
+    const { keyword } = ctx;
 
     const currentBid = Number(keyword.bid) || 0;
     let newBid: number;
@@ -354,9 +357,9 @@ export class ExecutorService {
     // Executer si pas en dry run
     if (!dryRun) {
       apiResponse = await this.amazonClient.updateKeyword(
-        entityInfo.adAccountId,
-        entityInfo.profileId,
-        entityInfo.marketplace as Marketplace,
+        ctx.adAccountId,
+        ctx.profileId,
+        ctx.marketplace as Marketplace,
         keyword.amazonKeywordId,
         { bid: newBid },
       );
@@ -372,7 +375,7 @@ export class ExecutorService {
     }
 
     // Logger l'action
-    const actionLog = await this.logAction({
+    const actionLogEntry = await this.logAction({
       workspaceId: recommendation.workspaceId,
       recommendationId: recommendation.id,
       ruleId: recommendation.ruleId,
@@ -393,7 +396,7 @@ export class ExecutorService {
 
     return {
       success: true,
-      actionId: actionLog.id,
+      actionId: actionLogEntry.id,
       dryRun,
       beforeValue,
       afterValue,
@@ -404,6 +407,7 @@ export class ExecutorService {
 
   /**
    * Execute une pause de keyword
+   * entity_key format: type:amazon_id (ex: keyword:123456789)
    */
   private async executePause(
     recommendation: Recommendation,
@@ -411,18 +415,16 @@ export class ExecutorService {
     dryRun: boolean,
     executedBy: string,
   ): Promise<ExecuteActionResult> {
-    const entityInfo = this.parseEntityKey(recommendation.entityKey);
+    const amazonKeywordId = extractAmazonId(recommendation.entityKey);
+    if (amazonKeywordId === null) {
+      throw new BadRequestException(`Invalid entity_key for keyword: ${recommendation.entityKey}`);
+    }
 
-    // Recuperer le keyword actuel
-    const [keyword] = await this.db
-      .select()
-      .from(keywords)
-      .where(eq(keywords.id, entityInfo.keywordId))
-      .limit(1);
-
-    if (!keyword) {
+    const ctx = await this.getKeywordContextByEntityKey(recommendation.workspaceId, amazonKeywordId);
+    if (!ctx) {
       throw new NotFoundException(`Keyword not found for entity ${recommendation.entityKey}`);
     }
+    const { keyword } = ctx;
 
     const beforeValue = { state: keyword.state };
     const afterValue = { state: 'paused' };
@@ -436,9 +438,9 @@ export class ExecutorService {
     // Executer si pas en dry run
     if (!dryRun) {
       apiResponse = await this.amazonClient.updateKeyword(
-        entityInfo.adAccountId,
-        entityInfo.profileId,
-        entityInfo.marketplace as Marketplace,
+        ctx.adAccountId,
+        ctx.profileId,
+        ctx.marketplace as Marketplace,
         keyword.amazonKeywordId,
         { state: 'paused' },
       );
@@ -454,7 +456,7 @@ export class ExecutorService {
     }
 
     // Logger l'action
-    const actionLog = await this.logAction({
+    const actionLogEntry = await this.logAction({
       workspaceId: recommendation.workspaceId,
       recommendationId: recommendation.id,
       ruleId: recommendation.ruleId,
@@ -475,7 +477,7 @@ export class ExecutorService {
 
     return {
       success: true,
-      actionId: actionLog.id,
+      actionId: actionLogEntry.id,
       dryRun,
       beforeValue,
       afterValue,
@@ -688,7 +690,7 @@ export class ExecutorService {
       conditions.push(gte(actionLog.executedAt, query.startDate));
     }
     if (query.endDate) {
-      conditions.push(gte(query.endDate, actionLog.executedAt));
+      conditions.push(lte(actionLog.executedAt, query.endDate));
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -771,26 +773,44 @@ export class ExecutorService {
   }
 
   /**
-   * Parse une entity key pour extraire les infos
+   * Récupère le keyword + contexte (adAccountId, profileId, marketplace) par entity_key (type:amazon_id) et workspace.
    */
-  private parseEntityKey(entityKey: string): {
-    adAccountId: string;
-    profileId: number;
-    marketplace: string;
-    campaignId?: string;
-    adGroupId?: string;
-    keywordId?: string;
-  } {
-    // Format attendu: adAccountId:profileId:marketplace:campaignId:adGroupId:keywordId
-    const parts = entityKey.split(':');
+  private async getKeywordContextByEntityKey(
+    workspaceId: string,
+    amazonKeywordId: number,
+  ): Promise<
+    | { keyword: typeof keywords.$inferSelect; adAccountId: string; profileId: number; marketplace: string }
+    | null
+  > {
+    const rows = await this.db
+      .select({
+        keyword: keywords,
+        adAccountId: adAccounts.id,
+        profileId: marketplaceProfiles.profileId,
+        marketplace: marketplaceProfiles.marketplace,
+      })
+      .from(keywords)
+      .innerJoin(adGroups, eq(keywords.adGroupId, adGroups.id))
+      .innerJoin(campaigns, eq(adGroups.campaignId, campaigns.id))
+      .innerJoin(marketplaceProfiles, eq(campaigns.profileId, marketplaceProfiles.id))
+      .innerJoin(adAccounts, eq(marketplaceProfiles.adAccountId, adAccounts.id))
+      .where(
+        and(
+          eq(adAccounts.workspaceId, workspaceId),
+          eq(keywords.amazonKeywordId, amazonKeywordId),
+        ),
+      )
+      .limit(1);
 
+    const row = rows[0];
+    if (!row) return null;
+
+    const profileId = Number(row.profileId);
     return {
-      adAccountId: parts[0] || '',
-      profileId: parseInt(parts[1], 10) || 0,
-      marketplace: parts[2] || 'EU',
-      campaignId: parts[3],
-      adGroupId: parts[4],
-      keywordId: parts[5],
+      keyword: row.keyword,
+      adAccountId: row.adAccountId,
+      profileId: isNaN(profileId) ? 0 : profileId,
+      marketplace: row.marketplace ?? 'FR',
     };
   }
 }

@@ -9,6 +9,7 @@ const envSchema = z.object({
 
   // Database
   DATABASE_URL: z.string().url(),
+  DATABASE_SSL_CA_PATH: z.string().optional(),
 
   // Security
   ENCRYPTION_KEY: z.string().min(32),
@@ -20,8 +21,11 @@ const envSchema = z.object({
   AMAZON_ADS_API_BASE_URL: z.string().url().default('https://advertising-api-eu.amazon.com'),
 
   // Telegram
-  TELEGRAM_BOT_TOKEN: z.string().min(1),
-  TELEGRAM_CHAT_ID: z.string().min(1),
+  //TELEGRAM_BOT_TOKEN: z.string().min(1),
+  //TELEGRAM_CHAT_ID: z.string().min(1),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID: z.string().optional(),
+
 
   // Feature Flags
   DRY_RUN: z.string().transform((val) => val === 'true').default('true'),
@@ -57,6 +61,7 @@ export const configuration = () => ({
   },
   database: {
     url: env.DATABASE_URL,
+    sslCaPath: env.DATABASE_SSL_CA_PATH,
   },
   security: {
     encryptionKey: env.ENCRYPTION_KEY,

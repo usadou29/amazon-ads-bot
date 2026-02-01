@@ -27,6 +27,17 @@ export class SystemController {
   }
 
   /**
+   * GET /api/health/db
+   * Vérification connexion DB (SELECT 1). Retourne { ok: true } si la DB répond.
+   */
+  @Get('api/health/db')
+  async getHealthDb() {
+    this.logger.debug('Health DB check requested');
+
+    return this.systemService.getHealthDb();
+  }
+
+  /**
    * GET /api/system/config
    * Recupere la configuration systeme
    */

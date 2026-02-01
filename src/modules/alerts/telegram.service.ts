@@ -2,9 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance, AxiosError } from 'axios';
 
-// Types de severite
+// Types de severite (export SEVERITY_LEVELS only; Severity exported from alerts.service / db/schema)
 export const SEVERITY_LEVELS = ['info', 'warning', 'error', 'critical'] as const;
-export type Severity = typeof SEVERITY_LEVELS[number];
+type Severity = (typeof SEVERITY_LEVELS)[number];
 
 // Emojis par severite
 const SEVERITY_EMOJI: Record<Severity, string> = {
