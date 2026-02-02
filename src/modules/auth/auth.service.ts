@@ -113,7 +113,7 @@ export class AuthService {
       // Recuperer les informations du compte Amazon
       const accountInfo = await this.getAccountInfo(tokenResponse.access_token);
 
-      // Creer ou mettre a jour l'ad account
+      // Creer l'ad account (refresh_token stocke chiffre, access_token jamais en DB)
       const [adAccount] = await this.db
         .insert(adAccounts)
         .values({
@@ -123,17 +123,6 @@ export class AuthService {
           amazonAccountId: accountInfo?.id || null,
           accountName: accountInfo?.name || null,
           status: 'active',
-        })
-        .onConflictDoUpdate({
-          target: [adAccounts.workspaceId, adAccounts.amazonAccountId],
-          set: {
-            refreshTokenEncrypted,
-            tokenExpiresAt,
-            accountName: accountInfo?.name || null,
-            status: 'active',
-            lastError: null,
-            updatedAt: new Date(),
-          },
         })
         .returning();
 

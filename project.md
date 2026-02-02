@@ -126,8 +126,71 @@ amazon-ads-bot/
   - [x] **Phase A Fix SSL Supabase — DONE** : variable optionnelle `DATABASE_SSL_CA_PATH` ; chargement du CA depuis fichier, `ssl: { ca, rejectUnauthorized: true }` sur le Pool pg ; GET /api/health/db renvoie `{ ok: true }` quand le CA est présent.
   - [x] **Phase A — SSL debug logs added** : si `LOG_SSL_DEBUG=true`, logs au boot (DATABASE_SSL_CA_PATH, resolvedPath, existsSync, caLength, rejectUnauthorized) ; jamais le contenu du cert ni DATABASE_URL.
 
-### Phase B — Auth Amazon
-- Déjà en place. Tester flux OAuth (init → callback → refresh). Vérifier stockage refresh_token_encrypted.
+### Phase B — Auth Amazon — DONE (2026-02-01)
+- **Flow OAuth** : GET /auth/amazon → redirection LWA ; GET /auth/amazon/callback → échange code → tokens ; refresh_token stocké chiffré dans ad_accounts.refresh_token_encrypted ; access_token jamais en DB.
+- **Local dev friendly** : callback répond en HTML (page Succès avec adAccountId, page Erreur avec message) ; aucun secret affiché.
+- **Checklist Phase B** :
+  - [x] GET /auth/amazon redirige vers Amazon (LWA).
+  - [x] GET /auth/amazon/callback échange le code contre les tokens.
+  - [x] refresh_token stocké en DB (chiffré) ; access_token non stocké.
+  - [x] Page HTML succès (adAccountId) et page HTML erreur (message clair).
+  - [x] Aucun secret loggé.
+
+#### Phase B — Test du flow OAuth (doc)
+
+**Prérequis**
+- Backend démarré (`npm run dev`), DB OK (`GET /api/health/db` → `{ "ok": true }`).
+- `.env` : `AMAZON_CLIENT_ID`, `AMAZON_CLIENT_SECRET`, `AMAZON_REDIRECT_URI` configurés (ex. `http://localhost:3001/auth/amazon/callback` pour le dev local).
+- Dans le portail Amazon LWA (Login with Amazon), l’URL de redirection autorisée doit être exactement `AMAZON_REDIRECT_URI`.
+
+**Créer un workspace (une fois)**
+- En Supabase, créer un `user` puis un `workspace` lié, ou exécuter :
+
+```sql
+-- Exemple : créer un user puis un workspace (remplacer l’email si besoin)
+INSERT INTO users (id, email, is_active) VALUES (gen_random_uuid(), 'dev@example.com', true)
+ON CONFLICT (email) DO NOTHING;
+
+INSERT INTO workspaces (id, user_id, name)
+SELECT gen_random_uuid(), id, 'Default'
+FROM users WHERE email = 'dev@example.com' LIMIT 1;
+```
+
+- Récupérer l’`id` du workspace créé (ex. dans Supabase Table Editor ou avec `SELECT id, name FROM workspaces;`).
+
+**Étapes pour tester le flow en local**
+
+1. Ouvrir dans le navigateur :  
+   `http://localhost:3001/auth/amazon?workspaceId=<WORKSPACE_UUID>`  
+   (remplacer `<WORKSPACE_UUID>` par l’id du workspace).
+
+2. Se connecter sur Amazon (LWA) et autoriser l’app.
+
+3. Amazon redirige vers `http://localhost:3001/auth/amazon/callback?code=...&state=...`.
+
+4. **Succès** : la réponse est une page HTML « Succès » avec l’**Ad account ID** créé (aucun secret).  
+   **Erreur** : page HTML « Erreur » avec un message clair (aucun secret).
+
+**Vérifier en base qu’un ad_account a bien été créé**
+
+Dans Supabase (SQL Editor ou psql) :
+
+```sql
+-- Lister les ad_accounts avec présence d’un refresh_token (sans afficher le secret)
+SELECT id, workspace_id, amazon_account_id, account_name, status,
+       (refresh_token_encrypted IS NOT NULL AND length(refresh_token_encrypted) > 0) AS has_refresh_token,
+       token_expires_at, created_at
+FROM ad_accounts
+ORDER BY created_at DESC;
+```
+
+- Après un flow réussi, une ligne doit exister avec `has_refresh_token = true`.  
+- Ne jamais afficher ou logger `refresh_token_encrypted` (contenu chiffré).
+
+**Critères d’acceptation Phase B**
+- Ouvrir `http://localhost:3001/auth/amazon?workspaceId=<uuid>`, se connecter, revenir sur le callback et voir la page « Succès ».
+- En base : une ligne dans `ad_accounts` avec `refresh_token_encrypted` non null.
+- Aucun secret loggé.
 
 ### Phase C — Sync structure (campaigns, ad_groups, keywords)
 - Déjà en place. Exécuter migration 001 sur Supabase. Tester sync complète après connexion Amazon.
@@ -177,6 +240,7 @@ Aucun code n'est écrit tant que l'utilisateur n'a pas validé le plan. Attendre
 | 2026-02-01 | Phase A Fix ENV loading : dotenv/config en première ligne de main.ts pour charger .env avant env.ts ; dépendance dotenv ajoutée. |
 | 2026-02-01 | Phase A Fix SSL Supabase — DONE : DATABASE_SSL_CA_PATH optionnel, getPoolOptions() charge le CA, ssl.rejectUnauthorized: true ; .env.example documenté. |
 | 2026-02-01 | Phase A — SSL debug logs added : LOG_SSL_DEBUG=true affiche (path, resolvedPath, existsSync, caLength, rejectUnauthorized) ; pas de secret. |
+| 2026-02-01 | Phase B — Auth Amazon : callback en HTML (succès/erreur), insert ad_account sans onConflict, doc test (étapes + SQL) dans PROJECT.md. |
 
 ---
 

@@ -29,6 +29,15 @@ interface RefreshTokenDto {
   adAccountId: string;
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
@@ -75,7 +84,8 @@ export class AuthController {
 
   /**
    * GET /auth/amazon/callback
-   * Callback OAuth - Amazon redirige ici apres l'authentification
+   * Callback OAuth - Amazon redirige ici apres l'authentification.
+   * Répond avec une page HTML (succès ou erreur), sans secret.
    */
   @Get('amazon/callback')
   async handleCallback(
@@ -87,35 +97,82 @@ export class AuthController {
     // Verifier si Amazon a retourne une erreur
     if (query.error) {
       this.logger.error(`OAuth error: ${query.error} - ${query.error_description}`);
-
-      // Rediriger vers une page d'erreur frontend
-      const errorUrl = `/auth/error?error=${encodeURIComponent(query.error)}&description=${encodeURIComponent(query.error_description || '')}`;
-      res.redirect(HttpStatus.FOUND, errorUrl);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.status(400).send(this.renderAuthErrorPage(query.error, query.error_description || ''));
       return;
     }
 
     // Verifier les parametres requis
     if (!query.code || !query.state) {
       this.logger.error('Missing code or state in callback');
-      res.redirect(HttpStatus.FOUND, '/auth/error?error=missing_parameters');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.status(400).send(this.renderAuthErrorPage('missing_parameters', 'Code ou state manquant dans le callback.'));
       return;
     }
 
     try {
       const result = await this.authService.handleCallback(query.code, query.state);
 
-      // Rediriger vers la page de succes frontend avec l'ID du compte
-      const successUrl = `/auth/success?adAccountId=${result.adAccountId}`;
-      res.redirect(HttpStatus.FOUND, successUrl);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.status(200).send(this.renderAuthSuccessPage(result.adAccountId));
     } catch (error) {
-      this.logger.error(`Callback processing failed: ${error}`);
-
       const errorMessage = error instanceof Error ? error.message : 'Authentication failed';
-      res.redirect(
-        HttpStatus.FOUND,
-        `/auth/error?error=callback_failed&description=${encodeURIComponent(errorMessage)}`,
-      );
+      this.logger.error(`Callback processing failed: ${errorMessage}`);
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.status(401).send(this.renderAuthErrorPage('callback_failed', errorMessage));
     }
+  }
+
+  /**
+   * Page HTML succès (local dev friendly) — aucun secret.
+   */
+  private renderAuthSuccessPage(adAccountId: string): string {
+    return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auth Amazon — Succès</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { color: #0a0; }
+    code { background: #eee; padding: 0.2em 0.4em; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Succès</h1>
+  <p>Connexion Amazon Ads effectuée. Compte créé ou mis à jour.</p>
+  <p><strong>Ad account ID :</strong> <code>${escapeHtml(adAccountId)}</code></p>
+  <p>Aucun secret n’est affiché. Vérifiez en base que <code>ad_accounts.refresh_token_encrypted</code> est renseigné.</p>
+</body>
+</html>`;
+  }
+
+  /**
+   * Page HTML erreur (local dev friendly) — message clair, aucun secret.
+   */
+  private renderAuthErrorPage(errorCode: string, description: string): string {
+    const safeCode = escapeHtml(errorCode);
+    const safeDesc = escapeHtml(description);
+    return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auth Amazon — Erreur</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { color: #c00; }
+    code { background: #fee; padding: 0.2em 0.4em; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Erreur d’authentification</h1>
+  <p><strong>Code :</strong> <code>${safeCode}</code></p>
+  <p>${safeDesc}</p>
+</body>
+</html>`;
   }
 
   /**
