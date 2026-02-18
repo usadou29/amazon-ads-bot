@@ -161,8 +161,83 @@ export class AmazonClientService {
     return response.data;
   }
 
+  // ─────────────────────────────────────────────────────────
+  // Pagination helper — Amazon SP API v3 utilise un curseur
+  // (nextToken) pour paginer les réponses.
+  // ─────────────────────────────────────────────────────────
+
   /**
-   * Récupère les campagnes pour un profil
+   * Récupère TOUTES les pages d'un endpoint list (POST) paginé.
+   * Accumule les résultats via nextToken jusqu'à épuisement.
+   *
+   * @param client    - AxiosInstance configuré
+   * @param endpoint  - Ex: '/sp/campaigns/list'
+   * @param body      - Le body de la requête (sans nextToken)
+   * @param headers   - Headers Accept/Content-Type spécifiques
+   * @param dataKey   - Clé dans la réponse contenant le tableau (ex: 'campaigns')
+   * @param maxPages  - Nombre max de pages (garde-fou, défaut 50)
+   */
+  private async fetchAllPages(
+    client: AxiosInstance,
+    endpoint: string,
+    body: Record<string, any>,
+    headers: Record<string, string>,
+    dataKey: string,
+    maxPages = 50,
+  ): Promise<any[]> {
+    const allItems: any[] = [];
+    let nextToken: string | undefined;
+    let page = 0;
+
+    do {
+      const requestBody = nextToken ? { ...body, nextToken } : { ...body };
+
+      const response = await retryWithBackoff(async () => {
+        return client.post(endpoint, requestBody, { headers });
+      });
+
+      const items = response.data[dataKey] || [];
+      allItems.push(...items);
+      nextToken = response.data.nextToken || undefined;
+      page++;
+
+      this.logger.debug(
+        `${endpoint} page ${page}: ${items.length} items` +
+        (nextToken ? ` (nextToken present, continuing…)` : ' (last page)'),
+      );
+    } while (nextToken && page < maxPages);
+
+    if (nextToken) {
+      this.logger.warn(
+        `${endpoint}: stopped at ${maxPages} pages (${allItems.length} items). ` +
+        `Increase maxPages if needed.`,
+      );
+    }
+
+    return allItems;
+  }
+
+  /**
+   * Récupère les portfolios pour un profil.
+   * Note : L'API Portfolios v2 n'utilise PAS de pagination curseur
+   * mais retourne la liste complète en un seul appel.
+   */
+  async getPortfolios(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+  ): Promise<any[]> {
+    const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+    const response = await retryWithBackoff(async () => {
+      return client.get('/v2/portfolios/extended');
+    });
+
+    return response.data || [];
+  }
+
+  /**
+   * Récupère les campagnes pour un profil (avec pagination complète)
    */
   async getCampaigns(
     adAccountId: string,
@@ -171,25 +246,23 @@ export class AmazonClientService {
   ): Promise<any[]> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const response = await retryWithBackoff(async () => {
-      return client.post('/sp/campaigns/list', {
-        stateFilter: {
-          include: ['ENABLED', 'PAUSED', 'ARCHIVED'],
-        },
+    return this.fetchAllPages(
+      client,
+      '/sp/campaigns/list',
+      {
+        stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
         maxResults: 100,
-      }, {
-        headers: {
-          Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
-          'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
-        },
-      });
-    });
-
-    return response.data.campaigns || [];
+      },
+      {
+        Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+        'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+      },
+      'campaigns',
+    );
   }
 
   /**
-   * Récupère les ad groups pour une campagne
+   * Récupère les ad groups pour un profil (avec pagination complète)
    */
   async getAdGroups(
     adAccountId: string,
@@ -199,10 +272,8 @@ export class AmazonClientService {
   ): Promise<any[]> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const body: any = {
-      stateFilter: {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED'],
-      },
+    const body: Record<string, any> = {
+      stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
       maxResults: 100,
     };
 
@@ -210,20 +281,20 @@ export class AmazonClientService {
       body.campaignIdFilter = { include: [campaignId.toString()] };
     }
 
-    const response = await retryWithBackoff(async () => {
-      return client.post('/sp/adGroups/list', body, {
-        headers: {
-          Accept: AMAZON_CONFIG.API_VERSION.AD_GROUPS,
-          'Content-Type': AMAZON_CONFIG.API_VERSION.AD_GROUPS,
-        },
-      });
-    });
-
-    return response.data.adGroups || [];
+    return this.fetchAllPages(
+      client,
+      '/sp/adGroups/list',
+      body,
+      {
+        Accept: AMAZON_CONFIG.API_VERSION.AD_GROUPS,
+        'Content-Type': AMAZON_CONFIG.API_VERSION.AD_GROUPS,
+      },
+      'adGroups',
+    );
   }
 
   /**
-   * Récupère les keywords pour un ad group
+   * Récupère les keywords pour un profil (avec pagination complète)
    */
   async getKeywords(
     adAccountId: string,
@@ -233,10 +304,8 @@ export class AmazonClientService {
   ): Promise<any[]> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const body: any = {
-      stateFilter: {
-        include: ['ENABLED', 'PAUSED', 'ARCHIVED'],
-      },
+    const body: Record<string, any> = {
+      stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
       maxResults: 100,
     };
 
@@ -244,16 +313,48 @@ export class AmazonClientService {
       body.adGroupIdFilter = { include: [adGroupId.toString()] };
     }
 
-    const response = await retryWithBackoff(async () => {
-      return client.post('/sp/keywords/list', body, {
-        headers: {
-          Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
-          'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
-        },
-      });
-    });
+    return this.fetchAllPages(
+      client,
+      '/sp/keywords/list',
+      body,
+      {
+        Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
+        'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
+      },
+      'keywords',
+    );
+  }
 
-    return response.data.keywords || [];
+  /**
+   * Récupère les product targets pour un profil (avec pagination complète)
+   */
+  async getProductTargets(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    adGroupId?: number,
+  ): Promise<any[]> {
+    const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+    const body: Record<string, any> = {
+      stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
+      maxResults: 100,
+    };
+
+    if (adGroupId) {
+      body.adGroupIdFilter = { include: [adGroupId.toString()] };
+    }
+
+    return this.fetchAllPages(
+      client,
+      '/sp/targets/list',
+      body,
+      {
+        Accept: AMAZON_CONFIG.API_VERSION.TARGETS,
+        'Content-Type': AMAZON_CONFIG.API_VERSION.TARGETS,
+      },
+      'targetingClauses',
+    );
   }
 
   /**

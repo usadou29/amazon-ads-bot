@@ -85,11 +85,29 @@ export class SyncService {
       throw new Error(`Sync already in progress for ad account ${adAccountId}`);
     }
 
+    // Recuperer le workspace_id depuis ad_accounts (requis par sync_logs)
+    const [account] = await this.db
+      .select({ workspaceId: adAccounts.workspaceId })
+      .from(adAccounts)
+      .where(eq(adAccounts.id, adAccountId))
+      .limit(1);
+
+    if (!account) {
+      throw new Error(`Ad account ${adAccountId} not found`);
+    }
+
+    if (!account.workspaceId) {
+      throw new Error(`Ad account ${adAccountId} has no workspace_id`);
+    }
+
+    this.logger.log(`Sync triggered for ad account ${adAccountId} (workspace ${account.workspaceId})`);
+
     const startedAt = new Date();
     const jobName = `${syncType}_sync_${entitiesToSync.join('_')}`;
 
     // Creer l'entree de log
     const [syncLog] = await this.db.insert(syncLogs).values({
+      workspaceId: account.workspaceId,
       adAccountId,
       profileId: profileId || null,
       jobName,
@@ -296,6 +314,25 @@ export class SyncService {
     };
   }
 
+  // ── Mapping Amazon countryCode → marketplace DB ──
+  // Amazon renvoie "GB" pour le Royaume-Uni, notre DB attend "UK".
+  private static readonly COUNTRY_TO_MARKETPLACE: Record<string, string> = {
+    FR: 'FR', DE: 'DE', ES: 'ES', IT: 'IT',
+    GB: 'UK', UK: 'UK',
+    US: 'US', CA: 'CA', AU: 'AU', JP: 'JP', MX: 'MX',
+  };
+
+  // Mapping marketplace → devise (fallback si currencyCode absent/invalide)
+  private static readonly MARKETPLACE_CURRENCY: Record<string, string> = {
+    FR: 'EUR', DE: 'EUR', ES: 'EUR', IT: 'EUR',
+    UK: 'GBP', US: 'USD', CA: 'CAD', AU: 'AUD', JP: 'JPY', MX: 'MXN',
+  };
+
+  // Devises acceptées par la CHECK constraint Supabase
+  private static readonly VALID_CURRENCIES = new Set([
+    'EUR', 'USD', 'GBP', 'CAD', 'AUD', 'JPY', 'MXN',
+  ]);
+
   /**
    * Synchronise les profils marketplace depuis Amazon
    */
@@ -308,6 +345,31 @@ export class SyncService {
     let updated = 0;
 
     for (const profile of amazonProfiles) {
+      // Mapper countryCode → marketplace (GB → UK)
+      const rawCountry = profile.countryCode?.toUpperCase();
+      const marketplace = SyncService.COUNTRY_TO_MARKETPLACE[rawCountry];
+
+      if (!marketplace) {
+        this.logger.warn(
+          `Skipping profile ${profile.profileId}: unknown countryCode "${rawCountry}"`,
+        );
+        continue;
+      }
+
+      // Résoudre la devise : d'abord currencyCode Amazon, sinon fallback par marketplace
+      let currency = profile.currencyCode?.toUpperCase();
+      if (!currency || !SyncService.VALID_CURRENCIES.has(currency)) {
+        const fallback = SyncService.MARKETPLACE_CURRENCY[marketplace];
+        this.logger.warn(
+          `Profile ${profile.profileId}: currency "${profile.currencyCode}" invalid, using fallback "${fallback}"`,
+        );
+        currency = fallback;
+      }
+
+      this.logger.debug(
+        `Profile ${profile.profileId}: country=${rawCountry} → marketplace=${marketplace}, currency=${currency}`,
+      );
+
       const existingProfile = await this.db
         .select()
         .from(marketplaceProfiles)
@@ -322,9 +384,9 @@ export class SyncService {
       const profileData = {
         adAccountId,
         profileId: profile.profileId,
-        marketplace: profile.countryCode,
+        marketplace,
         marketplaceId: profile.accountInfo?.marketplaceStringId || null,
-        currency: profile.currencyCode,
+        currency,
         isActive: true,
         lastSyncAt: new Date(),
       };
@@ -355,10 +417,56 @@ export class SyncService {
   ): Promise<{ fetched: number; created: number; updated: number }> {
     this.logger.debug(`Syncing portfolios for profile ${profile.id} (${profile.marketplace})`);
 
-    // Note: L'API Amazon ne fournit pas directement getPortfolios dans notre client actuel
-    // Cette methode serait a implementer dans AmazonClientService
-    // Pour l'instant, on retourne des valeurs vides
-    return { fetched: 0, created: 0, updated: 0 };
+    const amazonPortfolios = await this.amazonClient.getPortfolios(
+      adAccountId,
+      profile.profileId,
+      profile.marketplace as Marketplace,
+    );
+
+    let created = 0;
+    let updated = 0;
+
+    for (const portfolio of amazonPortfolios) {
+      const existingPortfolio = await this.db
+        .select()
+        .from(portfolios)
+        .where(
+          and(
+            eq(portfolios.profileId, profile.id),
+            eq(portfolios.amazonPortfolioId, portfolio.portfolioId),
+          ),
+        )
+        .limit(1);
+
+      const portfolioData = {
+        profileId: profile.id,
+        amazonPortfolioId: portfolio.portfolioId,
+        name: portfolio.name,
+        state: portfolio.state?.toLowerCase() || null,
+        budgetAmount: portfolio.budget?.amount ? String(portfolio.budget.amount) : null,
+        budgetCurrency: portfolio.budget?.currencyCode || profile.currency || null,
+        budgetPolicy: portfolio.budget?.policy?.toLowerCase() || null,
+        lastSyncedAt: new Date(),
+        rawData: portfolio,
+        updatedAt: new Date(),
+      };
+
+      if (existingPortfolio.length === 0) {
+        await this.db.insert(portfolios).values({
+          ...portfolioData,
+          createdAt: new Date(),
+        });
+        created++;
+      } else {
+        await this.db
+          .update(portfolios)
+          .set(portfolioData)
+          .where(eq(portfolios.id, existingPortfolio[0].id));
+        updated++;
+      }
+    }
+
+    return { fetched: amazonPortfolios.length, created, updated };
   }
 
   /**
@@ -637,9 +745,88 @@ export class SyncService {
   ): Promise<{ fetched: number; created: number; updated: number }> {
     this.logger.debug(`Syncing product targets for profile ${profile.id} (${profile.marketplace})`);
 
-    // Note: L'API Amazon necessite une methode getProductTargets dans AmazonClientService
-    // Pour l'instant, on retourne des valeurs vides
-    return { fetched: 0, created: 0, updated: 0 };
+    const amazonTargets = await this.amazonClient.getProductTargets(
+      adAccountId,
+      profile.profileId,
+      profile.marketplace as Marketplace,
+    );
+
+    let created = 0;
+    let updated = 0;
+
+    for (const target of amazonTargets) {
+      // Trouver le ad group parent via la campagne
+      const [campaign] = await this.db
+        .select()
+        .from(campaigns)
+        .where(
+          and(
+            eq(campaigns.profileId, profile.id),
+            eq(campaigns.amazonCampaignId, target.campaignId),
+          ),
+        )
+        .limit(1);
+
+      if (!campaign) {
+        this.logger.warn(`Campaign ${target.campaignId} not found for target ${target.targetId}`);
+        continue;
+      }
+
+      const [adGroup] = await this.db
+        .select()
+        .from(adGroups)
+        .where(
+          and(
+            eq(adGroups.campaignId, campaign.id),
+            eq(adGroups.amazonAdGroupId, target.adGroupId),
+          ),
+        )
+        .limit(1);
+
+      if (!adGroup) {
+        this.logger.warn(`Ad group ${target.adGroupId} not found for target ${target.targetId}`);
+        continue;
+      }
+
+      const existingTarget = await this.db
+        .select()
+        .from(productTargets)
+        .where(
+          and(
+            eq(productTargets.adGroupId, adGroup.id),
+            eq(productTargets.amazonTargetId, target.targetId),
+          ),
+        )
+        .limit(1);
+
+      const targetData = {
+        adGroupId: adGroup.id,
+        amazonTargetId: target.targetId,
+        expressionType: target.expressionType || 'manual',
+        expression: target.expression || [],
+        state: target.state?.toLowerCase() || 'enabled',
+        bid: target.bid ? String(target.bid) : null,
+        lastSyncedAt: new Date(),
+        rawData: target,
+        updatedAt: new Date(),
+      };
+
+      if (existingTarget.length === 0) {
+        await this.db.insert(productTargets).values({
+          ...targetData,
+          createdAt: new Date(),
+        });
+        created++;
+      } else {
+        await this.db
+          .update(productTargets)
+          .set(targetData)
+          .where(eq(productTargets.id, existingTarget[0].id));
+        updated++;
+      }
+    }
+
+    return { fetched: amazonTargets.length, created, updated };
   }
 
   /**

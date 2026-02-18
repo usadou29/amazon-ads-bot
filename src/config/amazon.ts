@@ -41,7 +41,7 @@ export const AMAZON_CONFIG = {
   // Scopes OAuth requis
   OAUTH_SCOPES: [
     'advertising::campaign_management',
-    'advertising::profile',
+   // 'advertising::profile',
   ],
 
   // API Version headers

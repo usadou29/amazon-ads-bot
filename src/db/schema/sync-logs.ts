@@ -1,12 +1,14 @@
 import { pgTable, uuid, varchar, timestamp, integer, jsonb, index } from 'drizzle-orm/pg-core';
 import { adAccounts } from './ad-accounts';
 import { marketplaceProfiles } from './marketplace-profiles';
+import { workspaces } from './workspaces';
 
 export const syncStatusEnum = ['running', 'success', 'partial', 'failed'] as const;
 export type SyncStatus = typeof syncStatusEnum[number];
 
 export const syncLogs = pgTable('sync_logs', {
   id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   adAccountId: uuid('ad_account_id').notNull().references(() => adAccounts.id, { onDelete: 'cascade' }),
   profileId: uuid('profile_id').references(() => marketplaceProfiles.id, { onDelete: 'cascade' }),
   jobName: varchar('job_name', { length: 100 }).notNull(),
