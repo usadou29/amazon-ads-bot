@@ -4,7 +4,10 @@ import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { MetricsGrid } from '@/components/ui/MetricCard';
 import { CardSkeleton } from '@/components/ui/Skeleton';
+import { Button } from '@/components/ui/Button';
 import { OnboardingSection } from '@/components/features/OnboardingSection';
+import { CreateBookModal } from '@/components/features/CreateBookModal';
+import { LinkCampaignsModal } from '@/components/features/LinkCampaignsModal';
 import { t } from '@/lib/i18n';
 import {
   fetchMetricsSummary,
@@ -25,6 +28,21 @@ export default function HomePage() {
   const [hasBooks, setHasBooks] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showCreateBook, setShowCreateBook] = useState(false);
+  const [showLinkCampaigns, setShowLinkCampaigns] = useState(false);
+  const [createdBook, setCreatedBook] = useState<{ id: string; title: string } | null>(null);
+
+  const handleBookCreated = (book: { id: string; title: string }) => {
+    setShowCreateBook(false);
+    setCreatedBook(book);
+    setShowLinkCampaigns(true);
+  };
+
+  const handleLinkDone = () => {
+    setShowLinkCampaigns(false);
+    setCreatedBook(null);
+    window.location.reload();
+  };
 
   useEffect(() => {
     Promise.allSettled([
@@ -74,7 +92,12 @@ export default function HomePage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900">{t('home.title')}</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-slate-900">{t('home.title')}</h1>
+        <Button variant="accent" size="sm" onClick={() => setShowCreateBook(true)}>
+          + {t('home.add_book')}
+        </Button>
+      </div>
 
       {/* Global KPIs */}
       {kpis.length > 0 ? (
@@ -196,6 +219,22 @@ export default function HomePage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Modals — always available */}
+      <CreateBookModal
+        open={showCreateBook}
+        onClose={() => setShowCreateBook(false)}
+        onSuccess={handleBookCreated}
+      />
+      {createdBook && (
+        <LinkCampaignsModal
+          open={showLinkCampaigns}
+          onClose={handleLinkDone}
+          bookId={createdBook.id}
+          bookTitle={createdBook.title}
+          onLinked={handleLinkDone}
+        />
+      )}
     </div>
   );
 }

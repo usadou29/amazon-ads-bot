@@ -2,7 +2,10 @@
 import React, { useEffect, useState } from 'react';
 import { AuthorCard, AuthorCardData } from '@/components/features/AuthorCard';
 import { CardSkeleton } from '@/components/ui/Skeleton';
+import { Button } from '@/components/ui/Button';
 import { OnboardingSection } from '@/components/features/OnboardingSection';
+import { CreateBookModal } from '@/components/features/CreateBookModal';
+import { LinkCampaignsModal } from '@/components/features/LinkCampaignsModal';
 import { t } from '@/lib/i18n';
 import { fetchAuthors, getWorkspaceId } from '@/lib/api/client';
 import { transformKPIs } from '@/lib/transforms/metrics';
@@ -12,6 +15,21 @@ export default function AuthorsPage() {
   const [authors, setAuthors] = useState<AuthorCardData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showCreateBook, setShowCreateBook] = useState(false);
+  const [showLinkCampaigns, setShowLinkCampaigns] = useState(false);
+  const [createdBook, setCreatedBook] = useState<{ id: string; title: string } | null>(null);
+
+  const handleBookCreated = (book: { id: string; title: string }) => {
+    setShowCreateBook(false);
+    setCreatedBook(book);
+    setShowLinkCampaigns(true);
+  };
+
+  const handleLinkDone = () => {
+    setShowLinkCampaigns(false);
+    setCreatedBook(null);
+    window.location.reload();
+  };
 
   useEffect(() => {
     fetchAuthors()
@@ -117,12 +135,32 @@ export default function AuthorsPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-slate-900 mb-6">{t('authors.title')}</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-slate-900">{t('authors.title')}</h1>
+        <Button variant="accent" size="sm" onClick={() => setShowCreateBook(true)}>
+          + {t('home.add_book')}
+        </Button>
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {authors.map((a) => (
           <AuthorCard key={a.id} author={a} />
         ))}
       </div>
+
+      <CreateBookModal
+        open={showCreateBook}
+        onClose={() => setShowCreateBook(false)}
+        onSuccess={handleBookCreated}
+      />
+      {createdBook && (
+        <LinkCampaignsModal
+          open={showLinkCampaigns}
+          onClose={handleLinkDone}
+          bookId={createdBook.id}
+          bookTitle={createdBook.title}
+          onLinked={handleLinkDone}
+        />
+      )}
     </div>
   );
 }

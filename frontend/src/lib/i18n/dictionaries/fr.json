@@ -7,7 +7,8 @@
     "top_campaigns": "Campagnes les plus performantes",
     "recommendations_title": "Recommandations en attente",
     "no_data": "Aucune donnée disponible pour cette période",
-    "no_campaigns": "Aucune campagne trouvée"
+    "no_campaigns": "Aucune campagne trouvée",
+    "add_book": "Créer un livre"
   },
   "authors": {
     "title": "Mes auteurs",
