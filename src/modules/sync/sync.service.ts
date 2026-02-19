@@ -11,7 +11,7 @@ import {
   productTargets,
   adAccounts,
 } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, count, sql } from 'drizzle-orm';
 import { Marketplace } from '@/config/amazon';
 
 export type SyncType = 'full' | 'incremental';
@@ -23,6 +23,15 @@ export interface SyncOptions {
   profileId?: string;
   syncType: SyncType;
   entities?: SyncEntity[];
+}
+
+export interface EntitySyncStats {
+  fetched: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  skipReasons?: Record<string, number>;
 }
 
 export interface SyncResult {
@@ -168,40 +177,46 @@ export class SyncService {
         }
       }
 
-      // Sync ad groups
+      // Sync ad groups (dépend de campaigns)
       if (entitiesToSync.includes('ad_groups')) {
         for (const profile of profilesToSync) {
           const adGroupResult = await this.syncAdGroups(adAccountId, profile, syncType);
           result.recordsFetched += adGroupResult.fetched;
           result.recordsCreated += adGroupResult.created;
           result.recordsUpdated += adGroupResult.updated;
+          result.recordsFailed += adGroupResult.failed;
           result.details![`ad_groups_${profile.marketplace}`] = adGroupResult;
         }
       }
 
-      // Sync keywords
+      // Sync keywords (dépend de campaigns + ad_groups)
       if (entitiesToSync.includes('keywords')) {
         for (const profile of profilesToSync) {
           const keywordResult = await this.syncKeywords(adAccountId, profile, syncType);
           result.recordsFetched += keywordResult.fetched;
           result.recordsCreated += keywordResult.created;
           result.recordsUpdated += keywordResult.updated;
+          result.recordsFailed += keywordResult.failed;
           result.details![`keywords_${profile.marketplace}`] = keywordResult;
         }
       }
 
-      // Sync product targets
+      // Sync product targets (dépend de campaigns + ad_groups)
       if (entitiesToSync.includes('product_targets')) {
         for (const profile of profilesToSync) {
           const targetResult = await this.syncProductTargets(adAccountId, profile, syncType);
           result.recordsFetched += targetResult.fetched;
           result.recordsCreated += targetResult.created;
           result.recordsUpdated += targetResult.updated;
+          result.recordsFailed += targetResult.failed;
           result.details![`product_targets_${profile.marketplace}`] = targetResult;
         }
       }
 
       result.status = result.recordsFailed > 0 ? 'partial' : 'success';
+
+      // Vérification post-sync : compter les lignes en base pour chaque entité synchronisée
+      await this.logPostSyncCounts(adAccountId, entitiesToSync);
 
       // Mettre a jour le ad account
       await this.db
@@ -567,7 +582,7 @@ export class SyncService {
     adAccountId: string,
     profile: any,
     syncType: SyncType,
-  ): Promise<{ fetched: number; created: number; updated: number }> {
+  ): Promise<EntitySyncStats> {
     this.logger.debug(`Syncing ad groups for profile ${profile.id} (${profile.marketplace})`);
 
     const amazonAdGroups = await this.amazonClient.getAdGroups(
@@ -576,67 +591,69 @@ export class SyncService {
       profile.marketplace as Marketplace,
     );
 
-    let created = 0;
-    let updated = 0;
+    const stats: EntitySyncStats = { fetched: amazonAdGroups.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
+    const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
     for (const adGroup of amazonAdGroups) {
-      // Trouver la campagne parent
-      const [campaign] = await this.db
-        .select()
-        .from(campaigns)
-        .where(
-          and(
-            eq(campaigns.profileId, profile.id),
-            eq(campaigns.amazonCampaignId, adGroup.campaignId),
-          ),
-        )
-        .limit(1);
+      try {
+        // Trouver la campagne parent
+        const [campaign] = await this.db
+          .select()
+          .from(campaigns)
+          .where(
+            and(
+              eq(campaigns.profileId, profile.id),
+              eq(campaigns.amazonCampaignId, adGroup.campaignId),
+            ),
+          )
+          .limit(1);
 
-      if (!campaign) {
-        this.logger.warn(`Campaign ${adGroup.campaignId} not found for ad group ${adGroup.adGroupId}`);
-        continue;
-      }
+        if (!campaign) {
+          this.logger.debug(`SKIP ad_group ${adGroup.adGroupId}: missing_campaign (amazonCampaignId=${adGroup.campaignId})`);
+          addSkip('missing_campaign');
+          continue;
+        }
 
-      const existingAdGroup = await this.db
-        .select()
-        .from(adGroups)
-        .where(
-          and(
-            eq(adGroups.campaignId, campaign.id),
-            eq(adGroups.amazonAdGroupId, adGroup.adGroupId),
-          ),
-        )
-        .limit(1);
+        const existingAdGroup = await this.db
+          .select()
+          .from(adGroups)
+          .where(
+            and(
+              eq(adGroups.campaignId, campaign.id),
+              eq(adGroups.amazonAdGroupId, adGroup.adGroupId),
+            ),
+          )
+          .limit(1);
 
-      const adGroupData = {
-        campaignId: campaign.id,
-        amazonAdGroupId: adGroup.adGroupId,
-        name: adGroup.name,
-        state: adGroup.state?.toLowerCase() || 'enabled',
-        defaultBid: adGroup.defaultBid ? String(adGroup.defaultBid) : null,
-        lastSyncedAt: new Date(),
-        rawData: adGroup,
-        updatedAt: new Date(),
-      };
+        const adGroupData = {
+          campaignId: campaign.id,
+          amazonAdGroupId: adGroup.adGroupId,
+          name: adGroup.name,
+          state: adGroup.state?.toLowerCase() || 'enabled',
+          defaultBid: adGroup.defaultBid ? String(adGroup.defaultBid) : null,
+          lastSyncedAt: new Date(),
+          rawData: adGroup,
+          updatedAt: new Date(),
+        };
 
-      if (existingAdGroup.length === 0) {
-        // INSERT
-        await this.db.insert(adGroups).values({
-          ...adGroupData,
-          createdAt: new Date(),
-        });
-        created++;
-      } else {
-        // UPDATE (UPSERT)
-        await this.db
-          .update(adGroups)
-          .set(adGroupData)
-          .where(eq(adGroups.id, existingAdGroup[0].id));
-        updated++;
+        if (existingAdGroup.length === 0) {
+          await this.db.insert(adGroups).values({ ...adGroupData, createdAt: new Date() });
+          stats.created++;
+        } else {
+          await this.db.update(adGroups).set(adGroupData).where(eq(adGroups.id, existingAdGroup[0].id));
+          stats.updated++;
+        }
+      } catch (err) {
+        stats.failed++;
+        this.logger.warn(`FAIL ad_group ${adGroup.adGroupId}: ${err instanceof Error ? err.message : err}`);
       }
     }
 
-    return { fetched: amazonAdGroups.length, created, updated };
+    this.logger.log(
+      `Ad groups ${profile.marketplace}: fetched=${stats.fetched} created=${stats.created} updated=${stats.updated} skipped=${stats.skipped} failed=${stats.failed}` +
+      (stats.skipped > 0 ? ` skipReasons=${JSON.stringify(stats.skipReasons)}` : ''),
+    );
+    return stats;
   }
 
   /**
@@ -646,7 +663,7 @@ export class SyncService {
     adAccountId: string,
     profile: any,
     syncType: SyncType,
-  ): Promise<{ fetched: number; created: number; updated: number }> {
+  ): Promise<EntitySyncStats> {
     this.logger.debug(`Syncing keywords for profile ${profile.id} (${profile.marketplace})`);
 
     const amazonKeywords = await this.amazonClient.getKeywords(
@@ -655,84 +672,87 @@ export class SyncService {
       profile.marketplace as Marketplace,
     );
 
-    let created = 0;
-    let updated = 0;
+    const stats: EntitySyncStats = { fetched: amazonKeywords.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
+    const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
     for (const keyword of amazonKeywords) {
-      // Trouver le ad group parent via la campagne
-      const [campaign] = await this.db
-        .select()
-        .from(campaigns)
-        .where(
-          and(
-            eq(campaigns.profileId, profile.id),
-            eq(campaigns.amazonCampaignId, keyword.campaignId),
-          ),
-        )
-        .limit(1);
+      try {
+        // Trouver la campagne parent
+        const [campaign] = await this.db
+          .select()
+          .from(campaigns)
+          .where(
+            and(
+              eq(campaigns.profileId, profile.id),
+              eq(campaigns.amazonCampaignId, keyword.campaignId),
+            ),
+          )
+          .limit(1);
 
-      if (!campaign) {
-        this.logger.warn(`Campaign ${keyword.campaignId} not found for keyword ${keyword.keywordId}`);
-        continue;
-      }
+        if (!campaign) {
+          this.logger.debug(`SKIP keyword ${keyword.keywordId}: missing_campaign (amazonCampaignId=${keyword.campaignId})`);
+          addSkip('missing_campaign');
+          continue;
+        }
 
-      const [adGroup] = await this.db
-        .select()
-        .from(adGroups)
-        .where(
-          and(
-            eq(adGroups.campaignId, campaign.id),
-            eq(adGroups.amazonAdGroupId, keyword.adGroupId),
-          ),
-        )
-        .limit(1);
+        const [adGroup] = await this.db
+          .select()
+          .from(adGroups)
+          .where(
+            and(
+              eq(adGroups.campaignId, campaign.id),
+              eq(adGroups.amazonAdGroupId, keyword.adGroupId),
+            ),
+          )
+          .limit(1);
 
-      if (!adGroup) {
-        this.logger.warn(`Ad group ${keyword.adGroupId} not found for keyword ${keyword.keywordId}`);
-        continue;
-      }
+        if (!adGroup) {
+          this.logger.debug(`SKIP keyword ${keyword.keywordId}: missing_ad_group (amazonAdGroupId=${keyword.adGroupId})`);
+          addSkip('missing_ad_group');
+          continue;
+        }
 
-      const existingKeyword = await this.db
-        .select()
-        .from(keywords)
-        .where(
-          and(
-            eq(keywords.adGroupId, adGroup.id),
-            eq(keywords.amazonKeywordId, keyword.keywordId),
-          ),
-        )
-        .limit(1);
+        const existingKeyword = await this.db
+          .select()
+          .from(keywords)
+          .where(
+            and(
+              eq(keywords.adGroupId, adGroup.id),
+              eq(keywords.amazonKeywordId, keyword.keywordId),
+            ),
+          )
+          .limit(1);
 
-      const keywordData = {
-        adGroupId: adGroup.id,
-        amazonKeywordId: keyword.keywordId,
-        keywordText: keyword.keywordText,
-        matchType: keyword.matchType?.toLowerCase() || 'broad',
-        state: keyword.state?.toLowerCase() || 'enabled',
-        bid: keyword.bid ? String(keyword.bid) : null,
-        lastSyncedAt: new Date(),
-        rawData: keyword,
-        updatedAt: new Date(),
-      };
+        const keywordData = {
+          adGroupId: adGroup.id,
+          amazonKeywordId: keyword.keywordId,
+          keywordText: keyword.keywordText,
+          matchType: keyword.matchType?.toLowerCase() || 'broad',
+          state: keyword.state?.toLowerCase() || 'enabled',
+          bid: keyword.bid ? String(keyword.bid) : null,
+          lastSyncedAt: new Date(),
+          rawData: keyword,
+          updatedAt: new Date(),
+        };
 
-      if (existingKeyword.length === 0) {
-        // INSERT
-        await this.db.insert(keywords).values({
-          ...keywordData,
-          createdAt: new Date(),
-        });
-        created++;
-      } else {
-        // UPDATE (UPSERT)
-        await this.db
-          .update(keywords)
-          .set(keywordData)
-          .where(eq(keywords.id, existingKeyword[0].id));
-        updated++;
+        if (existingKeyword.length === 0) {
+          await this.db.insert(keywords).values({ ...keywordData, createdAt: new Date() });
+          stats.created++;
+        } else {
+          await this.db.update(keywords).set(keywordData).where(eq(keywords.id, existingKeyword[0].id));
+          stats.updated++;
+        }
+      } catch (err) {
+        stats.failed++;
+        this.logger.warn(`FAIL keyword ${keyword.keywordId}: ${err instanceof Error ? err.message : err}`);
       }
     }
 
-    return { fetched: amazonKeywords.length, created, updated };
+    this.logger.log(
+      `Keywords ${profile.marketplace}: fetched=${stats.fetched} created=${stats.created} updated=${stats.updated} skipped=${stats.skipped} failed=${stats.failed}` +
+      (stats.skipped > 0 ? ` skipReasons=${JSON.stringify(stats.skipReasons)}` : ''),
+    );
+    return stats;
   }
 
   /**
@@ -742,7 +762,7 @@ export class SyncService {
     adAccountId: string,
     profile: any,
     syncType: SyncType,
-  ): Promise<{ fetched: number; created: number; updated: number }> {
+  ): Promise<EntitySyncStats> {
     this.logger.debug(`Syncing product targets for profile ${profile.id} (${profile.marketplace})`);
 
     const amazonTargets = await this.amazonClient.getProductTargets(
@@ -751,82 +771,173 @@ export class SyncService {
       profile.marketplace as Marketplace,
     );
 
-    let created = 0;
-    let updated = 0;
+    const stats: EntitySyncStats = { fetched: amazonTargets.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
+    const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
     for (const target of amazonTargets) {
-      // Trouver le ad group parent via la campagne
-      const [campaign] = await this.db
-        .select()
-        .from(campaigns)
-        .where(
-          and(
-            eq(campaigns.profileId, profile.id),
-            eq(campaigns.amazonCampaignId, target.campaignId),
-          ),
-        )
-        .limit(1);
+      try {
+        const [campaign] = await this.db
+          .select()
+          .from(campaigns)
+          .where(
+            and(
+              eq(campaigns.profileId, profile.id),
+              eq(campaigns.amazonCampaignId, target.campaignId),
+            ),
+          )
+          .limit(1);
 
-      if (!campaign) {
-        this.logger.warn(`Campaign ${target.campaignId} not found for target ${target.targetId}`);
-        continue;
-      }
+        if (!campaign) {
+          this.logger.debug(`SKIP target ${target.targetId}: missing_campaign (amazonCampaignId=${target.campaignId})`);
+          addSkip('missing_campaign');
+          continue;
+        }
 
-      const [adGroup] = await this.db
-        .select()
-        .from(adGroups)
-        .where(
-          and(
-            eq(adGroups.campaignId, campaign.id),
-            eq(adGroups.amazonAdGroupId, target.adGroupId),
-          ),
-        )
-        .limit(1);
+        const [adGroup] = await this.db
+          .select()
+          .from(adGroups)
+          .where(
+            and(
+              eq(adGroups.campaignId, campaign.id),
+              eq(adGroups.amazonAdGroupId, target.adGroupId),
+            ),
+          )
+          .limit(1);
 
-      if (!adGroup) {
-        this.logger.warn(`Ad group ${target.adGroupId} not found for target ${target.targetId}`);
-        continue;
-      }
+        if (!adGroup) {
+          this.logger.debug(`SKIP target ${target.targetId}: missing_ad_group (amazonAdGroupId=${target.adGroupId})`);
+          addSkip('missing_ad_group');
+          continue;
+        }
 
-      const existingTarget = await this.db
-        .select()
-        .from(productTargets)
-        .where(
-          and(
-            eq(productTargets.adGroupId, adGroup.id),
-            eq(productTargets.amazonTargetId, target.targetId),
-          ),
-        )
-        .limit(1);
+        const existingTarget = await this.db
+          .select()
+          .from(productTargets)
+          .where(
+            and(
+              eq(productTargets.adGroupId, adGroup.id),
+              eq(productTargets.amazonTargetId, target.targetId),
+            ),
+          )
+          .limit(1);
 
-      const targetData = {
-        adGroupId: adGroup.id,
-        amazonTargetId: target.targetId,
-        expressionType: target.expressionType || 'manual',
-        expression: target.expression || [],
-        state: target.state?.toLowerCase() || 'enabled',
-        bid: target.bid ? String(target.bid) : null,
-        lastSyncedAt: new Date(),
-        rawData: target,
-        updatedAt: new Date(),
-      };
+        const targetData = {
+          adGroupId: adGroup.id,
+          amazonTargetId: target.targetId,
+          expressionType: target.expressionType || 'manual',
+          expression: target.expression || [],
+          state: target.state?.toLowerCase() || 'enabled',
+          bid: target.bid ? String(target.bid) : null,
+          lastSyncedAt: new Date(),
+          rawData: target,
+          updatedAt: new Date(),
+        };
 
-      if (existingTarget.length === 0) {
-        await this.db.insert(productTargets).values({
-          ...targetData,
-          createdAt: new Date(),
-        });
-        created++;
-      } else {
-        await this.db
-          .update(productTargets)
-          .set(targetData)
-          .where(eq(productTargets.id, existingTarget[0].id));
-        updated++;
+        if (existingTarget.length === 0) {
+          await this.db.insert(productTargets).values({ ...targetData, createdAt: new Date() });
+          stats.created++;
+        } else {
+          await this.db.update(productTargets).set(targetData).where(eq(productTargets.id, existingTarget[0].id));
+          stats.updated++;
+        }
+      } catch (err) {
+        stats.failed++;
+        this.logger.warn(`FAIL target ${target.targetId}: ${err instanceof Error ? err.message : err}`);
       }
     }
 
-    return { fetched: amazonTargets.length, created, updated };
+    this.logger.log(
+      `Product targets ${profile.marketplace}: fetched=${stats.fetched} created=${stats.created} updated=${stats.updated} skipped=${stats.skipped} failed=${stats.failed}` +
+      (stats.skipped > 0 ? ` skipReasons=${JSON.stringify(stats.skipReasons)}` : ''),
+    );
+    return stats;
+  }
+
+  /**
+   * Vérification post-sync : log le nombre de lignes en base pour chaque entité
+   */
+  private async logPostSyncCounts(adAccountId: string, entities: string[]): Promise<void> {
+    try {
+      // Récupérer les profils liés à ce ad account
+      const profileIds = await this.db
+        .select({ id: marketplaceProfiles.id })
+        .from(marketplaceProfiles)
+        .where(eq(marketplaceProfiles.adAccountId, adAccountId));
+
+      const profileIdList = profileIds.map((p: any) => p.id);
+
+      if (profileIdList.length === 0) {
+        this.logger.log(`[POST-SYNC COUNT] No profiles found for ad account ${adAccountId}`);
+        return;
+      }
+
+      const counts: Record<string, number> = {};
+
+      if (entities.includes('profiles')) {
+        const [row] = await this.db
+          .select({ total: count() })
+          .from(marketplaceProfiles)
+          .where(eq(marketplaceProfiles.adAccountId, adAccountId));
+        counts.profiles = row?.total ?? 0;
+      }
+
+      if (entities.includes('portfolios')) {
+        const [row] = await this.db
+          .select({ total: count() })
+          .from(portfolios)
+          .where(sql`${portfolios.profileId} IN (${sql.join(profileIdList.map((id: string) => sql`${id}`), sql`, `)})`);
+        counts.portfolios = row?.total ?? 0;
+      }
+
+      if (entities.includes('campaigns')) {
+        const [row] = await this.db
+          .select({ total: count() })
+          .from(campaigns)
+          .where(sql`${campaigns.profileId} IN (${sql.join(profileIdList.map((id: string) => sql`${id}`), sql`, `)})`);
+        counts.campaigns = row?.total ?? 0;
+      }
+
+      if (entities.includes('ad_groups')) {
+        const [row] = await this.db
+          .select({ total: count() })
+          .from(adGroups)
+          .where(sql`${adGroups.campaignId} IN (
+            SELECT id FROM campaigns WHERE ${campaigns.profileId} IN (${sql.join(profileIdList.map((id: string) => sql`${id}`), sql`, `)})
+          )`);
+        counts.ad_groups = row?.total ?? 0;
+      }
+
+      if (entities.includes('keywords')) {
+        const [row] = await this.db
+          .select({ total: count() })
+          .from(keywords)
+          .where(sql`${keywords.adGroupId} IN (
+            SELECT ag.id FROM ad_groups ag
+            INNER JOIN campaigns c ON ag.campaign_id = c.id
+            WHERE c.profile_id IN (${sql.join(profileIdList.map((id: string) => sql`${id}`), sql`, `)})
+          )`);
+        counts.keywords = row?.total ?? 0;
+      }
+
+      if (entities.includes('product_targets')) {
+        const [row] = await this.db
+          .select({ total: count() })
+          .from(productTargets)
+          .where(sql`${productTargets.adGroupId} IN (
+            SELECT ag.id FROM ad_groups ag
+            INNER JOIN campaigns c ON ag.campaign_id = c.id
+            WHERE c.profile_id IN (${sql.join(profileIdList.map((id: string) => sql`${id}`), sql`, `)})
+          )`);
+        counts.product_targets = row?.total ?? 0;
+      }
+
+      this.logger.log(
+        `[POST-SYNC COUNT] Ad account ${adAccountId}: ` +
+        Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(', '),
+      );
+    } catch (err) {
+      this.logger.warn(`[POST-SYNC COUNT] Failed to count: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /**

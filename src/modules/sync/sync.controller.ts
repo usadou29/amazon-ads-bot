@@ -188,7 +188,7 @@ export class SyncController {
 
   /**
    * POST /api/sync/campaigns
-   * Synchronise uniquement les campagnes
+   * Synchronise les campagnes (inclut profiles comme prérequis)
    */
   @Post('campaigns')
   @HttpCode(HttpStatus.ACCEPTED)
@@ -206,7 +206,7 @@ export class SyncController {
       adAccountId: body.adAccountId,
       profileId: body.profileId,
       syncType: 'full',
-      entities: ['campaigns'],
+      entities: ['profiles', 'campaigns'],
     });
 
     return {
@@ -216,8 +216,37 @@ export class SyncController {
   }
 
   /**
+   * POST /api/sync/ad-groups
+   * Synchronise les ad groups (inclut profiles + campaigns comme prérequis)
+   */
+  @Post('ad-groups')
+  @HttpCode(HttpStatus.ACCEPTED)
+  async syncAdGroups(@Body() body: { adAccountId: string; profileId?: string }): Promise<{
+    message: string;
+    result: SyncResult;
+  }> {
+    if (!body.adAccountId) {
+      throw new BadRequestException('adAccountId is required');
+    }
+
+    this.logger.log(`Syncing ad groups for ad account ${body.adAccountId}`);
+
+    const result = await this.syncService.triggerSync({
+      adAccountId: body.adAccountId,
+      profileId: body.profileId,
+      syncType: 'full',
+      entities: ['profiles', 'campaigns', 'ad_groups'],
+    });
+
+    return {
+      message: result.status === 'success' ? 'Ad groups synced successfully' : 'Ad group sync completed with issues',
+      result,
+    };
+  }
+
+  /**
    * POST /api/sync/keywords
-   * Synchronise uniquement les keywords
+   * Synchronise les keywords (inclut profiles + campaigns + ad_groups comme prérequis)
    */
   @Post('keywords')
   @HttpCode(HttpStatus.ACCEPTED)
@@ -229,13 +258,14 @@ export class SyncController {
       throw new BadRequestException('adAccountId is required');
     }
 
-    this.logger.log(`Syncing keywords for ad account ${body.adAccountId}`);
+    this.logger.log(`Syncing keywords (with deps) for ad account ${body.adAccountId}`);
 
+    // Keywords dépend de campaigns + ad_groups : on sync toute la chaîne
     const result = await this.syncService.triggerSync({
       adAccountId: body.adAccountId,
       profileId: body.profileId,
       syncType: 'full',
-      entities: ['keywords'],
+      entities: ['profiles', 'campaigns', 'ad_groups', 'keywords'],
     });
 
     return {
