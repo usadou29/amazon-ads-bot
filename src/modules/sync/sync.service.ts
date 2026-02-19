@@ -155,14 +155,21 @@ export class SyncService {
       // Recuperer les profils a synchroniser
       let profilesToSync = await this.getProfilesToSync(adAccountId, profileId);
 
-      // Sync portfolios
+      // Sync portfolios (optionnel – l'API n'est pas dispo pour certains comptes ex: KDP/Author)
       if (entitiesToSync.includes('portfolios')) {
         for (const profile of profilesToSync) {
-          const portfolioResult = await this.syncPortfolios(adAccountId, profile);
-          result.recordsFetched += portfolioResult.fetched;
-          result.recordsCreated += portfolioResult.created;
-          result.recordsUpdated += portfolioResult.updated;
-          result.details![`portfolios_${profile.marketplace}`] = portfolioResult;
+          try {
+            const portfolioResult = await this.syncPortfolios(adAccountId, profile);
+            result.recordsFetched += portfolioResult.fetched;
+            result.recordsCreated += portfolioResult.created;
+            result.recordsUpdated += portfolioResult.updated;
+            result.details![`portfolios_${profile.marketplace}`] = portfolioResult;
+          } catch (err) {
+            this.logger.warn(
+              `Portfolios sync skipped for profile ${profile.id} (${profile.marketplace}): ${err instanceof Error ? err.message : err}`,
+            );
+            result.details![`portfolios_${profile.marketplace}`] = { skipped: true, reason: 'api_not_available' };
+          }
         }
       }
 

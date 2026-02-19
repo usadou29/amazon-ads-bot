@@ -229,11 +229,24 @@ export class AmazonClientService {
   ): Promise<any[]> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const response = await retryWithBackoff(async () => {
-      return client.get('/v2/portfolios/extended');
-    });
+    try {
+      const response = await retryWithBackoff(async () => {
+        return client.get('/v2/portfolios/extended');
+      });
 
-    return response.data || [];
+      return response.data || [];
+    } catch (error: any) {
+      // L'API Portfolios n'est pas disponible pour certains types de comptes
+      // (ex : comptes KDP / Author). On retourne un tableau vide au lieu de crasher.
+      const status = error?.response?.status || error?.status;
+      if (status === 404 || status === 400) {
+        this.logger.warn(
+          `Portfolios API not available for profile ${profileId} (${marketplace}): HTTP ${status} – skipping`,
+        );
+        return [];
+      }
+      throw error;
+    }
   }
 
   /**
