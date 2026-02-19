@@ -1,5 +1,6 @@
 import { pgTable, uuid, varchar, timestamp, integer, decimal, date, text, unique, index } from 'drizzle-orm/pg-core';
 import { marketplaceProfiles } from './marketplace-profiles';
+import { workspaces } from './workspaces';
 
 export const entityTypeEnum = ['campaign', 'ad_group', 'keyword', 'target', 'search_term'] as const;
 export type EntityType = typeof entityTypeEnum[number];
@@ -8,6 +9,7 @@ export const dailyMetrics = pgTable('daily_metrics', {
   id: uuid('id').primaryKey().defaultRandom(),
   entityType: varchar('entity_type', { length: 50 }).notNull(),
   entityKey: text('entity_key').notNull(),
+  workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   profileId: uuid('profile_id').notNull().references(() => marketplaceProfiles.id, { onDelete: 'cascade' }),
   date: date('date').notNull(),
   marketplace: varchar('marketplace', { length: 10 }).notNull(),

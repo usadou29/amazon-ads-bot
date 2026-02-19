@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { DATABASE_CONNECTION } from '@/db/database.module';
 import { AmazonClientService } from '@/modules/amazon-client';
+import { ReportsService } from '@/modules/reports/reports.service';
 import {
   syncLogs,
   marketplaceProfiles,
@@ -15,7 +16,7 @@ import { eq, and, count, sql } from 'drizzle-orm';
 import { Marketplace } from '@/config/amazon';
 
 export type SyncType = 'full' | 'incremental';
-export type SyncEntity = 'profiles' | 'portfolios' | 'campaigns' | 'ad_groups' | 'keywords' | 'product_targets';
+export type SyncEntity = 'profiles' | 'portfolios' | 'campaigns' | 'ad_groups' | 'keywords' | 'product_targets' | 'reports';
 export type SyncStatus = 'running' | 'success' | 'partial' | 'failed';
 
 export interface SyncOptions {
@@ -80,6 +81,7 @@ export class SyncService {
   constructor(
     @Inject(DATABASE_CONNECTION) private db: any,
     private amazonClient: AmazonClientService,
+    private reportsService: ReportsService,
   ) {}
 
   /**
@@ -217,6 +219,24 @@ export class SyncService {
           result.recordsUpdated += targetResult.updated;
           result.recordsFailed += targetResult.failed;
           result.details![`product_targets_${profile.marketplace}`] = targetResult;
+        }
+      }
+
+      // Demander les rapports de performance (async – ne bloque pas le sync structurel)
+      if (entitiesToSync.includes('reports')) {
+        try {
+          const reportResult = await this.reportsService.requestReportsForAccount(adAccountId);
+          result.details!.reports = {
+            requested: reportResult.jobs.length,
+            skipped: reportResult.skipped.length,
+            message: 'Reports requested – call POST /api/reports/process to poll & ingest',
+          };
+          this.logger.log(`Reports requested: ${reportResult.jobs.length} jobs created for ad account ${adAccountId}`);
+        } catch (err) {
+          this.logger.warn(
+            `Reports request failed for ad account ${adAccountId}: ${err instanceof Error ? err.message : err}`,
+          );
+          result.details!.reports = { skipped: true, reason: 'request_failed' };
         }
       }
 

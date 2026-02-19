@@ -1,5 +1,6 @@
 import { pgTable, uuid, varchar, timestamp, integer, text, date, unique, index } from 'drizzle-orm/pg-core';
 import { marketplaceProfiles } from './marketplace-profiles';
+import { workspaces } from './workspaces';
 
 export const reportTypeEnum = ['campaigns', 'ad_groups', 'keywords', 'targets', 'search_terms'] as const;
 export type ReportType = typeof reportTypeEnum[number];
@@ -9,6 +10,7 @@ export type ReportStatus = typeof reportStatusEnum[number];
 
 export const reportJobs = pgTable('report_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
   profileId: uuid('profile_id').notNull().references(() => marketplaceProfiles.id, { onDelete: 'cascade' }),
   reportType: varchar('report_type', { length: 50 }).notNull(),
   amazonReportId: varchar('amazon_report_id', { length: 200 }),

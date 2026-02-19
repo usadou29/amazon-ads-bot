@@ -416,12 +416,45 @@ export class AmazonClientService {
   ): Promise<string> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const metricsMap: Record<string, string[]> = {
-      campaigns: ['impressions', 'clicks', 'cost', 'sales14d', 'orders14d', 'units14d'],
-      ad_groups: ['impressions', 'clicks', 'cost', 'sales14d', 'orders14d', 'units14d'],
-      keywords: ['impressions', 'clicks', 'cost', 'sales14d', 'orders14d', 'units14d'],
-      search_terms: ['impressions', 'clicks', 'cost', 'sales14d', 'orders14d', 'units14d', 'query'],
+    // Mapping explicite par report type – aligné sur Amazon Ads Reports API v3
+    // Columns valides d'après les réponses d'erreur Amazon :
+    //   - purchases14d (pas orders14d)
+    //   - unitsSoldClicks14d (pas units14d)
+    //   - searchTerm (pas query)
+    //   - groupBy en camelCase lowercase (pas UPPERCASE)
+    //   - spAdGroups n'existe pas → utiliser spCampaigns avec groupBy: 'adGroup'
+    const REPORT_CONFIG: Record<string, { reportTypeId: string; groupBy: string; columns: string[] }> = {
+      campaigns: {
+        reportTypeId: 'spCampaigns',
+        groupBy: 'campaign',
+        columns: ['date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+      },
+      ad_groups: {
+        reportTypeId: 'spCampaigns',
+        groupBy: 'adGroup',
+        columns: ['date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+      },
+      keywords: {
+        reportTypeId: 'spKeywords',
+        groupBy: 'adGroup',
+        columns: ['date', 'keywordId', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+      },
+      targets: {
+        reportTypeId: 'spTargeting',
+        groupBy: 'targeting',
+        columns: ['date', 'keywordId', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+      },
+      search_terms: {
+        reportTypeId: 'spSearchTerm',
+        groupBy: 'searchTerm',
+        columns: ['date', 'searchTerm', 'adGroupId', 'campaignId', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+      },
     };
+
+    const config = REPORT_CONFIG[reportType];
+    if (!config) {
+      throw new Error(`Unknown report type: ${reportType}`);
+    }
 
     const body = {
       name: `${reportType}_${startDate}_${endDate}`,
@@ -429,9 +462,9 @@ export class AmazonClientService {
       endDate,
       configuration: {
         adProduct: 'SPONSORED_PRODUCTS',
-        groupBy: [reportType.toUpperCase().replace('_', '')],
-        columns: metricsMap[reportType] || metricsMap.campaigns,
-        reportTypeId: `sp${reportType.charAt(0).toUpperCase() + reportType.slice(1)}`,
+        groupBy: [config.groupBy],
+        columns: config.columns,
+        reportTypeId: config.reportTypeId,
         timeUnit: 'DAILY',
         format: 'GZIP_JSON',
       },

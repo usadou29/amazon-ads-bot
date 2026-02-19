@@ -12,6 +12,7 @@ import { BooksModule } from '@/modules/books/books.module';
 import { MetricsModule } from '@/modules/metrics/metrics.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { AmazonClientModule } from '@/modules/amazon-client/amazon-client.module';
+import { ReportsModule } from '@/modules/reports/reports.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { AmazonClientModule } from '@/modules/amazon-client/amazon-client.module
     MetricsModule,
     AlertsModule,
     AmazonClientModule,
+    ReportsModule,
   ],
 })
 export class AppModule {}
