@@ -1,7 +1,7 @@
 export const theme = {
   brand: {
     name: process.env.NEXT_PUBLIC_APP_NAME || 'ENDROMEDE',
-    logo: '/logo.png' as string | null,
+    logo: '/icon.png' as string | null,
   },
   colors: {
     primary: {
