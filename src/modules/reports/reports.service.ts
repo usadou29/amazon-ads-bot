@@ -559,7 +559,7 @@ export class ReportsService {
     const metricsCount = await this.batchUpsertDailyMetrics(metrics);
 
     // Upsert search_terms table
-    await this.batchUpsertSearchTerms(searchTermRows, profile);
+    await this.batchUpsertSearchTerms(searchTermRows, profile, workspaceId);
 
     // Mettre à jour lastSearchTermsSyncAt sur le profil
     await this.db
@@ -665,6 +665,7 @@ export class ReportsService {
       date: string;
     }>,
     profile: any,
+    workspaceId: string,
   ): Promise<number> {
     if (rows.length === 0) return 0;
 
@@ -719,13 +720,13 @@ export class ReportsService {
         validValues.push(
           sql`(
             gen_random_uuid(),
+            ${workspaceId}::uuid,
             ${profile.id}::uuid,
             ${ag.campaignId}::uuid,
             ${ag.id}::uuid,
             ${row.amazonCampaignId}::bigint,
             ${row.amazonAdGroupId}::bigint,
             ${row.query},
-            ${row.queryHash},
             ${row.matchType},
             'keyword',
             NOW(),
@@ -740,9 +741,9 @@ export class ReportsService {
 
       await this.db.execute(sql`
         INSERT INTO search_terms (
-          id, profile_id, campaign_id, ad_group_id,
+          id, workspace_id, profile_id, campaign_id, ad_group_id,
           amazon_campaign_id, amazon_ad_group_id,
-          query, query_hash,
+          query,
           match_type, targeting_type,
           first_seen_at, last_seen_at, status, created_at
         )
