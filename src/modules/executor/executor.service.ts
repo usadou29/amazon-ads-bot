@@ -10,15 +10,18 @@ import {
   campaigns,
   marketplaceProfiles,
   adAccounts,
+  workspaces,
   Recommendation,
   ActionLogEntry,
   NewActionLogEntry,
   KillSwitchConfig,
+  WorkspaceSettings,
 } from '@/db/schema';
 import { eq, and, gte, lte, sql } from 'drizzle-orm';
 import { validateBidChange, GUARDS } from '@/config/guards';
 import { extractAmazonId } from '@/utils/entity-key';
 import { AmazonClientService } from '@/modules/amazon-client';
+import { SystemService } from '@/modules/system/system.service';
 import { Marketplace } from '@/config/amazon';
 
 // Types d'actions supportees
@@ -79,6 +82,7 @@ export class ExecutorService {
     @Inject(DATABASE_CONNECTION) private db: any,
     private configService: ConfigService,
     private amazonClient: AmazonClientService,
+    private systemService: SystemService,
   ) {}
 
   // ============================================
@@ -194,7 +198,20 @@ export class ExecutorService {
       };
     }
 
-    // 2. Recuperer la recommandation
+    // 2. HARD GUARD: Feature flag auto_execute_enabled
+    if (!dryRun) {
+      const autoExecEnabled = await this.systemService.isFeatureEnabled('auto_execute_enabled');
+      if (!autoExecEnabled) {
+        this.logger.warn('Execution blocked: feature flag auto_execute_enabled is OFF');
+        return {
+          success: false,
+          error: 'Execution blocked: auto_execute_enabled is disabled. Enable via POST /api/system/features {"auto_execute_enabled": true}',
+          dryRun,
+        };
+      }
+    }
+
+    // 3. Recuperer la recommandation
     const [recommendation] = await this.db
       .select()
       .from(recommendations)
@@ -205,7 +222,37 @@ export class ExecutorService {
       throw new NotFoundException(`Recommendation ${recommendationId} not found`);
     }
 
-    // 3. Verifier le statut
+    // 4. HARD GUARD: Workspace dry_run setting
+    if (!dryRun) {
+      const [workspace] = await this.db
+        .select({ settings: workspaces.settings })
+        .from(workspaces)
+        .where(eq(workspaces.id, recommendation.workspaceId))
+        .limit(1);
+
+      const wsSettings = (workspace?.settings || {}) as WorkspaceSettings;
+
+      if (wsSettings.dry_run === true) {
+        this.logger.warn(`Execution blocked: workspace ${recommendation.workspaceId} has dry_run=true`);
+        return {
+          success: false,
+          error: 'Execution blocked: workspace dry_run is enabled. Disable dry_run in workspace settings first.',
+          dryRun: true, // Force dry_run dans la réponse
+        };
+      }
+
+      // HARD GUARD: Workspace auto_mode_enabled
+      if (executedBy === 'system' && wsSettings.auto_mode_enabled === false) {
+        this.logger.warn(`Execution blocked: workspace ${recommendation.workspaceId} has auto_mode_enabled=false`);
+        return {
+          success: false,
+          error: 'Execution blocked: workspace auto_mode_enabled is OFF. System cannot auto-execute actions.',
+          dryRun,
+        };
+      }
+    }
+
+    // 5. Verifier le statut
     if (recommendation.status !== 'approved' && recommendation.status !== 'pending') {
       return {
         success: false,
@@ -214,7 +261,7 @@ export class ExecutorService {
       };
     }
 
-    // 4. Verifier les limites quotidiennes
+    // 6. Verifier les limites quotidiennes
     const dailyCheck = await this.checkDailyLimits(recommendation.workspaceId);
     if (!dailyCheck.canExecute) {
       return {
