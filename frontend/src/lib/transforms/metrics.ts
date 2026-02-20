@@ -171,7 +171,7 @@ export function interpretAdsDependency(score: number): AdsDependencyInfo {
       color: 'text-slate-400',
       bgColor: 'bg-slate-50',
       borderColor: 'border-slate-200',
-      emoji: '⏳',
+      emoji: '🔘',
       explanation: 'Lance tes premières campagnes pour voir apparaître cet indicateur.',
     };
   }
@@ -183,7 +183,7 @@ export function interpretAdsDependency(score: number): AdsDependencyInfo {
       color: 'text-emerald-700',
       bgColor: 'bg-emerald-50',
       borderColor: 'border-emerald-200',
-      emoji: '🌟',
+      emoji: '🟢',
       explanation: 'Ton livre a de bons signaux de référencement. Les gens qui voient ta pub cliquent et achètent facilement. C\'est signe que le livre plaît et se positionne bien sur Amazon.',
     };
   }
@@ -195,7 +195,7 @@ export function interpretAdsDependency(score: number): AdsDependencyInfo {
       color: 'text-emerald-600',
       bgColor: 'bg-emerald-50',
       borderColor: 'border-emerald-200',
-      emoji: '🌱',
+      emoji: '🔵',
       explanation: 'Ton livre montre des signes positifs : bon taux de clic et de conversion. La pub aide à construire ton référencement. Continue comme ça.',
     };
   }
@@ -207,7 +207,7 @@ export function interpretAdsDependency(score: number): AdsDependencyInfo {
       color: 'text-amber-600',
       bgColor: 'bg-amber-50',
       borderColor: 'border-amber-200',
-      emoji: '🔶',
+      emoji: '🟡',
       explanation: 'Ton livre a besoin de la pub pour générer des ventes. C\'est normal en phase de lancement. Concentre-toi sur les mots-clés qui convertissent bien pour accélérer le référencement.',
     };
   }
@@ -219,7 +219,7 @@ export function interpretAdsDependency(score: number): AdsDependencyInfo {
       color: 'text-orange-600',
       bgColor: 'bg-orange-50',
       borderColor: 'border-orange-200',
-      emoji: '🔸',
+      emoji: '🟠',
       explanation: 'Sans pub, ton livre aurait peu de visibilité. Ça peut être normal au début. Vérifie que tes mots-clés sont pertinents et que ta page produit (couverture, description) donne envie.',
     };
   }
