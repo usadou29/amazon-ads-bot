@@ -18,6 +18,7 @@ export const fetchAuthorBooks = (authorId: string) => api.get(`/authors/${author
 export const fetchBookDashboard = (bookId: string) => api.get(`/books/${bookId}/dashboard`).then((r) => r.data);
 export const fetchBookDailyMetrics = (bookId: string, days = 30) => api.get(`/books/${bookId}/metrics/daily?days=${days}`).then((r) => r.data);
 export const fetchBooks = () => api.get(`/books?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
+export const deleteBook = (bookId: string) => api.delete(`/books/${bookId}`).then((r) => r.data);
 
 export interface CreateBookDto {
   asin: string;
@@ -27,6 +28,7 @@ export interface CreateBookDto {
   kdpId?: string;
   publicationDate?: string;
   acosTarget?: number;
+  royaltyRate?: number;
 }
 export const createBook = (dto: CreateBookDto) => api.post('/books', { workspaceId: getWorkspaceId(), ...dto }).then((r) => r.data);
 
@@ -64,3 +66,7 @@ export const fetchKillSwitchStatus = () => api.get('/actions/kill-switch').then(
 
 // ─── System ────────────────────────────────────
 export const fetchFeatureFlag = (name: string) => api.get(`/system/features/${name}`).then((r) => r.data);
+
+// ─── Scheduler / Sync ─────────────────────────
+export const triggerSync = () => api.post(`/scheduler/sync?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
+export const fetchSyncStatus = () => api.get(`/scheduler/status?workspaceId=${getWorkspaceId()}`).then((r) => r.data);

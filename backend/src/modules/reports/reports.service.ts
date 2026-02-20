@@ -210,11 +210,23 @@ export class ReportsService {
       )
       .limit(1);
 
-    if (existing.length > 0 && existing[0].status !== 'failed') {
+    // Re-request if failed OR if ingested with 0 records (likely bad columns)
+    const shouldReRequest = existing.length > 0 && (
+      existing[0].status === 'failed' ||
+      (existing[0].status === 'ingested' && (existing[0].recordsProcessed ?? 0) === 0)
+    );
+
+    if (existing.length > 0 && !shouldReRequest) {
       this.logger.debug(
-        `Report job already exists for ${reportType} ${profile.marketplace} (${existing[0].status}) – skipping`,
+        `Report job already exists for ${reportType} ${profile.marketplace} (${existing[0].status}, records=${existing[0].recordsProcessed}) – skipping`,
       );
       return existing[0];
+    }
+
+    if (existing.length > 0 && shouldReRequest) {
+      this.logger.log(
+        `Re-requesting report ${reportType} ${profile.marketplace} (was ${existing[0].status}, records=${existing[0].recordsProcessed})`,
+      );
     }
 
     // Appeler l'API Amazon
@@ -233,7 +245,7 @@ export class ReportsService {
 
     // Upsert report_job
     if (existing.length > 0) {
-      // Re-request d'un job failed
+      // Re-request d'un job failed or ingested with 0 records
       await this.db
         .update(reportJobs)
         .set({
@@ -424,7 +436,19 @@ export class ReportsService {
   ): Promise<void> {
     this.logger.log(`Downloading report ${job.id} (${job.reportType} ${profile.marketplace})`);
 
-    const rows = await this.amazonClient.downloadReport(downloadUrl);
+    let rows: any[];
+    try {
+      rows = await this.amazonClient.downloadReport(downloadUrl);
+    } catch (dlErr) {
+      this.logger.error(
+        `[DOWNLOAD] Failed to download report ${job.id}: ${dlErr instanceof Error ? dlErr.message : dlErr}`,
+      );
+      await this.db
+        .update(reportJobs)
+        .set({ status: 'failed', errorMessage: `Download error: ${dlErr instanceof Error ? dlErr.message : dlErr}` })
+        .where(eq(reportJobs.id, job.id));
+      throw dlErr;
+    }
 
     await this.db
       .update(reportJobs)
@@ -432,8 +456,11 @@ export class ReportsService {
       .where(eq(reportJobs.id, job.id));
 
     this.logger.log(
-      `Report ${job.id}: downloaded ${rows.length} rows, starting ingestion`,
+      `Report ${job.id} (${job.reportType}): downloaded ${rows.length} rows, type=${typeof rows}, isArray=${Array.isArray(rows)}`,
     );
+    if (rows.length > 0) {
+      this.logger.log(`Report ${job.id}: first row sample = ${JSON.stringify(rows[0]).substring(0, 500)}`);
+    }
 
     if (rows.length === 0) {
       await this.db
@@ -477,11 +504,32 @@ export class ReportsService {
       throw new Error(`Unknown report type for ingestion: ${reportType}`);
     }
 
+    // ── DIAGNOSTIC LOGGING ──
+    this.logger.log(
+      `[INGEST] reportType=${reportType}, entityType=${entityType}, idField=${idField}, totalRows=${rows.length}`,
+    );
+    if (rows.length > 0) {
+      const sampleRow = rows[0];
+      const sampleKeys = Object.keys(sampleRow);
+      this.logger.log(`[INGEST] Sample row keys: ${sampleKeys.join(', ')}`);
+      this.logger.log(`[INGEST] Sample row[${idField}] = ${JSON.stringify(sampleRow[idField])}`);
+      this.logger.log(`[INGEST] Sample row.date = ${JSON.stringify(sampleRow.date)}`);
+      this.logger.log(`[INGEST] Sample row.impressions = ${JSON.stringify(sampleRow.impressions)}`);
+      this.logger.log(`[INGEST] Sample row.clicks = ${JSON.stringify(sampleRow.clicks)}`);
+      this.logger.log(`[INGEST] Sample row.cost = ${JSON.stringify(sampleRow.cost)}, row.spend = ${JSON.stringify(sampleRow.spend)}`);
+      this.logger.log(`[INGEST] Sample row.sales14d = ${JSON.stringify(sampleRow.sales14d)}`);
+    }
+    // ── END DIAGNOSTIC ──
+
     const metrics: NewDailyMetric[] = [];
+    let skippedNoId = 0;
 
     for (const row of rows) {
       const amazonId = row[idField];
-      if (!amazonId) continue;
+      if (!amazonId) {
+        skippedNoId++;
+        continue;
+      }
 
       metrics.push({
         workspaceId,
@@ -499,6 +547,15 @@ export class ReportsService {
         units: parseInt(row.unitsSoldClicks14d, 10) || 0,
         attributionWindow: '14d',
       });
+    }
+
+    this.logger.log(
+      `[INGEST] ${reportType}: ${metrics.length} metrics built, ${skippedNoId} rows skipped (no ${idField})`,
+    );
+
+    if (metrics.length === 0) {
+      this.logger.warn(`[INGEST] ${reportType}: NO metrics to upsert! All ${rows.length} rows were skipped.`);
+      return 0;
     }
 
     return this.batchUpsertDailyMetrics(metrics);

@@ -27,6 +27,9 @@ export function Navbar() {
               </span>
             )}
           </Link>
+          <span className="hidden sm:inline text-xs text-slate-400">
+            Pilote tes livres
+          </span>
           <div className="flex items-center gap-1">
             {links.map((link) => {
               const isActive = pathname === link.href || (link.href !== '/' && pathname.startsWith(link.href));
