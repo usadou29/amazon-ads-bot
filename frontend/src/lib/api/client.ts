@@ -37,10 +37,12 @@ export const createBook = (dto: CreateBookDto) => api.post('/books', { workspace
 export interface UpdateBookDto {
   title?: string;
   author?: string;
+  publicationDate?: string;
   acosTarget?: number;
   royaltyRate?: number;
   salePrice?: number;
   royaltyPerUnit?: number;
+  lifecyclePhaseOverride?: string | null;
 }
 export const updateBook = (bookId: string, dto: UpdateBookDto) => api.patch(`/books/${bookId}`, dto).then((r) => r.data);
 

@@ -178,6 +178,16 @@ export function RecommendationCard({
           </p>
         </div>
 
+        {/* ── Conseil pour le livre (optionnel) ── */}
+        {reco.bookAdvice && (
+          <div className="mb-4 ml-7 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-xs font-medium text-amber-700 mb-1">
+              Conseil pour ton livre
+            </p>
+            <p className="text-sm text-amber-800 leading-relaxed">{reco.bookAdvice}</p>
+          </div>
+        )}
+
         {/* ── Détails avancés (collapsible) ── */}
         {reco.metrics.acos !== undefined && (
           <div className="ml-7 mb-3">

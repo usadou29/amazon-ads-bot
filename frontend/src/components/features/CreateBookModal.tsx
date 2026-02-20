@@ -26,6 +26,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [marketplace, setMarketplace] = useState('FR');
+  const [publicationDate, setPublicationDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,6 +41,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
     setTitle('');
     setAuthor('');
     setMarketplace('FR');
+    setPublicationDate('');
     setError(null);
     royaltyRef.current = { royaltyRate: null, salePrice: null, royaltyPerUnit: null };
   };
@@ -58,6 +60,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
         marketplace,
         title: title.trim() || undefined,
         author: author.trim() || undefined,
+        publicationDate: publicationDate || undefined,
         royaltyRate: rv.royaltyRate ?? undefined,
         salePrice: rv.salePrice ?? undefined,
         royaltyPerUnit: rv.royaltyPerUnit ?? undefined,
@@ -129,6 +132,19 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
               <option key={m.value} value={m.value}>{m.label}</option>
             ))}
           </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Date de publication</label>
+          <input
+            type="date"
+            value={publicationDate}
+            onChange={(e) => setPublicationDate(e.target.value)}
+            className={inputClass}
+          />
+          <p className="text-xs text-slate-400 mt-1">
+            Permet de détecter automatiquement la phase du livre (lancement, croissance, croisière)
+          </p>
         </div>
 
         {/* ── Redevance ── */}

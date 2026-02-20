@@ -37,6 +37,12 @@ export default function BookDetailPage() {
   const [royaltySaved, setRoyaltySaved] = useState(false);
   const [royaltyError, setRoyaltyError] = useState<string | null>(null);
 
+  // Édition date de publication & phase
+  const [editingPubDate, setEditingPubDate] = useState(false);
+  const [pubDateValue, setPubDateValue] = useState('');
+  const [savingPubDate, setSavingPubDate] = useState(false);
+  const [showPhaseOverride, setShowPhaseOverride] = useState(false);
+
   const royaltyValuesRef = useRef<RoyaltyValues>({ royaltyRate: null, salePrice: null, royaltyPerUnit: null });
 
   useEffect(() => {
@@ -67,6 +73,30 @@ export default function BookDetailPage() {
       setRoyaltyError(err.response?.data?.message || err.message || 'Erreur lors de la sauvegarde');
     } finally {
       setSavingRoyalty(false);
+    }
+  };
+
+  const handleSavePubDate = async () => {
+    setSavingPubDate(true);
+    try {
+      await updateBook(bookId, { publicationDate: pubDateValue || undefined });
+      const updated = await fetchBookDashboard(bookId);
+      setDashboard(updated);
+      setEditingPubDate(false);
+    } catch (err: any) {
+      // silently fail
+    } finally {
+      setSavingPubDate(false);
+    }
+  };
+
+  const handlePhaseOverride = async (phase: string | null) => {
+    try {
+      await updateBook(bookId, { lifecyclePhaseOverride: phase });
+      const updated = await fetchBookDashboard(bookId);
+      setDashboard(updated);
+    } catch (err: any) {
+      // silently fail
     }
   };
 
@@ -104,6 +134,16 @@ export default function BookDetailPage() {
 
   // Info prix/redevance par livre (si renseigné en mode précis)
   const hasPreciseMode = book.salePrice && book.royaltyPerUnit;
+
+  // Phase de cycle de vie
+  const phaseInfo = book.phaseInfo || { phase: 'scale', label: 'Croissance', emoji: '📈', explanation: '', color: 'amber' };
+  const phaseColorMap: Record<string, { bg: string; border: string; text: string }> = {
+    blue: { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-800' },
+    amber: { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-800' },
+    emerald: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-800' },
+    purple: { bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-800' },
+  };
+  const phaseColors = phaseColorMap[phaseInfo.color] || phaseColorMap.amber;
 
   // Indice de dépendance publicitaire (calculé côté backend)
   const depScore = dashboard.adsDependencyScore ?? -1;
@@ -158,6 +198,97 @@ export default function BookDetailPage() {
           </div>
         </div>
         <StatusBadge type={status.type} label={status.label} emoji={status.emoji} />
+      </div>
+
+      {/* ── Phase de cycle de vie ── */}
+      <div className={`mb-6 p-3 ${phaseColors.bg} border ${phaseColors.border} rounded-lg`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">{phaseInfo.emoji}</span>
+            <div>
+              <p className={`text-sm font-semibold ${phaseColors.text}`}>
+                {phaseInfo.label}
+                {book.lifecyclePhaseOverride && (
+                  <span className="ml-2 text-xs font-normal opacity-70">(forcé manuellement)</span>
+                )}
+              </p>
+              <p className="text-xs text-slate-600 mt-0.5">{phaseInfo.explanation}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Date de publication */}
+            {!editingPubDate ? (
+              <button
+                onClick={() => {
+                  setPubDateValue(book.publicationDate || '');
+                  setEditingPubDate(true);
+                }}
+                className="text-xs text-slate-500 hover:text-slate-700 whitespace-nowrap"
+              >
+                {book.publicationDate
+                  ? `Publié le ${new Date(book.publicationDate).toLocaleDateString('fr-FR')}`
+                  : 'Ajouter date de publication'}
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <input
+                  type="date"
+                  value={pubDateValue}
+                  onChange={(e) => setPubDateValue(e.target.value)}
+                  className="px-2 py-1 text-xs border border-slate-300 rounded"
+                />
+                <button
+                  onClick={handleSavePubDate}
+                  disabled={savingPubDate}
+                  className="px-2 py-1 text-xs bg-brand-600 text-white rounded hover:bg-brand-700 disabled:opacity-50"
+                >
+                  {savingPubDate ? '...' : 'OK'}
+                </button>
+                <button
+                  onClick={() => setEditingPubDate(false)}
+                  className="px-1 py-1 text-xs text-slate-400 hover:text-slate-600"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Phase override (avancé) */}
+        <div className="mt-2">
+          {!showPhaseOverride ? (
+            <button
+              onClick={() => setShowPhaseOverride(true)}
+              className="text-xs text-slate-400 hover:text-slate-600"
+            >
+              Forcer une autre phase...
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 mt-1">
+              <select
+                value={book.lifecyclePhaseOverride || ''}
+                onChange={(e) => {
+                  handlePhaseOverride(e.target.value || null);
+                  setShowPhaseOverride(false);
+                }}
+                className="px-2 py-1 text-xs border border-slate-300 rounded bg-white"
+              >
+                <option value="">Auto-détection</option>
+                <option value="launch">Lancement</option>
+                <option value="scale">Croissance</option>
+                <option value="evergreen">Régime de croisière</option>
+                <option value="relaunch">Relance</option>
+              </select>
+              <button
+                onClick={() => setShowPhaseOverride(false)}
+                className="text-xs text-slate-400 hover:text-slate-600"
+              >
+                Annuler
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Résumé en langage naturel ── */}

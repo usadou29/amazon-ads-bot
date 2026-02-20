@@ -14,6 +14,7 @@ import {
 } from '@/db/schema';
 import { eq, and, inArray, sql, gte, lte, desc } from 'drizzle-orm';
 import type { Book, NewBook, CampaignBookMapping } from '@/db/schema';
+import type { LifecyclePhase } from '@/db/schema/books';
 
 export interface CreateBookDto {
   workspaceId: string;
@@ -44,6 +45,7 @@ export interface UpdateBookDto {
   royaltyRate?: number;
   salePrice?: number;
   royaltyPerUnit?: number;
+  lifecyclePhaseOverride?: string | null;
 }
 
 export interface BookWithCampaigns extends Book {
@@ -243,6 +245,7 @@ export class BooksService {
     if (dto.royaltyRate !== undefined) updateData.royaltyRate = dto.royaltyRate.toString();
     if (dto.salePrice !== undefined) updateData.salePrice = dto.salePrice.toString();
     if (dto.royaltyPerUnit !== undefined) updateData.royaltyPerUnit = dto.royaltyPerUnit.toString();
+    if (dto.lifecyclePhaseOverride !== undefined) updateData.lifecyclePhaseOverride = dto.lifecyclePhaseOverride;
 
     const [updated] = await this.db
       .update(books)
@@ -391,11 +394,93 @@ export class BooksService {
     return result.rows || result;
   }
 
-  // ─── Dashboard & Daily Metrics ─────────────────────
+  // ─── Lifecycle Phase Detection ─────────────────────
 
   /**
-   * Retourne la date range par defaut (30 jours)
+   * Calcule le nombre de jours depuis la date de publication.
+   * Retourne Infinity si la date est null.
    */
+  private daysSincePublication(publicationDate: string | null): number {
+    if (!publicationDate) return Infinity;
+    const pubDate = new Date(publicationDate);
+    if (isNaN(pubDate.getTime())) return Infinity;
+    return Math.floor((Date.now() - pubDate.getTime()) / (1000 * 60 * 60 * 24));
+  }
+
+  /**
+   * Auto-détecte la phase de cycle de vie d'un livre basé sur sa date de publication.
+   * La phase "relaunch" est uniquement manuelle (l'auteur la déclenche).
+   */
+  private detectLifecyclePhase(publicationDate: string | null): LifecyclePhase {
+    const days = this.daysSincePublication(publicationDate);
+
+    if (days <= 30) return 'launch';
+    if (days <= 180) return 'scale';
+    return 'evergreen';
+  }
+
+  /**
+   * Retourne la phase effective d'un livre :
+   * - Si override existe → utiliser l'override
+   * - Sinon → auto-détection basée sur publicationDate
+   */
+  getEffectiveLifecyclePhase(book: Book): LifecyclePhase {
+    if (book.lifecyclePhaseOverride) {
+      return book.lifecyclePhaseOverride as LifecyclePhase;
+    }
+    return this.detectLifecyclePhase(book.publicationDate);
+  }
+
+  /**
+   * Retourne les infos de phase pour l'affichage frontend.
+   */
+  private getPhaseInfo(phase: LifecyclePhase, publicationDate: string | null): {
+    phase: LifecyclePhase;
+    label: string;
+    emoji: string;
+    explanation: string;
+    color: string;
+  } {
+    const days = this.daysSincePublication(publicationDate);
+    const daysText = days !== Infinity ? `${days} jour${days > 1 ? 's' : ''}` : '';
+
+    const phaseInfoMap: Record<LifecyclePhase, { label: string; emoji: string; explanation: string; color: string }> = {
+      launch: {
+        label: 'Lancement',
+        emoji: '🚀',
+        explanation: daysText
+          ? `En lancement depuis ${daysText}. On explore les mots-clés, on collecte des données. C'est normal que l'ACoS soit élevé — Amazon apprend qui sont tes lecteurs.`
+          : 'Phase de lancement. On explore les mots-clés et on collecte des données. Tolérance haute sur l\'ACoS.',
+        color: 'blue',
+      },
+      scale: {
+        label: 'Croissance',
+        emoji: '📈',
+        explanation: 'Ton livre commence à trouver son public. On nettoie les mots-clés perdants, on pousse les gagnants, et on optimise le budget.',
+        color: 'amber',
+      },
+      evergreen: {
+        label: 'Régime de croisière',
+        emoji: '🌿',
+        explanation: 'Ton livre est bien installé. On maintient la rentabilité, on resserre l\'ACoS progressivement, et on surveille la concentration des ventes.',
+        color: 'emerald',
+      },
+      relaunch: {
+        label: 'Relance',
+        emoji: '🔄',
+        explanation: 'Mode relance activé. On traite ce livre comme un nouveau lancement : exploration large, tolérance haute, collecte de données fraîches.',
+        color: 'purple',
+      },
+    };
+
+    return {
+      phase,
+      ...phaseInfoMap[phase],
+    };
+  }
+
+  // ─── Dashboard & Daily Metrics ─────────────────────
+
   /**
    * Calcule l'indice de dépendance publicitaire (0-100).
    *
@@ -777,10 +862,11 @@ export class BooksService {
     }
 
     // ── Indice de dépendance publicitaire ──
-    // Score 0-100 basé uniquement sur les métriques Ads disponibles.
-    // Aucune estimation de ventes organiques. Pas un indicateur financier.
-    // Formule pondérée : ACoS (30%), CVR (25%), CTR (20%), volume commandes (15%), volume impressions (10%)
     const adsDependencyScore = this.computeAdsDependencyScore(kpis);
+
+    // ── Phase de cycle de vie ──
+    const lifecyclePhase = this.getEffectiveLifecyclePhase(book);
+    const phaseInfo = this.getPhaseInfo(lifecyclePhase, book.publicationDate);
 
     return {
       book: {
@@ -789,10 +875,14 @@ export class BooksService {
         asin: book.asin,
         author: book.author || 'Auteur inconnu',
         marketplace: book.marketplace,
+        publicationDate: book.publicationDate || null,
         acosTarget: book.acosTarget ? Number(book.acosTarget) : 40,
         royaltyRate: book.royaltyRate ? Number(book.royaltyRate) : null,
         salePrice: book.salePrice ? Number(book.salePrice) : null,
         royaltyPerUnit: book.royaltyPerUnit ? Number(book.royaltyPerUnit) : null,
+        lifecyclePhaseOverride: book.lifecyclePhaseOverride || null,
+        lifecyclePhase,
+        phaseInfo,
       },
       adsDependencyScore,
       metrics: kpis,

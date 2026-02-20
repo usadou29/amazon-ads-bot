@@ -17,6 +17,7 @@ export const books = pgTable('books', {
   salePrice: decimal('sale_price', { precision: 10, scale: 2 }),
   royaltyPerUnit: decimal('royalty_per_unit', { precision: 10, scale: 2 }),
   dailyBudgetTarget: decimal('daily_budget_target', { precision: 10, scale: 2 }),
+  lifecyclePhaseOverride: varchar('lifecycle_phase_override', { length: 20 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
@@ -25,3 +26,6 @@ export const books = pgTable('books', {
 
 export type Book = typeof books.$inferSelect;
 export type NewBook = typeof books.$inferInsert;
+
+export const lifecyclePhaseEnum = ['launch', 'scale', 'evergreen', 'relaunch'] as const;
+export type LifecyclePhase = typeof lifecyclePhaseEnum[number];

@@ -34,6 +34,7 @@ export const rules = pgTable('rules', {
   priority: integer('priority').default(100),
   maxDailyExecutions: integer('max_daily_executions').default(10),
   cooldownHours: integer('cooldown_hours').default(48),
+  phases: jsonb('phases').default(['launch', 'scale', 'evergreen', 'relaunch']),
   isActive: boolean('is_active').default(true),
   version: integer('version').default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
