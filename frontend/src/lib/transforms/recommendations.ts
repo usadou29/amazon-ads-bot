@@ -21,6 +21,8 @@ export interface HumanRecommendation {
   entityName: string;
   /** Type d'entité (campaign, keyword, search_term) */
   entityType: string;
+  /** Clé d'entité brute (pour regroupement) */
+  entityKey: string;
   /** Score de confiance (0-100) */
   confidence: number | null;
   /** Métriques clés extraites de contextData */
@@ -43,6 +45,19 @@ export interface HumanRecommendation {
   };
   /** Conseil optionnel sur le livre (couverture, résumé, prix…) */
   bookAdvice?: string;
+  // ── Strategy Engine fields ──
+  /** Score stratégique (0-100) calculé par la matrice lifecycle */
+  strategyScore: number | null;
+  /** Label lisible : "Recommandé en Scaling", "Alternative prudente", etc. */
+  strategyLabel: string | null;
+  /** Cette reco est-elle la meilleure pour cette entité dans ce lifecycle ? */
+  recommendedForLifecycle: boolean;
+  /** Consentement requis avant application ? (surtout en Launch) */
+  requiresConsent: boolean;
+  /** Niveau de consentement : 'none' | 'basic' | 'reinforced' */
+  consentLevel: 'none' | 'basic' | 'reinforced';
+  /** Message pédagogique à afficher dans la modale de consentement */
+  consentMessage?: string;
 }
 
 interface RuleTemplate {
@@ -495,11 +510,12 @@ export function transformRecommendation(raw: any, safetyMode: boolean): HumanRec
     why: template.why(ctx),
     impact: template.impact(ctx),
     risk: template.risk,
-    riskLevel: template.riskLevel,
+    riskLevel: raw.riskLevel || template.riskLevel,
     canSimulate: true,
     canApply: !safetyMode,
     entityName,
     entityType,
+    entityKey: raw.entityKey || '',
     confidence: raw.confidenceScore ?? null,
     metrics,
     createdAt: raw.createdAt || null,
@@ -508,5 +524,75 @@ export function transformRecommendation(raw: any, safetyMode: boolean): HumanRec
       description: template.actionDesc(ctx),
     },
     bookAdvice: template.bookAdvice ? template.bookAdvice(ctx) : undefined,
+    // Strategy Engine fields (enrichis par le backend)
+    strategyScore: raw.strategyScore ?? null,
+    strategyLabel: raw.strategyLabel ?? null,
+    recommendedForLifecycle: raw.recommendedForLifecycle ?? false,
+    requiresConsent: raw.requiresConsent ?? false,
+    consentLevel: raw.consentLevel ?? 'none',
+    consentMessage: raw.consentMessage ?? undefined,
   };
+}
+
+/**
+ * Regroupe les recommandations par entityKey.
+ * Pour chaque groupe, la reco avec recommendedForLifecycle=true est mise en premier.
+ * Les autres sont triées par strategyScore décroissant.
+ */
+export interface RecommendationGroup {
+  entityKey: string;
+  entityName: string;
+  entityType: string;
+  recommended: HumanRecommendation | null;
+  alternatives: HumanRecommendation[];
+}
+
+export function groupRecommendationsByEntity(recos: HumanRecommendation[]): RecommendationGroup[] {
+  const groups: Record<string, HumanRecommendation[]> = {};
+
+  for (const reco of recos) {
+    const key = reco.entityKey || reco.id;
+    if (!groups[key]) {
+      groups[key] = [];
+    }
+    groups[key].push(reco);
+  }
+
+  const result: RecommendationGroup[] = [];
+
+  const keys = Object.keys(groups);
+  for (const entityKey of keys) {
+    const groupRecos = groups[entityKey];
+    // Trier par strategyScore décroissant
+    groupRecos.sort((a: HumanRecommendation, b: HumanRecommendation) =>
+      (b.strategyScore ?? 0) - (a.strategyScore ?? 0),
+    );
+
+    const recommended = groupRecos.find((r: HumanRecommendation) => r.recommendedForLifecycle) || null;
+    const alternatives = groupRecos.filter((r: HumanRecommendation) => r !== recommended);
+
+    // Si pas de recommended, prendre la première (meilleur score)
+    const primary = recommended || groupRecos[0];
+    const alts = recommended ? alternatives : groupRecos.slice(1);
+
+    result.push({
+      entityKey,
+      entityName: primary?.entityName || entityKey,
+      entityType: primary?.entityType || 'keyword',
+      recommended: primary,
+      alternatives: alts,
+    });
+  }
+
+  // Trier les groupes : ceux avec une reco recommandée en premier, puis par score
+  result.sort((a: RecommendationGroup, b: RecommendationGroup) => {
+    const aScore = a.recommended?.strategyScore ?? 0;
+    const bScore = b.recommended?.strategyScore ?? 0;
+    const aRec = a.recommended?.recommendedForLifecycle ? 1 : 0;
+    const bRec = b.recommended?.recommendedForLifecycle ? 1 : 0;
+    if (aRec !== bRec) return bRec - aRec;
+    return bScore - aScore;
+  });
+
+  return result;
 }

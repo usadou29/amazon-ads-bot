@@ -15,6 +15,7 @@ import {
 import { eq, and, inArray, sql, gte, lte, desc } from 'drizzle-orm';
 import type { Book, NewBook, CampaignBookMapping } from '@/db/schema';
 import type { LifecyclePhase } from '@/db/schema/books';
+import { StrategyEngine } from '../strategy/strategy-engine';
 
 export interface CreateBookDto {
   workspaceId: string;
@@ -71,6 +72,7 @@ export class BooksService {
 
   constructor(
     @Inject(DATABASE_CONNECTION) private db: any,
+    private readonly strategyEngine: StrategyEngine,
   ) {}
 
   /**
@@ -912,6 +914,19 @@ export class BooksService {
     const lifecyclePhase = this.getEffectiveLifecyclePhase(book);
     const phaseInfo = this.getPhaseInfo(lifecyclePhase, book.publicationDate);
 
+    // ── Strategy Engine post-processing ──
+    const strategyInputs = recos.map((r: any) => ({
+      id: r.id,
+      entityKey: r.entityKey,
+      entityType: r.entityType,
+      actionType: r.actionType,
+      contextData: r.contextData,
+      confidenceScore: r.confidenceScore ? Number(r.confidenceScore) : null,
+    }));
+
+    const strategyResults = this.strategyEngine.process(strategyInputs, lifecyclePhase);
+    const strategyMap = new Map(strategyResults.map((s) => [s.id, s]));
+
     return {
       book: {
         id: book.id,
@@ -944,6 +959,7 @@ export class BooksService {
             entityName = entityKey;
           }
         }
+        const strategy = strategyMap.get(r.id);
         return {
           id: r.id,
           entityType: r.entityType,
@@ -956,6 +972,14 @@ export class BooksService {
           ruleSnapshot: r.ruleSnapshot,
           status: r.status,
           createdAt: r.createdAt,
+          // Strategy Engine fields
+          strategyScore: strategy?.strategyScore ?? null,
+          strategyLabel: strategy?.strategyLabel ?? null,
+          riskLevel: strategy?.riskLevel ?? 'medium',
+          recommendedForLifecycle: strategy?.recommendedForLifecycle ?? false,
+          requiresConsent: strategy?.requiresConsent ?? false,
+          consentLevel: strategy?.consentLevel ?? 'none',
+          consentMessage: strategy?.consentMessage ?? null,
         };
       }),
       recentActions: recentActions.map((a: any) => ({

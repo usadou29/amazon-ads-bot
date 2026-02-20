@@ -19,9 +19,79 @@ import {
 } from '@/lib/api/client';
 import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, interpretAdsDependency, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 import { computeStatus, StatusResult } from '@/lib/transforms/status';
-import { transformRecommendation, HumanRecommendation } from '@/lib/transforms/recommendations';
+import { transformRecommendation, HumanRecommendation, groupRecommendationsByEntity, RecommendationGroup } from '@/lib/transforms/recommendations';
 import { t } from '@/lib/i18n';
 import { useSyncContext } from '@/lib/contexts/SyncContext';
+
+// ── Recommendation Group Card ──
+// Shows the recommended reco prominently, with alternatives collapsible underneath
+function RecoGroupCard({
+  group,
+  onSimulate,
+  onApply,
+  onReject,
+  safetyBlocked,
+  safetyMessage,
+}: {
+  group: RecommendationGroup;
+  onSimulate: (id: string) => Promise<void>;
+  onApply: (id: string) => Promise<void>;
+  onReject: (id: string) => Promise<void>;
+  safetyBlocked: boolean;
+  safetyMessage?: string;
+}) {
+  const [showAlternatives, setShowAlternatives] = useState(false);
+  const hasAlternatives = group.alternatives.length > 0;
+
+  return (
+    <div>
+      {/* Main recommended card */}
+      {group.recommended && (
+        <RecommendationCard
+          recommendation={group.recommended}
+          onSimulate={onSimulate}
+          onApply={onApply}
+          onReject={onReject}
+          safetyBlocked={safetyBlocked}
+          safetyMessage={safetyMessage}
+        />
+      )}
+
+      {/* Alternatives toggle */}
+      {hasAlternatives && (
+        <div className="ml-4 mt-1">
+          <button
+            type="button"
+            onClick={() => setShowAlternatives(!showAlternatives)}
+            className="text-xs text-slate-400 hover:text-slate-600 transition-colors py-1"
+          >
+            {showAlternatives
+              ? `▾ Masquer ${group.alternatives.length} autre${group.alternatives.length > 1 ? 's' : ''} option${group.alternatives.length > 1 ? 's' : ''}`
+              : `▸ Voir ${group.alternatives.length} autre${group.alternatives.length > 1 ? 's' : ''} option${group.alternatives.length > 1 ? 's' : ''}`
+            }
+          </button>
+
+          {showAlternatives && (
+            <div className="space-y-3 mt-2 pl-3 border-l-2 border-slate-200">
+              {group.alternatives.map((alt) => (
+                <RecommendationCard
+                  key={alt.id}
+                  recommendation={alt}
+                  onSimulate={onSimulate}
+                  onApply={onApply}
+                  onReject={onReject}
+                  safetyBlocked={safetyBlocked}
+                  safetyMessage={safetyMessage}
+                  isAlternative
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function BookDetailPage() {
   const params = useParams();
@@ -172,6 +242,7 @@ export default function BookDetailPage() {
   const humanRecos: HumanRecommendation[] = (recommendations || []).map((r: any) =>
     transformRecommendation(r, safety.dryRun),
   );
+  const recoGroups: RecommendationGroup[] = groupRecommendationsByEntity(humanRecos);
   const safetyMessage = safety.killSwitch
     ? t('safety.kill_switch_title')
     : safety.dryRun
@@ -509,7 +580,7 @@ export default function BookDetailPage() {
             </Card>
           )}
 
-          {humanRecos.length > 0 && (
+          {recoGroups.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold text-slate-900">
@@ -519,22 +590,20 @@ export default function BookDetailPage() {
                   Basé sur les 30 derniers jours
                 </p>
               </div>
-              <div className="space-y-4">
-                {humanRecos.map((reco) => (
-                  <RecommendationCard
-                    key={reco.id}
-                    recommendation={reco}
+              <div className="space-y-6">
+                {recoGroups.map((group) => (
+                  <RecoGroupCard
+                    key={group.entityKey}
+                    group={group}
                     onSimulate={async (id) => { await dryRunAction(id); }}
                     onApply={async (id) => {
                       await approveRecommendation(id);
                       await executeAction(id);
-                      // Recharger le dashboard après action
                       const updated = await fetchBookDashboard(bookId, includeInactive);
                       setDashboard(updated);
                     }}
                     onReject={async (id) => {
                       await rejectRecommendation(id);
-                      // Retirer la reco de la liste
                       const updated = await fetchBookDashboard(bookId, includeInactive);
                       setDashboard(updated);
                     }}
@@ -546,7 +615,7 @@ export default function BookDetailPage() {
             </div>
           )}
 
-          {humanRecos.length === 0 && (
+          {recoGroups.length === 0 && (
             <Card className="border-l-4 border-l-emerald-400">
               <CardContent>
                 <div className="text-center py-4">
