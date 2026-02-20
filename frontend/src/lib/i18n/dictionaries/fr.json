@@ -87,5 +87,10 @@
     "no_available_hint": "Toutes vos campagnes sont déjà associées à des livres, ou aucune campagne n'a encore été synchronisée.",
     "success_hint": "Vous pouvez maintenant consulter les performances de votre livre sur le tableau de bord."
   },
+  "sync": {
+    "button": "Synchroniser",
+    "syncing": "Synchronisation...",
+    "success": "Sync terminée — rechargement..."
+  },
   "common": { "back": "Retour", "loading": "Chargement...", "error": "Une erreur est survenue", "save": "Enregistrer", "cancel": "Annuler" }
 }

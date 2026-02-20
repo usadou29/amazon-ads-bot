@@ -427,27 +427,27 @@ export class AmazonClientService {
       campaigns: {
         reportTypeId: 'spCampaigns',
         groupBy: 'campaign',
-        columns: ['date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+        columns: ['campaignId', 'date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
       ad_groups: {
         reportTypeId: 'spCampaigns',
         groupBy: 'adGroup',
-        columns: ['date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+        columns: ['adGroupId', 'campaignId', 'date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
       keywords: {
         reportTypeId: 'spKeywords',
         groupBy: 'adGroup',
-        columns: ['date', 'keywordId', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+        columns: ['keywordId', 'date', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
       targets: {
         reportTypeId: 'spTargeting',
         groupBy: 'targeting',
-        columns: ['date', 'keywordId', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+        columns: ['targetId', 'date', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
       search_terms: {
         reportTypeId: 'spSearchTerm',
         groupBy: 'searchTerm',
-        columns: ['date', 'searchTerm', 'adGroupId', 'campaignId', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+        columns: ['searchTerm', 'adGroupId', 'campaignId', 'date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
     };
 

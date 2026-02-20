@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { OnboardingSection } from '@/components/features/OnboardingSection';
 import { CreateBookModal } from '@/components/features/CreateBookModal';
 import { LinkCampaignsModal } from '@/components/features/LinkCampaignsModal';
+import { SyncButton } from '@/components/features/SyncButton';
 import { t } from '@/lib/i18n';
 import {
   fetchMetricsSummary,
@@ -94,9 +95,12 @@ export default function HomePage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900">{t('home.title')}</h1>
-        <Button variant="accent" size="sm" onClick={() => setShowCreateBook(true)}>
-          + {t('home.add_book')}
-        </Button>
+        <div className="flex items-center gap-3">
+          <SyncButton />
+          <Button variant="accent" size="sm" onClick={() => setShowCreateBook(true)}>
+            + {t('home.add_book')}
+          </Button>
+        </div>
       </div>
 
       {/* Global KPIs */}

@@ -15,6 +15,7 @@ import { AmazonClientModule } from '@/modules/amazon-client/amazon-client.module
 import { ReportsModule } from '@/modules/reports/reports.module';
 import { AuthorsModule } from '@/modules/authors/authors.module';
 import { CampaignsModule } from '@/modules/campaigns/campaigns.module';
+import { SchedulerModule } from '@/modules/scheduler/scheduler.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { CampaignsModule } from '@/modules/campaigns/campaigns.module';
     ReportsModule,
     AuthorsModule,
     CampaignsModule,
+    SchedulerModule,
   ],
 })
 export class AppModule {}

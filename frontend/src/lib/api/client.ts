@@ -64,3 +64,7 @@ export const fetchKillSwitchStatus = () => api.get('/actions/kill-switch').then(
 
 // ─── System ────────────────────────────────────
 export const fetchFeatureFlag = (name: string) => api.get(`/system/features/${name}`).then((r) => r.data);
+
+// ─── Scheduler / Sync ─────────────────────────
+export const triggerSync = () => api.post(`/scheduler/sync?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
+export const fetchSyncStatus = () => api.get(`/scheduler/status?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
