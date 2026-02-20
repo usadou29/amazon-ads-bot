@@ -1,0 +1,91 @@
+{
+  "app": { "name": "ENDROMEDE", "tagline": "Optimize your Amazon Ads" },
+  "nav": { "home": "Tableau de bord", "authors": "Mes auteurs", "settings": "Réglages" },
+  "home": {
+    "title": "Tableau de bord",
+    "kpis_title": "KPIs globaux (30 jours)",
+    "top_campaigns": "Campagnes les plus performantes",
+    "recommendations_title": "Recommandations en attente",
+    "no_data": "Aucune donnée disponible pour cette période",
+    "no_campaigns": "Aucune campagne trouvée",
+    "add_book": "Ajouter un livre"
+  },
+  "authors": {
+    "title": "Mes auteurs",
+    "books_count": "{count} livre(s)",
+    "see_books": "Voir les livres",
+    "empty": "Aucun auteur trouvé",
+    "empty_hint": "Ajoutez un livre pour commencer"
+  },
+  "books": {
+    "title": "Livres",
+    "open": "Ouvrir",
+    "empty": "Aucun livre pour cet auteur",
+    "empty_hint": "Ajoutez un livre avec son ASIN"
+  },
+  "book_detail": {
+    "chart_title": "Évolution sur 30 jours",
+    "timeline_title": "Dernières actions"
+  },
+  "metrics": {
+    "spend": "Dépenses pub", "sales": "Ventes", "acos": "Ratio dépense-ventes",
+    "roas": "Retour sur investissement", "impressions": "Affichages", "clicks": "Clics",
+    "orders": "Commandes", "ctr": "Taux de clic", "cvr": "Taux de conversion", "cpc": "Coût par clic"
+  },
+  "status": {
+    "success": "Sous contrôle", "warning": "À optimiser", "danger": "Attention requise", "no_data": "Données insuffisantes"
+  },
+  "recommendations": {
+    "title": "Conseils",
+    "why": "Pourquoi",
+    "impact": "Impact attendu",
+    "risk": "Risque",
+    "simulate": "Simuler",
+    "apply": "Appliquer",
+    "reject": "Ignorer"
+  },
+  "safety": {
+    "kill_switch_title": "Arrêt d'urgence activé",
+    "kill_switch_desc": "Aucune action ne sera envoyée à Amazon",
+    "dry_run_title": "Mode simulation",
+    "dry_run_desc": "Les actions sont simulées, rien n'est envoyé"
+  },
+  "onboarding": {
+    "title": "Bienvenue sur ENDROMEDE",
+    "description": "Vos campagnes Amazon Ads sont synchronisées. Créez votre premier livre et associez-y vos campagnes pour centraliser le suivi de vos performances (ventes, ACOS, ROAS, etc.).",
+    "create_first_book": "Créer mon premier livre",
+    "see_campaigns": "Voir mes campagnes",
+    "concept_title": "Comment ça marche ?",
+    "concept_desc": "Un \"livre\" regroupe une ou plusieurs campagnes Amazon Ads autour d'un même ASIN. Cela vous permet de suivre toutes les métriques d'un livre en un seul endroit, quel que soit le nombre de campagnes associées."
+  },
+  "book_creation": {
+    "title": "Créer un nouveau livre",
+    "asin": "ASIN",
+    "title_field": "Titre du livre",
+    "author_field": "Auteur / Nom de plume",
+    "marketplace": "Marketplace",
+    "submit": "Créer le livre",
+    "cancel": "Annuler"
+  },
+  "campaigns": {
+    "list_title": "Mes campagnes disponibles",
+    "name": "Nom",
+    "type": "Type",
+    "state": "État",
+    "daily_budget": "Budget/jour",
+    "marketplace": "Marketplace",
+    "no_campaigns": "Aucune campagne trouvée pour ce workspace"
+  },
+  "link_campaigns": {
+    "title": "Associer des campagnes à votre livre",
+    "description": "Sélectionnez les campagnes à associer à « {book} ». Choisissez une campagne principale pour les KPIs du livre.",
+    "select_all": "Tout sélectionner",
+    "deselect_all": "Tout désélectionner",
+    "primary": "Principale",
+    "submit": "Associer {count} campagne(s)",
+    "no_available": "Aucune campagne disponible",
+    "no_available_hint": "Toutes vos campagnes sont déjà associées à des livres, ou aucune campagne n'a encore été synchronisée.",
+    "success_hint": "Vous pouvez maintenant consulter les performances de votre livre sur le tableau de bord."
+  },
+  "common": { "back": "Retour", "loading": "Chargement...", "error": "Une erreur est survenue", "save": "Enregistrer", "cancel": "Annuler" }
+}

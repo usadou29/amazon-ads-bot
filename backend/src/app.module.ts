@@ -13,6 +13,8 @@ import { MetricsModule } from '@/modules/metrics/metrics.module';
 import { AlertsModule } from '@/modules/alerts/alerts.module';
 import { AmazonClientModule } from '@/modules/amazon-client/amazon-client.module';
 import { ReportsModule } from '@/modules/reports/reports.module';
+import { AuthorsModule } from '@/modules/authors/authors.module';
+import { CampaignsModule } from '@/modules/campaigns/campaigns.module';
 
 @Module({
   imports: [
@@ -33,6 +35,8 @@ import { ReportsModule } from '@/modules/reports/reports.module';
     AlertsModule,
     AmazonClientModule,
     ReportsModule,
+    AuthorsModule,
+    CampaignsModule,
   ],
 })
 export class AppModule {}

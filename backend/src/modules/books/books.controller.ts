@@ -34,6 +34,25 @@ export class BooksController {
   }
 
   /**
+   * GET /api/books/available-campaigns
+   * Recupere les campagnes disponibles pour mapping
+   * IMPORTANT: Cette route statique doit etre AVANT :id
+   */
+  @Get('available-campaigns')
+  async getAvailableCampaigns(
+    @Query('workspaceId') workspaceId: string,
+    @Query('bookId') bookId?: string,
+  ) {
+    if (!workspaceId) {
+      throw new BadRequestException('workspaceId is required');
+    }
+
+    this.logger.log(`Fetching available campaigns for workspace ${workspaceId}`);
+
+    return this.booksService.getAvailableCampaigns(workspaceId, bookId);
+  }
+
+  /**
    * GET /api/books/:id
    * Recupere un livre par ID avec ses campagnes associees
    */
@@ -46,6 +65,45 @@ export class BooksController {
     this.logger.log(`Fetching book ${id}`);
 
     return this.booksService.findOne(id);
+  }
+
+  /**
+   * GET /api/books/:id/dashboard
+   * Dashboard complet d'un livre : KPIs + tendances + recos + actions + daily metrics
+   */
+  @Get(':id/dashboard')
+  async getDashboard(@Param('id') id: string) {
+    if (!id) {
+      throw new BadRequestException('Book ID is required');
+    }
+
+    this.logger.log(`Fetching dashboard for book ${id}`);
+
+    return this.booksService.getDashboard(id);
+  }
+
+  /**
+   * GET /api/books/:id/metrics/daily
+   * Donnees journalieres pour le graphique
+   */
+  @Get(':id/metrics/daily')
+  async getDailyMetrics(
+    @Param('id') id: string,
+    @Query('days') days?: string,
+  ) {
+    if (!id) {
+      throw new BadRequestException('Book ID is required');
+    }
+
+    const numDays = days ? parseInt(days, 10) : 30;
+
+    if (isNaN(numDays) || numDays < 1 || numDays > 365) {
+      throw new BadRequestException('days must be between 1 and 365');
+    }
+
+    this.logger.log(`Fetching daily metrics for book ${id} (${numDays} days)`);
+
+    return this.booksService.getDailyMetrics(id, numDays);
   }
 
   /**
@@ -154,23 +212,5 @@ export class BooksController {
     await this.booksService.unmapCampaign(bookId, campaignId);
 
     return { success: true, message: `Campaign ${campaignId} unmapped from book ${bookId}` };
-  }
-
-  /**
-   * GET /api/books/available-campaigns
-   * Recupere les campagnes disponibles pour mapping
-   */
-  @Get('available-campaigns')
-  async getAvailableCampaigns(
-    @Query('workspaceId') workspaceId: string,
-    @Query('bookId') bookId?: string,
-  ) {
-    if (!workspaceId) {
-      throw new BadRequestException('workspaceId is required');
-    }
-
-    this.logger.log(`Fetching available campaigns for workspace ${workspaceId}`);
-
-    return this.booksService.getAvailableCampaigns(workspaceId, bookId);
   }
 }

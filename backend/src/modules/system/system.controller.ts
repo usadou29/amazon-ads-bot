@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Param,
   Body,
   Logger,
   BadRequestException,
@@ -107,14 +108,14 @@ export class SystemController {
    * Verifie si une feature est active
    */
   @Get('api/system/features/:name')
-  async getFeature(@Body() params: { name: string }) {
-    if (!params.name) {
+  async getFeature(@Param('name') name: string) {
+    if (!name) {
       throw new BadRequestException('Feature name is required');
     }
 
-    const enabled = await this.systemService.isFeatureEnabled(params.name);
+    const enabled = await this.systemService.isFeatureEnabled(name);
 
-    return { feature: params.name, enabled };
+    return { feature: name, enabled };
   }
 
   /**
