@@ -9,6 +9,9 @@ export const ruleTypeEnum = [
   'add_negative',
   'budget_alert',
   'acos_alert',
+  'low_impressions',
+  'performance_trend',
+  'acos_above_royalty',
 ] as const;
 export type RuleType = typeof ruleTypeEnum[number];
 

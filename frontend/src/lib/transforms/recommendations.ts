@@ -176,6 +176,62 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     riskLevel: 'low',
     actionDesc: () => 'Créer un mot-clé exact dédié',
   },
+
+  // ═══════════════════════════════════════════════════════════
+  // Règles budget & visibilité
+  // ═══════════════════════════════════════════════════════════
+
+  budget_capped: {
+    title: (ctx) => `Budget épuisé sur « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const impressions = ctx.metrics.impressions ?? 0;
+      return `Cette campagne atteint son budget quotidien et s'arrête en cours de journée. Tu rates des impressions et potentiellement des ventes. (${impressions} impressions sur la période)`;
+    },
+    impact: () => 'Augmenter le budget quotidien permet de capter les ventes manquées. Si le ROI est bon, c\'est du profit en plus.',
+    risk: 'Augmentation des dépenses — à surveiller les premiers jours.',
+    riskLevel: 'medium',
+    actionDesc: () => 'Augmenter le budget quotidien',
+  },
+
+  low_impressions: {
+    title: (ctx) => `Peu de visibilité sur « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const impressions = ctx.metrics.impressions ?? 0;
+      return `Seulement ${impressions} impressions sur la période. Ton livre est très peu affiché — l'enchère est probablement trop basse ou les mots-clés trop concurrentiels.`;
+    },
+    impact: () => 'Plus d\'impressions = plus de chances de ventes. Sans visibilité, pas de résultats possibles.',
+    risk: 'Augmenter l\'enchère coûtera un peu plus cher par clic.',
+    riskLevel: 'low',
+    actionDesc: () => 'Augmenter l\'enchère pour gagner en visibilité',
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // Règles tendances
+  // ═══════════════════════════════════════════════════════════
+
+  performance_declining: {
+    title: (ctx) => `Performance en baisse sur « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const acos = ctx.metrics.acos;
+      return `Les performances se dégradent depuis plusieurs jours${acos ? ` (ACoS actuel : ${acos.toFixed(1)}%)` : ''}. Le ratio dépenses/ventes empire.`;
+    },
+    impact: () => 'Agir maintenant évite de creuser les pertes. Une pause ou baisse d\'enchère peut stopper l\'hémorragie.',
+    risk: 'Perte de position si on réduit trop les enchères.',
+    riskLevel: 'medium',
+    actionDesc: () => 'Baisser les enchères ou mettre en pause les mots-clés en baisse',
+  },
+
+  acos_above_royalty: {
+    title: (ctx) => `Pub non rentable sur « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const acos = ctx.metrics.acos;
+      return `Ton ACoS (${acos ? acos.toFixed(1) : '?'}%) dépasse ton taux de redevance. Concrètement, chaque vente pub te fait perdre de l'argent car la pub coûte plus que ce que tu touches par livre.`;
+    },
+    impact: () => 'Baisser l\'ACoS sous ton taux de redevance te rendra rentable sur chaque vente pub.',
+    risk: 'Baisser les enchères peut réduire le volume de ventes.',
+    riskLevel: 'medium',
+    actionDesc: () => 'Optimiser les enchères pour passer sous le seuil de rentabilité',
+  },
 };
 
 const DEFAULT_TEMPLATE: RuleTemplate = {

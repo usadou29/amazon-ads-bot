@@ -17,7 +17,7 @@ import {
   executeAction,
   updateBook,
 } from '@/lib/api/client';
-import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
+import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, interpretAdsDependency, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 import { computeStatus, StatusResult } from '@/lib/transforms/status';
 import { transformRecommendation, HumanRecommendation } from '@/lib/transforms/recommendations';
 import { t } from '@/lib/i18n';
@@ -36,6 +36,7 @@ export default function BookDetailPage() {
   const [savingRoyalty, setSavingRoyalty] = useState(false);
   const [royaltySaved, setRoyaltySaved] = useState(false);
   const [royaltyError, setRoyaltyError] = useState<string | null>(null);
+
   const royaltyValuesRef = useRef<RoyaltyValues>({ royaltyRate: null, salePrice: null, royaltyPerUnit: null });
 
   useEffect(() => {
@@ -104,6 +105,10 @@ export default function BookDetailPage() {
   // Info prix/redevance par livre (si renseigné en mode précis)
   const hasPreciseMode = book.salePrice && book.royaltyPerUnit;
 
+  // Indice de dépendance publicitaire (calculé côté backend)
+  const depScore = dashboard.adsDependencyScore ?? -1;
+  const depInfo = interpretAdsDependency(depScore);
+
   const status: StatusResult = computeStatus({
     acosTarget: book.acosTarget ? Number(book.acosTarget) : 40,
     acos: m.acos ?? null,
@@ -163,7 +168,7 @@ export default function BookDetailPage() {
       </Card>
 
       {/* ── Chiffres clés ── */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
           <p className={`text-2xl font-bold ${profitColor}`}>
             {profit >= 0 ? '+' : ''}{profit.toFixed(0)}€
@@ -189,7 +194,34 @@ export default function BookDetailPage() {
           <p className="text-2xl font-bold text-slate-700">{formatCurrency(spend)}</p>
           <p className="text-xs text-slate-500 mt-1">Dépensé en pub</p>
         </div>
+        {depScore >= 0 && (
+          <div className={`rounded-xl border p-4 text-center ${depInfo.bgColor} ${depInfo.borderColor}`}>
+            <p className="text-lg font-bold">
+              {depInfo.emoji}
+            </p>
+            <p className={`text-xs font-medium mt-1 ${depInfo.color}`}>
+              {depInfo.label}
+            </p>
+          </div>
+        )}
       </div>
+
+      {/* ── Indice de dépendance publicitaire ── */}
+      {depScore >= 0 && (
+        <div className={`mb-6 p-3 ${depInfo.bgColor} border ${depInfo.borderColor} rounded-lg`}>
+          <div className="flex items-start gap-2">
+            <span className="text-sm mt-0.5">{depInfo.emoji}</span>
+            <div>
+              <p className={`text-xs font-semibold mb-1 ${depInfo.color}`}>
+                {depInfo.label}
+              </p>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                {depInfo.explanation}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Édition de la redevance (inline avec RoyaltyEditor) ── */}
       {editingRoyalty && (

@@ -396,6 +396,84 @@ export class BooksService {
   /**
    * Retourne la date range par defaut (30 jours)
    */
+  /**
+   * Calcule l'indice de dépendance publicitaire (0-100).
+   *
+   * Score élevé = le livre dépend beaucoup de la pub.
+   * Score bas = le livre montre des signes de référencement organique.
+   *
+   * Basé uniquement sur les métriques Ads disponibles :
+   * - ACoS (30%) : un ACoS élevé indique une forte dépendance
+   * - CVR (25%) : un bon CVR suggère un produit solide (moins dépendant)
+   * - CTR (20%) : un bon CTR montre de l'intérêt naturel
+   * - Volume de commandes (15%) : plus il y a de commandes, plus le livre a un historique
+   * - Volume d'impressions (10%) : un gros volume peut indiquer une position acquise
+   *
+   * Le score est lissé par des fonctions sigmoïdes pour éviter les variations brutales.
+   */
+  private computeAdsDependencyScore(kpis: {
+    acos: number;
+    ctr: number;
+    cvr: number;
+    orders: number;
+    impressions: number;
+    spend: number;
+    sales: number;
+  }): number {
+    // Pas de données → pas de score
+    if (kpis.spend === 0 && kpis.impressions === 0) return -1;
+
+    // Fonction sigmoïde douce pour normaliser un score entre 0 et 1
+    // center = point milieu, steepness = pente (plus élevé = transition plus raide)
+    const sigmoid = (value: number, center: number, steepness: number): number => {
+      return 1 / (1 + Math.exp(-steepness * (value - center)));
+    };
+
+    // ── Score ACoS (30%) ──
+    // ACoS > 60% → très dépendant (score haut). ACoS < 15% → peu dépendant.
+    // On inverse : ACoS élevé = score de dépendance élevé
+    const acosScore = kpis.sales > 0
+      ? sigmoid(kpis.acos, 40, 0.06) // centré à 40%, transition douce
+      : 1.0; // pas de ventes = totalement dépendant
+
+    // ── Score CVR (25%) ──
+    // CVR élevé = les gens qui cliquent achètent = produit solide = moins dépendant
+    // On inverse : CVR élevé = score bas (moins dépendant)
+    const cvrScore = kpis.cvr > 0
+      ? 1 - sigmoid(kpis.cvr, 8, 0.3) // centré à 8%, transition douce
+      : 1.0; // pas de conversion = dépendant
+
+    // ── Score CTR (20%) ──
+    // CTR élevé = les gens sont intéressés = bon référencement
+    // On inverse : CTR élevé = score bas
+    const ctrScore = kpis.ctr > 0
+      ? 1 - sigmoid(kpis.ctr, 0.4, 4) // centré à 0.4%
+      : 1.0;
+
+    // ── Score volume commandes (15%) ──
+    // Plus de commandes = plus d'historique = le livre s'installe
+    // On inverse : beaucoup de commandes = score bas
+    const ordersScore = kpis.orders > 0
+      ? 1 - sigmoid(kpis.orders, 15, 0.15) // centré à 15 commandes/mois
+      : 1.0;
+
+    // ── Score volume impressions (10%) ──
+    // Un bon volume d'impressions avec un bon CTR indique une position acquise
+    const impressionsScore = kpis.impressions > 0
+      ? 1 - sigmoid(kpis.impressions, 5000, 0.0005) // centré à 5000 impressions
+      : 1.0;
+
+    // Score pondéré final (0 à 1) → converti en 0 à 100
+    const rawScore =
+      acosScore * 0.30 +
+      cvrScore * 0.25 +
+      ctrScore * 0.20 +
+      ordersScore * 0.15 +
+      impressionsScore * 0.10;
+
+    return Math.round(rawScore * 100);
+  }
+
   private getDefaultDateRange(): { startDate: string; endDate: string } {
     const end = new Date();
     const start = new Date();
@@ -698,6 +776,12 @@ export class BooksService {
         .orderBy(dailyMetrics.date);
     }
 
+    // ── Indice de dépendance publicitaire ──
+    // Score 0-100 basé uniquement sur les métriques Ads disponibles.
+    // Aucune estimation de ventes organiques. Pas un indicateur financier.
+    // Formule pondérée : ACoS (30%), CVR (25%), CTR (20%), volume commandes (15%), volume impressions (10%)
+    const adsDependencyScore = this.computeAdsDependencyScore(kpis);
+
     return {
       book: {
         id: book.id,
@@ -710,6 +794,7 @@ export class BooksService {
         salePrice: book.salePrice ? Number(book.salePrice) : null,
         royaltyPerUnit: book.royaltyPerUnit ? Number(book.royaltyPerUnit) : null,
       },
+      adsDependencyScore,
       metrics: kpis,
       trends: { changes },
       recommendations: recos.map((r: any) => {
