@@ -139,22 +139,30 @@ export class AuthorsService {
       .from(campaignBookMapping)
       .where(eq(campaignBookMapping.bookId, bookId));
 
+    this.logger.log(`[getBookMetrics] bookId=${bookId} → ${mappings.length} campaign mapping(s)`);
+
     if (mappings.length === 0) {
+      this.logger.warn(`[getBookMetrics] bookId=${bookId} has NO campaigns linked → returning zeros`);
       return { impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0 };
     }
 
     const campaignIds = mappings.map((m: any) => m.campaignId);
+    this.logger.log(`[getBookMetrics] campaignIds (UUIDs): ${JSON.stringify(campaignIds)}`);
 
     // Recuperer les amazonCampaignIds pour construire les entity keys
     const campaignData = await this.db
       .select({
         id: campaigns.id,
         amazonCampaignId: campaigns.amazonCampaignId,
+        name: campaigns.name,
       })
       .from(campaigns)
       .where(inArray(campaigns.id, campaignIds));
 
+    this.logger.log(`[getBookMetrics] Found ${campaignData.length} campaign(s) in campaigns table: ${JSON.stringify(campaignData.map((c: any) => ({ id: c.id, amazonId: c.amazonCampaignId, name: c.name })))}`);
+
     if (campaignData.length === 0) {
+      this.logger.warn(`[getBookMetrics] No campaign rows found for UUIDs → returning zeros`);
       return { impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0 };
     }
 
@@ -162,6 +170,39 @@ export class AuthorsService {
     const entityKeys = campaignData.map(
       (c: any) => `campaign:${c.amazonCampaignId}`,
     );
+    this.logger.log(`[getBookMetrics] entityKeys built: ${JSON.stringify(entityKeys)}`);
+    this.logger.log(`[getBookMetrics] dateRange: ${dateRange.startDate} → ${dateRange.endDate}`);
+
+    // Verification: chercher TOUTES les entity keys dans daily_metrics (sans filtre date)
+    const checkExist = await this.db
+      .select({
+        entityKey: dailyMetrics.entityKey,
+        count: sql<number>`COUNT(*)`,
+        minDate: sql<string>`MIN(${dailyMetrics.date})`,
+        maxDate: sql<string>`MAX(${dailyMetrics.date})`,
+      })
+      .from(dailyMetrics)
+      .where(
+        and(
+          eq(dailyMetrics.entityType, 'campaign'),
+          inArray(dailyMetrics.entityKey, entityKeys),
+        ),
+      )
+      .groupBy(dailyMetrics.entityKey);
+
+    this.logger.log(`[getBookMetrics] daily_metrics rows found (no date filter): ${JSON.stringify(checkExist)}`);
+
+    if (checkExist.length === 0) {
+      // Check what entityKeys actually exist in daily_metrics for campaigns
+      const sampleKeys = await this.db
+        .select({
+          entityKey: dailyMetrics.entityKey,
+        })
+        .from(dailyMetrics)
+        .where(eq(dailyMetrics.entityType, 'campaign'))
+        .limit(5);
+      this.logger.warn(`[getBookMetrics] NO matching daily_metrics found! Sample entityKeys in DB: ${JSON.stringify(sampleKeys)}`);
+    }
 
     // Agreger les daily_metrics pour ces entity keys
     const [result] = await this.db
@@ -181,6 +222,8 @@ export class AuthorsService {
           lte(dailyMetrics.date, dateRange.endDate),
         ),
       );
+
+    this.logger.log(`[getBookMetrics] Final aggregation result: ${JSON.stringify(result)}`);
 
     return {
       impressions: Number(result?.impressions || 0),
