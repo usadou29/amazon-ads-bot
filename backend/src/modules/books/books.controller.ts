@@ -72,14 +72,18 @@ export class BooksController {
    * Dashboard complet d'un livre : KPIs + tendances + recos + actions + daily metrics
    */
   @Get(':id/dashboard')
-  async getDashboard(@Param('id') id: string) {
+  async getDashboard(
+    @Param('id') id: string,
+    @Query('includeInactive') includeInactive?: string,
+  ) {
     if (!id) {
       throw new BadRequestException('Book ID is required');
     }
 
-    this.logger.log(`Fetching dashboard for book ${id}`);
+    const includeInactiveBool = includeInactive === 'true';
+    this.logger.log(`Fetching dashboard for book ${id} (includeInactive: ${includeInactiveBool})`);
 
-    return this.booksService.getDashboard(id);
+    return this.booksService.getDashboard(id, { includeInactive: includeInactiveBool });
   }
 
   /**

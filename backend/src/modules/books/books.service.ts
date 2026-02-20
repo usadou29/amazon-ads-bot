@@ -570,9 +570,10 @@ export class BooksService {
   }
 
   /**
-   * Recupere les entity keys des campagnes liees a un livre
+   * Recupere les entity keys des campagnes liees a un livre.
+   * Si includeInactive = false (défaut), ne retourne que les campagnes enabled.
    */
-  private async getCampaignEntityKeys(bookId: string): Promise<string[]> {
+  private async getCampaignEntityKeys(bookId: string, includeInactive = false): Promise<string[]> {
     const mappings = await this.db
       .select({ campaignId: campaignBookMapping.campaignId })
       .from(campaignBookMapping)
@@ -582,12 +583,50 @@ export class BooksService {
 
     const campaignIds = mappings.map((m: any) => m.campaignId);
 
+    const conditions = includeInactive
+      ? [inArray(campaigns.id, campaignIds)]
+      : [inArray(campaigns.id, campaignIds), eq(campaigns.state, 'enabled')];
+
     const campaignData = await this.db
       .select({ amazonCampaignId: campaigns.amazonCampaignId })
       .from(campaigns)
-      .where(inArray(campaigns.id, campaignIds));
+      .where(and(...conditions));
 
     return campaignData.map((c: any) => `campaign:${c.amazonCampaignId}`);
+  }
+
+  /**
+   * Récupère la liste des campagnes associées à un livre avec leur état.
+   */
+  private async getBookCampaigns(bookId: string): Promise<{
+    id: string;
+    name: string;
+    campaignType: string;
+    state: string;
+    dailyBudget: string | null;
+    isPrimary: boolean;
+  }[]> {
+    const result = await this.db
+      .select({
+        id: campaigns.id,
+        name: campaigns.name,
+        campaignType: campaigns.campaignType,
+        state: campaigns.state,
+        dailyBudget: campaigns.dailyBudget,
+        isPrimary: campaignBookMapping.isPrimary,
+      })
+      .from(campaignBookMapping)
+      .innerJoin(campaigns, eq(campaigns.id, campaignBookMapping.campaignId))
+      .where(eq(campaignBookMapping.bookId, bookId));
+
+    return result.map((c: any) => ({
+      id: c.id,
+      name: c.name || 'Campagne sans nom',
+      campaignType: c.campaignType || 'sponsoredProducts',
+      state: c.state || 'enabled',
+      dailyBudget: c.dailyBudget || null,
+      isPrimary: c.isPrimary ?? false,
+    }));
   }
 
   /**
@@ -641,7 +680,9 @@ export class BooksService {
    * GET /api/books/:id/dashboard
    * Dashboard complet d'un livre : KPIs + tendances + recos + actions + daily metrics
    */
-  async getDashboard(bookId: string): Promise<any> {
+  async getDashboard(bookId: string, options?: { includeInactive?: boolean }): Promise<any> {
+    const includeInactive = options?.includeInactive ?? false;
+
     // 1. Recuperer le livre
     const [book] = await this.db
       .select()
@@ -654,7 +695,10 @@ export class BooksService {
     }
 
     const dateRange = this.getDefaultDateRange();
-    const entityKeys = await this.getCampaignEntityKeys(bookId);
+    const entityKeys = await this.getCampaignEntityKeys(bookId, includeInactive);
+
+    // Récupérer la liste de toutes les campagnes associées (toujours toutes, indépendamment du filtre)
+    const bookCampaigns = await this.getBookCampaigns(bookId);
 
     // 2. Metriques periode courante (30j)
     const currentMetrics = await this.aggregateMetricsForKeys(entityKeys, dateRange);
@@ -938,6 +982,8 @@ export class BooksService {
         clicks: Number(d.clicks),
         orders: Number(d.orders),
       })),
+      campaigns: bookCampaigns,
+      includeInactive,
     };
   }
 

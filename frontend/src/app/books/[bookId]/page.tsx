@@ -43,15 +43,19 @@ export default function BookDetailPage() {
   const [savingPubDate, setSavingPubDate] = useState(false);
   const [showPhaseOverride, setShowPhaseOverride] = useState(false);
 
+  // Filtre campagnes actives/inactives
+  const [includeInactive, setIncludeInactive] = useState(false);
+
   const royaltyValuesRef = useRef<RoyaltyValues>({ royaltyRate: null, salePrice: null, royaltyPerUnit: null });
 
   useEffect(() => {
     if (!bookId) return;
-    fetchBookDashboard(bookId)
+    setLoading(true);
+    fetchBookDashboard(bookId, includeInactive)
       .then(setDashboard)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [bookId]);
+  }, [bookId, includeInactive]);
 
   const handleSaveRoyalty = async () => {
     setSavingRoyalty(true);
@@ -64,7 +68,7 @@ export default function BookDetailPage() {
         royaltyPerUnit: rv.royaltyPerUnit ?? undefined,
       });
       // Recharger le dashboard
-      const updatedDashboard = await fetchBookDashboard(bookId);
+      const updatedDashboard = await fetchBookDashboard(bookId, includeInactive);
       setDashboard(updatedDashboard);
       setEditingRoyalty(false);
       setRoyaltySaved(true);
@@ -80,7 +84,7 @@ export default function BookDetailPage() {
     setSavingPubDate(true);
     try {
       await updateBook(bookId, { publicationDate: pubDateValue || undefined });
-      const updated = await fetchBookDashboard(bookId);
+      const updated = await fetchBookDashboard(bookId, includeInactive);
       setDashboard(updated);
       setEditingPubDate(false);
     } catch (err: any) {
@@ -93,7 +97,7 @@ export default function BookDetailPage() {
   const handlePhaseOverride = async (phase: string | null) => {
     try {
       await updateBook(bookId, { lifecyclePhaseOverride: phase });
-      const updated = await fetchBookDashboard(bookId);
+      const updated = await fetchBookDashboard(bookId, includeInactive);
       setDashboard(updated);
     } catch (err: any) {
       // silently fail
@@ -122,7 +126,7 @@ export default function BookDetailPage() {
     );
   }
 
-  const { book, metrics, trends, recommendations, recentActions, dailyMetrics } = dashboard;
+  const { book, metrics, trends, recommendations, recentActions, dailyMetrics, campaigns: bookCampaigns } = dashboard;
   const m = metrics || {};
   const sales = Number(m.sales || 0);
   const spend = Number(m.spend || 0);
@@ -197,7 +201,27 @@ export default function BookDetailPage() {
             )}
           </div>
         </div>
-        <StatusBadge type={status.type} label={status.label} emoji={status.emoji} />
+        <div className="flex flex-col items-end gap-2">
+          <StatusBadge type={status.type} label={status.label} emoji={status.emoji} />
+          <label className="flex items-center gap-2 cursor-pointer">
+            <span className="text-xs text-slate-500">Inclure inactives</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={includeInactive}
+              onClick={() => setIncludeInactive(!includeInactive)}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                includeInactive ? 'bg-brand-600' : 'bg-slate-300'
+              }`}
+            >
+              <span
+                className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+                  includeInactive ? 'translate-x-4' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </label>
+        </div>
       </div>
 
       {/* ── Phase de cycle de vie ── */}
@@ -501,13 +525,13 @@ export default function BookDetailPage() {
                       await approveRecommendation(id);
                       await executeAction(id);
                       // Recharger le dashboard après action
-                      const updated = await fetchBookDashboard(bookId);
+                      const updated = await fetchBookDashboard(bookId, includeInactive);
                       setDashboard(updated);
                     }}
                     onReject={async (id) => {
                       await rejectRecommendation(id);
                       // Retirer la reco de la liste
-                      const updated = await fetchBookDashboard(bookId);
+                      const updated = await fetchBookDashboard(bookId, includeInactive);
                       setDashboard(updated);
                     }}
                     safetyBlocked={!safety.canExecute}
@@ -575,14 +599,56 @@ export default function BookDetailPage() {
         </div>
       )}
 
-      {/* ══════════════ ONGLET 3: Avancé ══════════════ */}
+      {/* ══════════════ ONGLET 3: Avancé — Campagnes associées ══════════════ */}
       {activeTab === 'advanced' && (
         <div className="space-y-6">
           <Card>
+            <CardHeader>
+              <CardTitle>Campagnes associées ({(bookCampaigns || []).length})</CardTitle>
+            </CardHeader>
             <CardContent>
-              <p className="text-sm text-slate-500 text-center py-8">
-                Campagnes, mots-clés et ciblage avancé — bientôt disponible.
-              </p>
+              {(!bookCampaigns || bookCampaigns.length === 0) ? (
+                <p className="text-sm text-slate-500 text-center py-6">
+                  Aucune campagne associée à ce livre. Lie des campagnes depuis la page d'accueil.
+                </p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {bookCampaigns.map((c: any) => {
+                    const stateConfig: Record<string, { label: string; bg: string; text: string }> = {
+                      enabled: { label: 'Active', bg: 'bg-emerald-100', text: 'text-emerald-700' },
+                      paused: { label: 'En pause', bg: 'bg-amber-100', text: 'text-amber-700' },
+                      archived: { label: 'Archivée', bg: 'bg-slate-100', text: 'text-slate-500' },
+                    };
+                    const sc = stateConfig[c.state] || stateConfig.enabled;
+                    const typeLabels: Record<string, string> = {
+                      sponsoredProducts: 'SP',
+                      sponsoredBrands: 'SB',
+                      sponsoredDisplay: 'SD',
+                    };
+                    return (
+                      <div key={c.id} className="flex items-center justify-between py-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${sc.bg} ${sc.text}`}>
+                            {sc.label}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-slate-900 truncate">
+                              {c.name}
+                              {c.isPrimary && (
+                                <span className="ml-2 text-xs text-brand-600 font-normal">(principale)</span>
+                              )}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              {typeLabels[c.campaignType] || c.campaignType}
+                              {c.dailyBudget && ` · ${Number(c.dailyBudget).toFixed(2)}€/jour`}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
