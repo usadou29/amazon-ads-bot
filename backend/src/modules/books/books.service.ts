@@ -9,6 +9,8 @@ import {
   actionLog,
   marketplaceProfiles,
   adAccounts,
+  adGroups,
+  keywords,
 } from '@/db/schema';
 import { eq, and, inArray, sql, gte, lte, desc } from 'drizzle-orm';
 import type { Book, NewBook, CampaignBookMapping } from '@/db/schema';
@@ -550,18 +552,118 @@ export class BooksService {
       cpc: calcChange(kpis.cpc, prevKpis.cpc),
     };
 
-    // 6. Recommandations pending pour ce workspace
-    const recos = await this.db
-      .select()
-      .from(recommendations)
-      .where(
-        and(
-          eq(recommendations.workspaceId, book.workspaceId),
-          eq(recommendations.status, 'pending'),
-        ),
-      )
-      .orderBy(desc(recommendations.createdAt))
-      .limit(20);
+    // 6. Recommandations pending pour CE livre
+    // On récupère les recos pour : campagnes, mots-clés et termes de recherche
+    // liés aux campagnes de ce livre
+    let recos: any[] = [];
+    if (entityKeys.length > 0) {
+      // Récupérer aussi les entityKeys des keywords liés aux campagnes du livre
+      const bookCampaignIds = (await this.db
+        .select({ id: campaigns.id })
+        .from(campaigns)
+        .where(inArray(campaigns.amazonCampaignId,
+          entityKeys.map((k: string) => Number(k.replace('campaign:', '')))
+        ))
+      ).map((c: any) => c.id);
+
+      let keywordEntityKeys: string[] = [];
+      if (bookCampaignIds.length > 0) {
+        const adGroupsData = await this.db
+          .select({ id: adGroups.id })
+          .from(adGroups)
+          .where(inArray(adGroups.campaignId, bookCampaignIds));
+
+        if (adGroupsData.length > 0) {
+          const adGroupIds = adGroupsData.map((a: any) => a.id);
+          const keywordsData = await this.db
+            .select({ amazonKeywordId: keywords.amazonKeywordId })
+            .from(keywords)
+            .where(inArray(keywords.adGroupId, adGroupIds));
+
+          keywordEntityKeys = keywordsData.map((k: any) => `keyword:${k.amazonKeywordId}`);
+        }
+      }
+
+      // Combiner toutes les entityKeys possibles
+      const allEntityKeys = [...entityKeys, ...keywordEntityKeys];
+
+      recos = await this.db
+        .select()
+        .from(recommendations)
+        .where(
+          and(
+            eq(recommendations.workspaceId, book.workspaceId),
+            eq(recommendations.status, 'pending'),
+            inArray(recommendations.entityKey, allEntityKeys),
+          ),
+        )
+        .orderBy(desc(recommendations.createdAt))
+        .limit(20);
+    }
+
+    // 6b. Résoudre les noms d'entités pour les recommandations
+    // (campagnes, mots-clés, termes de recherche)
+    const entityNameMap = new Map<string, string>();
+    if (recos.length > 0) {
+      // Grouper les entityKeys par type
+      const campaignIds: number[] = [];
+      const keywordIds: number[] = [];
+      const searchTermQueries: string[] = [];
+
+      for (const r of recos) {
+        const key = (r as any).entityKey || '';
+        if (key.startsWith('campaign:')) {
+          const id = Number(key.replace('campaign:', ''));
+          if (!isNaN(id)) campaignIds.push(id);
+        } else if (key.startsWith('keyword:')) {
+          const id = Number(key.replace('keyword:', ''));
+          if (!isNaN(id)) keywordIds.push(id);
+        } else if (key.startsWith('search_term:')) {
+          searchTermQueries.push(key.replace('search_term:', ''));
+        }
+      }
+
+      // Résoudre les noms de campagnes
+      if (campaignIds.length > 0) {
+        const campaignNames = await this.db
+          .select({
+            amazonCampaignId: campaigns.amazonCampaignId,
+            name: campaigns.name,
+          })
+          .from(campaigns)
+          .where(inArray(campaigns.amazonCampaignId, campaignIds));
+
+        for (const c of campaignNames) {
+          entityNameMap.set(`campaign:${c.amazonCampaignId}`, c.name);
+        }
+      }
+
+      // Résoudre les noms de mots-clés
+      if (keywordIds.length > 0) {
+        const keywordNames = await this.db
+          .select({
+            amazonKeywordId: keywords.amazonKeywordId,
+            keywordText: keywords.keywordText,
+            matchType: keywords.matchType,
+          })
+          .from(keywords)
+          .where(inArray(keywords.amazonKeywordId, keywordIds));
+
+        for (const k of keywordNames) {
+          const label = k.matchType
+            ? `${k.keywordText} (${k.matchType})`
+            : k.keywordText;
+          entityNameMap.set(`keyword:${k.amazonKeywordId}`, label);
+        }
+      }
+
+      // Résoudre les termes de recherche (entityKey = search_term:{query})
+      // Pour les search_terms, l'entityKey contient déjà le texte de la requête
+      // mais on nettoie quand même
+      for (const q of searchTermQueries) {
+        entityNameMap.set(`search_term:${q}`, `« ${q} »`);
+      }
+    }
 
     // 7. Actions recentes
     const recentActions = await this.db
@@ -610,18 +712,33 @@ export class BooksService {
       },
       metrics: kpis,
       trends: { changes },
-      recommendations: recos.map((r: any) => ({
-        id: r.id,
-        entityType: r.entityType,
-        entityKey: r.entityKey,
-        actionType: r.actionType,
-        suggestedAction: r.suggestedAction,
-        contextData: r.contextData,
-        confidenceScore: r.confidenceScore ? Number(r.confidenceScore) : null,
-        ruleSnapshot: r.ruleSnapshot,
-        status: r.status,
-        createdAt: r.createdAt,
-      })),
+      recommendations: recos.map((r: any) => {
+        const entityKey = r.entityKey || '';
+        // Résoudre le nom ou fallback lisible
+        let entityName = entityNameMap.get(entityKey);
+        if (!entityName) {
+          // Fallback : extraire la partie après le ":" et rendre lisible
+          const parts = entityKey.split(':');
+          if (parts.length === 2) {
+            entityName = `${parts[0] === 'campaign' ? 'Campagne' : parts[0] === 'keyword' ? 'Mot-clé' : 'Terme'} #${parts[1]}`;
+          } else {
+            entityName = entityKey;
+          }
+        }
+        return {
+          id: r.id,
+          entityType: r.entityType,
+          entityKey: r.entityKey,
+          entityName,
+          actionType: r.actionType,
+          suggestedAction: r.suggestedAction,
+          contextData: r.contextData,
+          confidenceScore: r.confidenceScore ? Number(r.confidenceScore) : null,
+          ruleSnapshot: r.ruleSnapshot,
+          status: r.status,
+          createdAt: r.createdAt,
+        };
+      }),
       recentActions: recentActions.map((a: any) => ({
         id: a.id,
         entityType: a.entityType,

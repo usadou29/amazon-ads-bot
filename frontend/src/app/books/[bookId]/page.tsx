@@ -320,17 +320,33 @@ export default function BookDetailPage() {
 
           {humanRecos.length > 0 && (
             <div>
-              <h2 className="text-lg font-semibold text-slate-900 mb-4">
-                {t('book_detail.advice_title')} ({humanRecos.length})
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Mes conseils pour toi ({humanRecos.length})
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Basé sur les 30 derniers jours
+                </p>
+              </div>
               <div className="space-y-4">
                 {humanRecos.map((reco) => (
                   <RecommendationCard
                     key={reco.id}
                     recommendation={reco}
                     onSimulate={async (id) => { await dryRunAction(id); }}
-                    onApply={async (id) => { await approveRecommendation(id); await executeAction(id); }}
-                    onReject={async (id) => { await rejectRecommendation(id); }}
+                    onApply={async (id) => {
+                      await approveRecommendation(id);
+                      await executeAction(id);
+                      // Recharger le dashboard après action
+                      const updated = await fetchBookDashboard(bookId);
+                      setDashboard(updated);
+                    }}
+                    onReject={async (id) => {
+                      await rejectRecommendation(id);
+                      // Retirer la reco de la liste
+                      const updated = await fetchBookDashboard(bookId);
+                      setDashboard(updated);
+                    }}
                     safetyBlocked={!safety.canExecute}
                     safetyMessage={safetyMessage}
                   />
@@ -340,11 +356,14 @@ export default function BookDetailPage() {
           )}
 
           {humanRecos.length === 0 && (
-            <Card>
+            <Card className="border-l-4 border-l-emerald-400">
               <CardContent>
-                <p className="text-sm text-slate-500 text-center py-4">
-                  Pas de conseil pour le moment. Tout semble bien se passer !
-                </p>
+                <div className="text-center py-4">
+                  <p className="text-base font-medium text-emerald-700 mb-1">Tout roule !</p>
+                  <p className="text-sm text-slate-500">
+                    Pas de conseil pour le moment. Tes campagnes tournent bien. On te préviendra dès qu'on détecte une opportunité.
+                  </p>
+                </div>
               </CardContent>
             </Card>
           )}

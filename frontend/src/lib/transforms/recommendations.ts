@@ -1,26 +1,245 @@
+import { formatCurrency } from './metrics';
+
+/**
+ * Recommandation transformée pour l'affichage auteur-friendly.
+ * On utilise les données réelles (contextData, suggestedAction, entityName)
+ * pour générer des descriptions personnalisées et concrètes.
+ */
 export interface HumanRecommendation {
   id: string;
   title: string;
+  /** Explication personnalisée du "pourquoi" avec les vrais chiffres */
   why: string;
+  /** Impact attendu en langage concret */
   impact: string;
+  /** Risque en langage clair */
   risk: string;
   riskLevel: 'low' | 'medium' | 'high';
   canSimulate: boolean;
   canApply: boolean;
+  /** Nom de la campagne ou mot-clé concerné */
+  entityName: string;
+  /** Type d'entité (campaign, keyword, search_term) */
+  entityType: string;
+  /** Score de confiance (0-100) */
+  confidence: number | null;
+  /** Métriques clés extraites de contextData */
+  metrics: {
+    spend?: number;
+    sales?: number;
+    acos?: number;
+    clicks?: number;
+    impressions?: number;
+    orders?: number;
+    ctr?: number;
+    cvr?: number;
+  };
+  /** Date de création */
+  createdAt: string | null;
+  /** Action suggérée (pour l'affichage) */
+  action: {
+    type: string;
+    description: string;
+  };
 }
 
-const RULE_TEMPLATES: Record<string, { title: string; why: string; impact: string; risk: string; riskLevel: 'low' | 'medium' | 'high' }> = {
-  pause_high_acos: { title: 'Mettre en pause un mot-clé coûteux', why: 'Ce mot-clé dépense beaucoup sans générer assez de ventes.', impact: 'Réduction immédiate des dépenses inutiles.', risk: 'Légère perte de visibilité sur ce terme.', riskLevel: 'low' },
-  bid_down_no_sales: { title: 'Baisser l\'enchère', why: 'L\'enchère actuelle est trop élevée par rapport aux résultats.', impact: 'Meilleur ratio dépense-ventes.', risk: 'Possible baisse de position dans les résultats.', riskLevel: 'low' },
-  bid_up_high_performer: { title: 'Augmenter l\'enchère', why: 'Ce mot-clé convertit bien, il mérite plus de visibilité.', impact: 'Plus de ventes potentielles.', risk: 'Augmentation modérée des dépenses.', riskLevel: 'medium' },
-  negative_unprofitable_search_term: { title: 'Bloquer un terme de recherche', why: 'Ce terme génère des clics mais aucune vente.', impact: 'Arrêt des dépenses inutiles.', risk: 'Aucun — ce terme ne convertit pas.', riskLevel: 'low' },
-  harvest_profitable_search_term: { title: 'Créer un nouveau mot-clé', why: 'Ce terme de recherche génère des ventes régulières.', impact: 'Meilleur contrôle des enchères.', risk: 'Léger doublon temporaire.', riskLevel: 'low' },
+interface RuleTemplate {
+  title: (ctx: TemplateContext) => string;
+  why: (ctx: TemplateContext) => string;
+  impact: (ctx: TemplateContext) => string;
+  risk: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  actionDesc: (ctx: TemplateContext) => string;
+}
+
+interface TemplateContext {
+  entityName: string;
+  /** Label lisible du type d'entité ("Cette campagne", "Ce mot-clé", etc.) */
+  entityLabel: string;
+  metrics: HumanRecommendation['metrics'];
+  suggestedAction: Record<string, any>;
+}
+
+function getEntityLabel(entityType: string): string {
+  switch (entityType) {
+    case 'keyword': return 'Ce mot-clé';
+    case 'search_term': return 'Ce terme de recherche';
+    case 'ad_group': return 'Ce groupe d\'annonces';
+    case 'target': return 'Ce ciblage';
+    default: return 'Cette campagne';
+  }
+}
+
+const RULE_TEMPLATES: Record<string, RuleTemplate> = {
+  pause_high_acos: {
+    title: (ctx) => `Mettre en pause « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const spend = ctx.metrics.spend ?? 0;
+      const sales = ctx.metrics.sales ?? 0;
+      const acos = ctx.metrics.acos;
+      const label = ctx.entityLabel;
+      if (spend > 0 && sales === 0) {
+        return `${label} a dépensé ${formatCurrency(spend)} sans générer aucune vente. L'argent investi n'a pas de retour.`;
+      }
+      if (acos && acos > 100) {
+        return `Tu dépenses ${formatCurrency(spend)} en pub pour ${formatCurrency(sales)} de ventes (ACoS de ${acos.toFixed(0)}%). Tu perds de l'argent sur chaque vente via ${label.toLowerCase()}.`;
+      }
+      return `${label} dépense beaucoup (${formatCurrency(spend)}) pour peu de résultats (${formatCurrency(sales)} de ventes). Le ratio n'est pas bon.`;
+    },
+    impact: (ctx) => {
+      const spend = ctx.metrics.spend ?? 0;
+      return `Économie immédiate d'environ ${formatCurrency(spend / 2)}/mois. Tu pourras réactiver si besoin.`;
+    },
+    risk: 'Perte de visibilité sur ce ciblage.',
+    riskLevel: 'low',
+    actionDesc: (ctx) => `Mettre ${ctx.entityLabel.toLowerCase()} en pause`,
+  },
+
+  bid_down_no_sales: {
+    title: (ctx) => `Baisser l'enchère sur « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const spend = ctx.metrics.spend ?? 0;
+      const clicks = ctx.metrics.clicks ?? 0;
+      const orders = ctx.metrics.orders ?? 0;
+      if (orders === 0 && clicks > 0) {
+        return `${clicks} clics pour ${formatCurrency(spend)} dépensés, mais aucune commande. L'enchère actuelle est trop élevée par rapport aux résultats.`;
+      }
+      return `Les résultats ne justifient pas l'enchère actuelle. ${clicks} clics pour seulement ${orders} commande${orders > 1 ? 's' : ''}.`;
+    },
+    impact: (ctx) => {
+      const adjustment = ctx.suggestedAction?.adjustment_value;
+      if (adjustment) {
+        return `Réduction de l'enchère de ${Math.abs(Number(adjustment))}%. Meilleur ratio dépense/résultat.`;
+      }
+      return 'Meilleur ratio entre ce que tu dépenses et ce que tu gagnes.';
+    },
+    risk: 'Position légèrement moins visible dans les résultats Amazon.',
+    riskLevel: 'low',
+    actionDesc: (ctx) => {
+      const adj = ctx.suggestedAction?.adjustment_value;
+      return adj ? `Baisser l'enchère de ${Math.abs(Number(adj))}%` : 'Baisser l\'enchère';
+    },
+  },
+
+  bid_up_high_performer: {
+    title: (ctx) => `Booster « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const sales = ctx.metrics.sales ?? 0;
+      const orders = ctx.metrics.orders ?? 0;
+      const cvr = ctx.metrics.cvr;
+      const label = ctx.entityLabel;
+      if (cvr && cvr > 5) {
+        return `${label} convertit très bien (${cvr.toFixed(1)}% de conversion). ${orders} commande${orders > 1 ? 's' : ''} pour ${formatCurrency(sales)} de ventes. Ça mérite plus de budget.`;
+      }
+      return `${label} génère de bons résultats : ${orders} commande${orders > 1 ? 's' : ''}, ${formatCurrency(sales)} de ventes. Plus de visibilité = plus de ventes.`;
+    },
+    impact: (ctx) => {
+      const adjustment = ctx.suggestedAction?.adjustment_value;
+      if (adjustment) {
+        return `Augmentation de l'enchère de +${Number(adjustment)}%. Plus de visibilité pour ce qui marche.`;
+      }
+      return 'Plus de ventes potentielles grâce à une meilleure visibilité.';
+    },
+    risk: 'Augmentation modérée des dépenses pub.',
+    riskLevel: 'medium',
+    actionDesc: (ctx) => {
+      const adj = ctx.suggestedAction?.adjustment_value;
+      return adj ? `Augmenter l'enchère de +${Number(adj)}%` : 'Augmenter l\'enchère';
+    },
+  },
+
+  negative_unprofitable_search_term: {
+    title: (ctx) => `Bloquer « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const spend = ctx.metrics.spend ?? 0;
+      const clicks = ctx.metrics.clicks ?? 0;
+      return `Ce terme de recherche génère ${clicks} clics (${formatCurrency(spend)} dépensés) mais aucune vente. Les gens qui cherchent ça ne sont pas intéressés par ton livre.`;
+    },
+    impact: (ctx) => {
+      const spend = ctx.metrics.spend ?? 0;
+      return `Arrêt immédiat des dépenses inutiles (environ ${formatCurrency(spend)} économisés).`;
+    },
+    risk: 'Aucun — ce terme ne génère pas de ventes.',
+    riskLevel: 'low',
+    actionDesc: () => 'Ajouter en mot-clé négatif',
+  },
+
+  harvest_profitable_search_term: {
+    title: (ctx) => `Exploiter « ${ctx.entityName} »`,
+    why: (ctx) => {
+      const sales = ctx.metrics.sales ?? 0;
+      const orders = ctx.metrics.orders ?? 0;
+      return `Ce terme de recherche a généré ${orders} commande${orders > 1 ? 's' : ''} (${formatCurrency(sales)} de ventes). En créant un mot-clé dédié, tu pourras mieux contrôler l'enchère et maximiser ce qui marche.`;
+    },
+    impact: () => 'Meilleur contrôle des enchères sur un terme qui convertit. Plus de ventes potentielles.',
+    risk: 'Possible doublon temporaire avant que l\'ancien terme soit exclu.',
+    riskLevel: 'low',
+    actionDesc: () => 'Créer un mot-clé exact dédié',
+  },
 };
 
-const DEFAULT_TEMPLATE = { title: 'Optimisation suggérée', why: 'L\'analyse automatique a détecté une opportunité.', impact: 'Amélioration potentielle des performances.', risk: 'Risque modéré.', riskLevel: 'medium' as const };
+const DEFAULT_TEMPLATE: RuleTemplate = {
+  title: (ctx) => `Optimisation pour « ${ctx.entityName} »`,
+  why: () => 'Notre analyse a détecté une opportunité d\'amélioration.',
+  impact: () => 'Amélioration potentielle des performances de ta pub.',
+  risk: 'Risque modéré — surveille les résultats après application.',
+  riskLevel: 'medium',
+  actionDesc: () => 'Appliquer l\'optimisation suggérée',
+};
 
+/**
+ * Transforme une recommandation brute du backend en version auteur-friendly.
+ * Utilise les données réelles (contextData, entityName, suggestedAction)
+ * pour générer des descriptions personnalisées.
+ */
 export function transformRecommendation(raw: any, safetyMode: boolean): HumanRecommendation {
-  const ruleId = raw.ruleSnapshot?.name || raw.actionType || '';
-  const tmpl = Object.entries(RULE_TEMPLATES).find(([k]) => ruleId.toLowerCase().includes(k))?.[1] || DEFAULT_TEMPLATE;
-  return { id: raw.id, ...tmpl, canSimulate: true, canApply: !safetyMode };
+  // Identifier le template à utiliser
+  const ruleId = raw.ruleSnapshot?.ruleName || raw.ruleSnapshot?.name || raw.actionType || '';
+  const template = Object.entries(RULE_TEMPLATES)
+    .find(([k]) => ruleId.toLowerCase().includes(k))?.[1] || DEFAULT_TEMPLATE;
+
+  // Extraire les métriques du contextData
+  const rawMetrics = raw.contextData?.metrics || {};
+  const metrics: HumanRecommendation['metrics'] = {
+    spend: rawMetrics.spend != null ? Number(rawMetrics.spend) : undefined,
+    sales: rawMetrics.sales != null ? Number(rawMetrics.sales) : undefined,
+    acos: rawMetrics.acos != null ? Number(rawMetrics.acos) : undefined,
+    clicks: rawMetrics.clicks != null ? Number(rawMetrics.clicks) : undefined,
+    impressions: rawMetrics.impressions != null ? Number(rawMetrics.impressions) : undefined,
+    orders: rawMetrics.orders != null ? Number(rawMetrics.orders) : undefined,
+    ctr: rawMetrics.ctr != null ? Number(rawMetrics.ctr) : undefined,
+    cvr: rawMetrics.cvr != null ? Number(rawMetrics.cvr) : undefined,
+  };
+
+  // Nom de l'entité (résolu côté backend)
+  const entityName = raw.entityName || raw.entityKey || 'Élément inconnu';
+  const entityType = raw.entityType || 'campaign';
+
+  // Context pour les templates
+  const ctx: TemplateContext = {
+    entityName,
+    entityLabel: getEntityLabel(entityType),
+    metrics,
+    suggestedAction: raw.suggestedAction || {},
+  };
+
+  return {
+    id: raw.id,
+    title: template.title(ctx),
+    why: template.why(ctx),
+    impact: template.impact(ctx),
+    risk: template.risk,
+    riskLevel: template.riskLevel,
+    canSimulate: true,
+    canApply: !safetyMode,
+    entityName,
+    entityType,
+    confidence: raw.confidenceScore ?? null,
+    metrics,
+    createdAt: raw.createdAt || null,
+    action: {
+      type: raw.actionType || 'unknown',
+      description: template.actionDesc(ctx),
+    },
+  };
 }
