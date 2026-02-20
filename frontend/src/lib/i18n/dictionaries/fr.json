@@ -1,14 +1,16 @@
 {
-  "app": { "name": "ENDROMEDE", "tagline": "Optimize your Amazon Ads" },
-  "nav": { "home": "Tableau de bord", "authors": "Mes auteurs", "settings": "Réglages" },
+  "app": { "name": "ENDROMEDE", "tagline": "Pilote tes livres, pas tes pubs" },
+  "nav": { "home": "Mes livres", "authors": "Mes auteurs", "settings": "Réglages" },
   "home": {
-    "title": "Tableau de bord",
-    "kpis_title": "KPIs globaux (30 jours)",
-    "top_campaigns": "Campagnes les plus performantes",
-    "recommendations_title": "Recommandations en attente",
-    "no_data": "Aucune donnée disponible pour cette période",
-    "no_campaigns": "Aucune campagne trouvée",
-    "add_book": "Ajouter un livre"
+    "title": "Mes livres",
+    "subtitle": "Voici comment se portent tes livres ce mois-ci.",
+    "profit_title": "Bilan du mois",
+    "no_data": "Aucune donnée disponible. Lance une synchronisation pour commencer.",
+    "add_book": "Ajouter un livre",
+    "total_profit": "Profit pub total",
+    "total_sales": "Ventes générées",
+    "total_spend": "Dépensé en pub",
+    "books_count": "{count} livre(s)"
   },
   "authors": {
     "title": "Mes auteurs",
@@ -19,26 +21,36 @@
   },
   "books": {
     "title": "Livres",
-    "open": "Ouvrir",
+    "open": "Voir les détails",
     "empty": "Aucun livre pour cet auteur",
-    "empty_hint": "Ajoutez un livre avec son ASIN"
+    "empty_hint": "Ajoutez un livre avec son ASIN",
+    "see_details": "Voir les détails",
+    "profitable": "livre(s) rentable(s)",
+    "fragile": "livre(s) fragile(s)",
+    "losing": "livre(s) en perte"
   },
   "book_detail": {
     "chart_title": "Évolution sur 30 jours",
-    "timeline_title": "Dernières actions"
+    "timeline_title": "Dernières actions",
+    "tab_overview": "Vue d'ensemble",
+    "tab_details": "Détails",
+    "tab_advanced": "Avancé",
+    "efficiency_title": "Efficacité de tes pubs",
+    "efficiency_desc": "Plus c'est bas, mieux c'est. En dessous de {target}%, tes pubs sont rentables.",
+    "advice_title": "Mes conseils pour toi"
   },
   "metrics": {
-    "spend": "Dépenses pub", "sales": "Ventes", "acos": "Ratio dépense-ventes",
-    "roas": "Retour sur investissement", "impressions": "Affichages", "clicks": "Clics",
-    "orders": "Commandes", "ctr": "Taux de clic", "cvr": "Taux de conversion", "cpc": "Coût par clic"
+    "spend": "Dépenses pub", "sales": "Ventes générées", "acos": "Efficacité pub",
+    "roas": "Retour sur investissement", "impressions": "Personnes touchées", "clicks": "Clics vers ton livre",
+    "orders": "Ventes", "ctr": "Taux d'intérêt", "cvr": "Taux de conversion", "cpc": "Coût par clic"
   },
   "status": {
-    "success": "Sous contrôle", "warning": "À optimiser", "danger": "Attention requise", "no_data": "Données insuffisantes"
+    "success": "Rentable", "warning": "Fragile", "danger": "Perd de l'argent", "no_data": "Pas encore de données"
   },
   "recommendations": {
     "title": "Conseils",
     "why": "Pourquoi",
-    "impact": "Impact attendu",
+    "impact": "Ce que ça va changer",
     "risk": "Risque",
     "simulate": "Simuler",
     "apply": "Appliquer",
@@ -51,20 +63,20 @@
     "dry_run_desc": "Les actions sont simulées, rien n'est envoyé"
   },
   "onboarding": {
-    "title": "Bienvenue sur ENDROMEDE",
-    "description": "Vos campagnes Amazon Ads sont synchronisées. Créez votre premier livre et associez-y vos campagnes pour centraliser le suivi de vos performances (ventes, ACOS, ROAS, etc.).",
-    "create_first_book": "Créer mon premier livre",
+    "title": "Bienvenue sur ENDROMEDE !",
+    "description": "ENDROMEDE t'aide à savoir si la publicité de tes livres te fait gagner ou perdre de l'argent. Ajoute ton premier livre pour commencer.",
+    "create_first_book": "Ajouter mon premier livre",
     "see_campaigns": "Voir mes campagnes",
     "concept_title": "Comment ça marche ?",
-    "concept_desc": "Un \"livre\" regroupe une ou plusieurs campagnes Amazon Ads autour d'un même ASIN. Cela vous permet de suivre toutes les métriques d'un livre en un seul endroit, quel que soit le nombre de campagnes associées."
+    "concept_desc": "Tu ajoutes un livre (avec son code ASIN), tu associes les campagnes pub Amazon correspondantes, et ENDROMEDE te dit clairement si ce livre te rapporte de l'argent ou t'en fait perdre. Simple."
   },
   "book_creation": {
-    "title": "Créer un nouveau livre",
-    "asin": "ASIN",
+    "title": "Ajouter un livre",
+    "asin": "Code ASIN",
     "title_field": "Titre du livre",
     "author_field": "Auteur / Nom de plume",
     "marketplace": "Marketplace",
-    "submit": "Créer le livre",
+    "submit": "Ajouter ce livre",
     "cancel": "Annuler"
   },
   "campaigns": {
@@ -74,23 +86,23 @@
     "state": "État",
     "daily_budget": "Budget/jour",
     "marketplace": "Marketplace",
-    "no_campaigns": "Aucune campagne trouvée pour ce workspace"
+    "no_campaigns": "Aucune campagne trouvée"
   },
   "link_campaigns": {
-    "title": "Associer des campagnes à votre livre",
-    "description": "Sélectionnez les campagnes à associer à « {book} ». Choisissez une campagne principale pour les KPIs du livre.",
+    "title": "Associer des campagnes à ton livre",
+    "description": "Sélectionne les campagnes pub liées à « {book} ». Choisis une campagne principale.",
     "select_all": "Tout sélectionner",
     "deselect_all": "Tout désélectionner",
     "primary": "Principale",
     "submit": "Associer {count} campagne(s)",
     "no_available": "Aucune campagne disponible",
-    "no_available_hint": "Toutes vos campagnes sont déjà associées à des livres, ou aucune campagne n'a encore été synchronisée.",
-    "success_hint": "Vous pouvez maintenant consulter les performances de votre livre sur le tableau de bord."
+    "no_available_hint": "Toutes tes campagnes sont déjà associées ou aucune n'a été synchronisée.",
+    "success_hint": "C'est bon ! Tu peux maintenant voir les performances de ton livre."
   },
   "sync": {
     "button": "Synchroniser",
     "syncing": "Synchronisation...",
-    "success": "Sync terminée — rechargement..."
+    "success": "C'est fait ! Rechargement..."
   },
   "common": { "back": "Retour", "loading": "Chargement...", "error": "Une erreur est survenue", "save": "Enregistrer", "cancel": "Annuler" }
 }
