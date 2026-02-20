@@ -1,6 +1,6 @@
 import { Injectable, Inject, Logger, BadRequestException } from '@nestjs/common';
 import { DATABASE_CONNECTION } from '@/db/database.module';
-import { dailyMetrics, marketplaceProfiles, adAccounts } from '@/db/schema';
+import { dailyMetrics, marketplaceProfiles, adAccounts, campaigns } from '@/db/schema';
 import { eq, and, between, sql, gte, lte, inArray } from 'drizzle-orm';
 
 export interface DateRange {
@@ -432,7 +432,7 @@ export class MetricsService {
   async getTopPerformers(
     filter: MetricsFilter,
     options: { entityType: string; sortBy: keyof CalculatedKPIs; limit: number; order: 'asc' | 'desc' },
-  ): Promise<{ entityKey: string; kpis: CalculatedKPIs }[]> {
+  ): Promise<{ entityKey: string; entityName?: string; kpis: CalculatedKPIs }[]> {
     if (!filter.workspaceId && !filter.profileId) {
       throw new BadRequestException('workspaceId or profileId is required');
     }
@@ -503,6 +503,71 @@ export class MetricsService {
       return options.order === 'asc' ? aValue - bValue : bValue - aValue;
     });
 
-    return withKPIs.slice(0, options.limit);
+    const topResults = withKPIs.slice(0, options.limit);
+
+    // ── Resolve human-readable entity names ──
+    await this.enrichEntityNames(topResults, options.entityType);
+
+    return topResults;
+  }
+
+  /**
+   * Enrichit les résultats avec les noms lisibles depuis les tables source
+   * Supporte: campaign, ad_group, keyword, target, search_term
+   */
+  private async enrichEntityNames(
+    items: Array<{ entityKey: string; entityName?: string; kpis: any }>,
+    entityType: string,
+  ): Promise<void> {
+    if (items.length === 0) return;
+
+    // Extraire les IDs Amazon depuis les entityKeys (format: "type:amazonId")
+    const amazonIds = items
+      .map((item) => {
+        const parts = item.entityKey.split(':');
+        return parts.length === 2 ? Number(parts[1]) : null;
+      })
+      .filter((id): id is number => id !== null && !isNaN(id));
+
+    if (amazonIds.length === 0) return;
+
+    let nameMap: Map<number, string> = new Map();
+
+    try {
+      if (entityType === 'campaign') {
+        const rows = await this.db
+          .select({
+            amazonCampaignId: campaigns.amazonCampaignId,
+            name: campaigns.name,
+          })
+          .from(campaigns)
+          .where(inArray(campaigns.amazonCampaignId, amazonIds));
+
+        for (const row of rows) {
+          nameMap.set(Number(row.amazonCampaignId), row.name);
+        }
+      }
+      // Pour les autres types, on pourrait ajouter ad_groups, keywords, etc.
+      // Pour l'instant, search_term utilise déjà le terme comme entityKey
+    } catch (err) {
+      this.logger.warn(`Failed to resolve entity names for ${entityType}: ${err}`);
+    }
+
+    // Appliquer les noms résolus
+    for (const item of items) {
+      const parts = item.entityKey.split(':');
+      if (parts.length === 2) {
+        const amazonId = Number(parts[1]);
+        const name = nameMap.get(amazonId);
+        if (name) {
+          item.entityName = name;
+        }
+      }
+      // Pour search_term, le entityKey est déjà le terme lisible
+      if (entityType === 'search_term' && !item.entityName) {
+        const parts = item.entityKey.split(':');
+        item.entityName = parts.length === 2 ? parts[1] : item.entityKey;
+      }
+    }
   }
 }
