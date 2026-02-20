@@ -1,7 +1,8 @@
 'use client';
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { StatusResult } from '@/lib/transforms/status';
+import { deleteBook } from '@/lib/api/client';
 
 export interface BookCardData {
   id: string;
@@ -29,12 +30,85 @@ const statusBg: Record<string, string> = {
 const profitColor = (profit: number) =>
   profit > 0 ? 'text-emerald-700' : profit < 0 ? 'text-red-600' : 'text-slate-600';
 
-export function BookCard({ book }: { book: BookCardData }) {
+interface BookCardProps {
+  book: BookCardData;
+  onDeleted?: (bookId: string) => void;
+}
+
+export function BookCard({ book, onDeleted }: BookCardProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setConfirmDelete(true);
+  };
+
+  const handleConfirmDelete = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDeleting(true);
+    try {
+      await deleteBook(book.id);
+      onDeleted?.(book.id);
+    } catch (err) {
+      console.error('Erreur suppression livre:', err);
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
+
+  const handleCancelDelete = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setConfirmDelete(false);
+  };
+
   return (
     <Link href={`/books/${book.id}`} className="block">
       <div
-        className={`rounded-xl border-l-4 border border-slate-200 p-4 transition-all hover:shadow-md hover:-translate-y-0.5 cursor-pointer ${statusBg[book.status.type] || ''}`}
+        className={`rounded-xl border-l-4 border border-slate-200 p-4 transition-all hover:shadow-md hover:-translate-y-0.5 cursor-pointer relative group ${statusBg[book.status.type] || ''}`}
       >
+        {/* ── Bandeau de confirmation de suppression ── */}
+        {confirmDelete && (
+          <div
+            className="absolute inset-0 z-10 bg-white/95 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center gap-3 p-4"
+            onClick={(e) => e.preventDefault()}
+          >
+            <p className="text-sm font-medium text-slate-900 text-center">
+              Supprimer « {book.title || book.asin} » ?
+            </p>
+            <p className="text-xs text-slate-500 text-center">
+              Les campagnes associées ne seront pas supprimées.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleCancelDelete}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                disabled={deleting}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-500 hover:bg-red-600 disabled:opacity-50 rounded-lg transition-colors"
+              >
+                {deleting ? 'Suppression...' : 'Supprimer'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Bouton supprimer (visible au hover) ── */}
+        <button
+          onClick={handleDeleteClick}
+          className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white border border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-300 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center text-sm z-[5]"
+          title="Supprimer ce livre"
+        >
+          &times;
+        </button>
+
         {/* ── Header: titre + statut ── */}
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex-1 min-w-0">

@@ -18,6 +18,7 @@ export const fetchAuthorBooks = (authorId: string) => api.get(`/authors/${author
 export const fetchBookDashboard = (bookId: string) => api.get(`/books/${bookId}/dashboard`).then((r) => r.data);
 export const fetchBookDailyMetrics = (bookId: string, days = 30) => api.get(`/books/${bookId}/metrics/daily?days=${days}`).then((r) => r.data);
 export const fetchBooks = () => api.get(`/books?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
+export const deleteBook = (bookId: string) => api.delete(`/books/${bookId}`).then((r) => r.data);
 
 export interface CreateBookDto {
   asin: string;

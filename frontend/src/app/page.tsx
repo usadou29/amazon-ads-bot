@@ -242,7 +242,13 @@ export default function HomePage() {
       {hasBooks && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {books.map((book) => (
-            <BookCard key={book.id} book={book} />
+            <BookCard
+              key={book.id}
+              book={book}
+              onDeleted={(deletedId) => {
+                setBooks((prev) => prev.filter((b) => b.id !== deletedId));
+              }}
+            />
           ))}
         </div>
       )}

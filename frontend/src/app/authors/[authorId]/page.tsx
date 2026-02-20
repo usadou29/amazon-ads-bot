@@ -125,7 +125,13 @@ export default function AuthorBooksPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {books.map((b) => (
-            <BookCard key={b.id} book={b} />
+            <BookCard
+              key={b.id}
+              book={b}
+              onDeleted={(deletedId) => {
+                setBooks((prev) => prev.filter((x) => x.id !== deletedId));
+              }}
+            />
           ))}
         </div>
       )}
