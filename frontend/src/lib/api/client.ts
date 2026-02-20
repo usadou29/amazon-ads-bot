@@ -29,8 +29,20 @@ export interface CreateBookDto {
   publicationDate?: string;
   acosTarget?: number;
   royaltyRate?: number;
+  salePrice?: number;
+  royaltyPerUnit?: number;
 }
 export const createBook = (dto: CreateBookDto) => api.post('/books', { workspaceId: getWorkspaceId(), ...dto }).then((r) => r.data);
+
+export interface UpdateBookDto {
+  title?: string;
+  author?: string;
+  acosTarget?: number;
+  royaltyRate?: number;
+  salePrice?: number;
+  royaltyPerUnit?: number;
+}
+export const updateBook = (bookId: string, dto: UpdateBookDto) => api.patch(`/books/${bookId}`, dto).then((r) => r.data);
 
 // ─── Campaigns ─────────────────────────────────
 export const fetchCampaigns = () => api.get(`/campaigns?workspaceId=${getWorkspaceId()}`).then((r) => r.data);

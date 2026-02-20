@@ -26,6 +26,8 @@ export interface CreateBookDto {
   acosTarget?: number;
   dailyBudgetTarget?: number;
   royaltyRate?: number;
+  salePrice?: number;
+  royaltyPerUnit?: number;
 }
 
 export interface UpdateBookDto {
@@ -38,6 +40,8 @@ export interface UpdateBookDto {
   acosTarget?: number;
   dailyBudgetTarget?: number;
   royaltyRate?: number;
+  salePrice?: number;
+  royaltyPerUnit?: number;
 }
 
 export interface BookWithCampaigns extends Book {
@@ -198,6 +202,8 @@ export class BooksService {
         acosTarget: dto.acosTarget?.toString(),
         dailyBudgetTarget: dto.dailyBudgetTarget?.toString(),
         royaltyRate: dto.royaltyRate?.toString(),
+        salePrice: dto.salePrice?.toString(),
+        royaltyPerUnit: dto.royaltyPerUnit?.toString(),
       })
       .returning();
 
@@ -233,6 +239,8 @@ export class BooksService {
     if (dto.acosTarget !== undefined) updateData.acosTarget = dto.acosTarget.toString();
     if (dto.dailyBudgetTarget !== undefined) updateData.dailyBudgetTarget = dto.dailyBudgetTarget.toString();
     if (dto.royaltyRate !== undefined) updateData.royaltyRate = dto.royaltyRate.toString();
+    if (dto.salePrice !== undefined) updateData.salePrice = dto.salePrice.toString();
+    if (dto.royaltyPerUnit !== undefined) updateData.royaltyPerUnit = dto.royaltyPerUnit.toString();
 
     const [updated] = await this.db
       .update(books)
@@ -597,6 +605,8 @@ export class BooksService {
         marketplace: book.marketplace,
         acosTarget: book.acosTarget ? Number(book.acosTarget) : 40,
         royaltyRate: book.royaltyRate ? Number(book.royaltyRate) : null,
+        salePrice: book.salePrice ? Number(book.salePrice) : null,
+        royaltyPerUnit: book.royaltyPerUnit ? Number(book.royaltyPerUnit) : null,
       },
       metrics: kpis,
       trends: { changes },
