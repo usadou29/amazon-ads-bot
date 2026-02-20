@@ -2,7 +2,8 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DATABASE_CONNECTION } from '@/db/database.module';
 import { adAccounts, reportJobs, dailyMetrics, marketplaceProfiles } from '@/db/schema';
-import { eq, isNotNull, sql, and, inArray } from 'drizzle-orm';
+import { syncLogs } from '@/db/schema/sync-logs';
+import { eq, isNotNull, sql, and, inArray, desc, ne } from 'drizzle-orm';
 import { SyncService } from '@/modules/sync/sync.service';
 import { ReportsService } from '@/modules/reports/reports.service';
 
@@ -304,6 +305,8 @@ export class SchedulerService {
     lastSyncAt: Date | null;
     syncInProgress: boolean;
     adAccountCount: number;
+    lastSyncDurationSeconds: number | null;
+    syncStartedAt: Date | null;
   }> {
     const accounts = await this.db
       .select({
@@ -314,7 +317,7 @@ export class SchedulerService {
       .where(eq(adAccounts.workspaceId, workspaceId));
 
     if (accounts.length === 0) {
-      return { lastSyncAt: null, syncInProgress: false, adAccountCount: 0 };
+      return { lastSyncAt: null, syncInProgress: false, adAccountCount: 0, lastSyncDurationSeconds: null, syncStartedAt: null };
     }
 
     // Last sync = most recent across all ad accounts
@@ -326,10 +329,60 @@ export class SchedulerService {
 
     const inProgress = accounts.some((a: any) => this.syncInProgress.has(a.id));
 
+    const accountIds = accounts.map((a: any) => a.id);
+
+    // Durée de la dernière synchro terminée (pour estimer la progression)
+    let lastSyncDurationSeconds: number | null = null;
+    try {
+      const [lastCompleted] = await this.db
+        .select({ durationSeconds: syncLogs.durationSeconds })
+        .from(syncLogs)
+        .where(
+          and(
+            inArray(syncLogs.adAccountId, accountIds),
+            ne(syncLogs.status, 'running'),
+          ),
+        )
+        .orderBy(desc(syncLogs.finishedAt))
+        .limit(1);
+
+      if (lastCompleted?.durationSeconds) {
+        lastSyncDurationSeconds = Number(lastCompleted.durationSeconds);
+      }
+    } catch {
+      // Ignore — la table peut ne pas encore avoir de données
+    }
+
+    // Timestamp de début de la synchro en cours
+    let syncStartedAt: Date | null = null;
+    if (inProgress) {
+      try {
+        const [runningSync] = await this.db
+          .select({ startedAt: syncLogs.startedAt })
+          .from(syncLogs)
+          .where(
+            and(
+              inArray(syncLogs.adAccountId, accountIds),
+              eq(syncLogs.status, 'running'),
+            ),
+          )
+          .orderBy(desc(syncLogs.startedAt))
+          .limit(1);
+
+        if (runningSync?.startedAt) {
+          syncStartedAt = runningSync.startedAt;
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
     return {
       lastSyncAt,
       syncInProgress: inProgress,
       adAccountCount: accounts.length,
+      lastSyncDurationSeconds,
+      syncStartedAt,
     };
   }
 }

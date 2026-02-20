@@ -16,6 +16,7 @@ import {
 } from '@/lib/api/client';
 import { computeStatus } from '@/lib/transforms/status';
 import { formatCurrency, computeRevenue, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
+import { useSyncContext } from '@/lib/contexts/SyncContext';
 
 interface BookDashboard {
   book: any;
@@ -34,6 +35,9 @@ export default function HomePage() {
   // Totaux pour le résumé
   const [totals, setTotals] = useState({ profit: 0, sales: 0, spend: 0, revenue: 0 });
 
+  // Recharger après synchro
+  const { syncCompletedCount } = useSyncContext();
+
   const handleBookCreated = (book: { id: string; title: string }) => {
     setShowCreateBook(false);
     setCreatedBook(book);
@@ -48,7 +52,7 @@ export default function HomePage() {
 
   useEffect(() => {
     loadBooks();
-  }, []);
+  }, [syncCompletedCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function loadBooks() {
     try {

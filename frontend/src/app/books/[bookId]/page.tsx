@@ -21,6 +21,7 @@ import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, i
 import { computeStatus, StatusResult } from '@/lib/transforms/status';
 import { transformRecommendation, HumanRecommendation } from '@/lib/transforms/recommendations';
 import { t } from '@/lib/i18n';
+import { useSyncContext } from '@/lib/contexts/SyncContext';
 
 export default function BookDetailPage() {
   const params = useParams();
@@ -46,6 +47,9 @@ export default function BookDetailPage() {
   // Filtre campagnes actives/inactives
   const [includeInactive, setIncludeInactive] = useState(false);
 
+  // Recharger après synchro
+  const { syncCompletedCount } = useSyncContext();
+
   const royaltyValuesRef = useRef<RoyaltyValues>({ royaltyRate: null, salePrice: null, royaltyPerUnit: null });
 
   useEffect(() => {
@@ -55,7 +59,7 @@ export default function BookDetailPage() {
       .then(setDashboard)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [bookId, includeInactive]);
+  }, [bookId, includeInactive, syncCompletedCount]);
 
   const handleSaveRoyalty = async () => {
     setSavingRoyalty(true);
