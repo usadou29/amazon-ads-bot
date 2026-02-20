@@ -25,6 +25,7 @@ export interface CreateBookDto {
   tags?: string[];
   acosTarget?: number;
   dailyBudgetTarget?: number;
+  royaltyRate?: number;
 }
 
 export interface UpdateBookDto {
@@ -36,6 +37,7 @@ export interface UpdateBookDto {
   tags?: string[];
   acosTarget?: number;
   dailyBudgetTarget?: number;
+  royaltyRate?: number;
 }
 
 export interface BookWithCampaigns extends Book {
@@ -195,6 +197,7 @@ export class BooksService {
         tags: dto.tags || [],
         acosTarget: dto.acosTarget?.toString(),
         dailyBudgetTarget: dto.dailyBudgetTarget?.toString(),
+        royaltyRate: dto.royaltyRate?.toString(),
       })
       .returning();
 
@@ -229,6 +232,7 @@ export class BooksService {
     if (dto.tags !== undefined) updateData.tags = dto.tags;
     if (dto.acosTarget !== undefined) updateData.acosTarget = dto.acosTarget.toString();
     if (dto.dailyBudgetTarget !== undefined) updateData.dailyBudgetTarget = dto.dailyBudgetTarget.toString();
+    if (dto.royaltyRate !== undefined) updateData.royaltyRate = dto.royaltyRate.toString();
 
     const [updated] = await this.db
       .update(books)
@@ -592,6 +596,7 @@ export class BooksService {
         author: book.author || 'Auteur inconnu',
         marketplace: book.marketplace,
         acosTarget: book.acosTarget ? Number(book.acosTarget) : 40,
+        royaltyRate: book.royaltyRate ? Number(book.royaltyRate) : null,
       },
       metrics: kpis,
       trends: { changes },

@@ -13,6 +13,7 @@ export const books = pgTable('books', {
   categories: jsonb('categories').default([]),
   tags: jsonb('tags').default([]),
   acosTarget: decimal('acos_target', { precision: 5, scale: 2 }),
+  royaltyRate: decimal('royalty_rate', { precision: 5, scale: 2 }),
   dailyBudgetTarget: decimal('daily_budget_target', { precision: 10, scale: 2 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),

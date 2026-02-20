@@ -14,6 +14,13 @@ const MARKETPLACES = [
   { value: 'IT', label: 'Italie (IT)' },
 ];
 
+const ROYALTY_OPTIONS = [
+  { value: 'unknown', label: 'Je ne sais pas (on estimera à 25%)', rate: null },
+  { value: '35', label: '35% — Taux standard KDP', rate: 35 },
+  { value: '70', label: '70% — Taux premium KDP', rate: 70 },
+  { value: 'custom', label: 'Autre pourcentage...', rate: null },
+];
+
 interface CreateBookModalProps {
   open: boolean;
   onClose: () => void;
@@ -25,6 +32,8 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [marketplace, setMarketplace] = useState('FR');
+  const [royaltyOption, setRoyaltyOption] = useState('unknown');
+  const [customRoyalty, setCustomRoyalty] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,12 +42,33 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
     setTitle('');
     setAuthor('');
     setMarketplace('FR');
+    setRoyaltyOption('unknown');
+    setCustomRoyalty('');
     setError(null);
+  };
+
+  const getRoyaltyRate = (): number | undefined => {
+    if (royaltyOption === 'unknown') return undefined; // backend will use default 25%
+    if (royaltyOption === 'custom') {
+      const val = parseFloat(customRoyalty);
+      if (isNaN(val) || val < 1 || val > 100) return undefined;
+      return val;
+    }
+    return Number(royaltyOption);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!asin.trim()) { setError('L\'ASIN est requis'); return; }
+
+    if (royaltyOption === 'custom') {
+      const val = parseFloat(customRoyalty);
+      if (isNaN(val) || val < 1 || val > 100) {
+        setError('La redevance doit être entre 1% et 100%');
+        return;
+      }
+    }
+
     setLoading(true);
     setError(null);
 
@@ -48,6 +78,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
         marketplace,
         title: title.trim() || undefined,
         author: author.trim() || undefined,
+        royaltyRate: getRoyaltyRate(),
       });
       const bookId = result?.id || result?.book?.id;
       const bookTitle = title.trim() || asin.trim();
@@ -66,6 +97,8 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
     onClose();
   };
 
+  const inputClass = 'w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500';
+
   return (
     <Modal open={open} onClose={handleClose} title={t('book_creation.title')}>
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -76,7 +109,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
             value={asin}
             onChange={(e) => setAsin(e.target.value)}
             placeholder="B0XXXXXXXX"
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
+            className={inputClass}
             maxLength={10}
           />
         </div>
@@ -88,7 +121,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Mon livre"
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
+            className={inputClass}
           />
         </div>
 
@@ -99,7 +132,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
             value={author}
             onChange={(e) => setAuthor(e.target.value)}
             placeholder="Nom de plume"
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
+            className={inputClass}
           />
         </div>
 
@@ -108,12 +141,52 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
           <select
             value={marketplace}
             onChange={(e) => setMarketplace(e.target.value)}
-            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 bg-white"
+            className={`${inputClass} bg-white`}
           >
             {MARKETPLACES.map((m) => (
               <option key={m.value} value={m.value}>{m.label}</option>
             ))}
           </select>
+        </div>
+
+        {/* ── Redevance (royalty rate) ── */}
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Ta redevance KDP
+          </label>
+          <p className="text-xs text-slate-500 mb-2">
+            C'est le pourcentage que tu touches sur chaque vente. Ça nous permet de calculer ce que tu gagnes vraiment.
+          </p>
+          <select
+            value={royaltyOption}
+            onChange={(e) => setRoyaltyOption(e.target.value)}
+            className={`${inputClass} bg-white`}
+          >
+            {ROYALTY_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+
+          {royaltyOption === 'custom' && (
+            <div className="mt-2 flex items-center gap-2">
+              <input
+                type="number"
+                value={customRoyalty}
+                onChange={(e) => setCustomRoyalty(e.target.value)}
+                placeholder="ex: 45"
+                min={1}
+                max={100}
+                className={`${inputClass} w-24`}
+              />
+              <span className="text-sm text-slate-500">%</span>
+            </div>
+          )}
+
+          {royaltyOption === 'unknown' && (
+            <p className="text-xs text-amber-600 mt-1">
+              On estimera tes gains à 25% des ventes Amazon. Tu pourras ajuster plus tard.
+            </p>
+          )}
         </div>
 
         {error && (

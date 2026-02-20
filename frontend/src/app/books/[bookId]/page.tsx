@@ -15,7 +15,7 @@ import {
   dryRunAction,
   executeAction,
 } from '@/lib/api/client';
-import { transformKPIs, generateVerbalSummary, formatCurrency } from '@/lib/transforms/metrics';
+import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, computeProfit, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 import { computeStatus, StatusResult } from '@/lib/transforms/status';
 import { transformRecommendation, HumanRecommendation } from '@/lib/transforms/recommendations';
 import { t } from '@/lib/i18n';
@@ -67,7 +67,11 @@ export default function BookDetailPage() {
   const m = metrics || {};
   const sales = Number(m.sales || 0);
   const spend = Number(m.spend || 0);
-  const profit = sales - spend;
+  const royaltyRate = book.royaltyRate ? Number(book.royaltyRate) : null;
+  const revenue = computeRevenue(sales, royaltyRate);
+  const profit = revenue - spend;
+  const rate = royaltyRate && royaltyRate > 0 ? royaltyRate : DEFAULT_ROYALTY_RATE;
+  const isEstimated = !royaltyRate || royaltyRate <= 0;
 
   const status: StatusResult = computeStatus({
     acosTarget: book.acosTarget ? Number(book.acosTarget) : 40,
@@ -76,10 +80,11 @@ export default function BookDetailPage() {
     impressions: Number(m.impressions || 0),
     spend,
     sales,
+    royaltyRate,
   });
 
   const kpis = transformKPIs(m, trends?.changes);
-  const verbalSummary = generateVerbalSummary(kpis, book.title);
+  const verbalSummary = generateVerbalSummary(kpis, book.title, royaltyRate);
   const humanRecos: HumanRecommendation[] = (recommendations || []).map((r: any) =>
     transformRecommendation(r, safety.dryRun),
   );
@@ -134,17 +139,40 @@ export default function BookDetailPage() {
           <p className={`text-2xl font-bold ${profitColor}`}>
             {profit >= 0 ? '+' : ''}{profit.toFixed(0)}€
           </p>
-          <p className="text-xs text-slate-500 mt-1">Profit pub</p>
+          <p className="text-xs text-slate-500 mt-1">
+            Gains réels{isEstimated ? ' (estimé)' : ''}
+          </p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
-          <p className="text-2xl font-bold text-slate-700">{formatCurrency(sales)}</p>
-          <p className="text-xs text-slate-500 mt-1">Ventes</p>
+          <p className="text-2xl font-bold text-slate-700">{formatCurrency(revenue)}</p>
+          <p className="text-xs text-slate-500 mt-1">Redevances ({rate}%)</p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
           <p className="text-2xl font-bold text-slate-700">{formatCurrency(spend)}</p>
-          <p className="text-xs text-slate-500 mt-1">Dépensé</p>
+          <p className="text-xs text-slate-500 mt-1">Dépensé en pub</p>
         </div>
       </div>
+
+      {/* ── Info redevance ── */}
+      {isEstimated && sales > 0 && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <p className="text-xs text-amber-700">
+            Les gains sont estimés à 25% des ventes Amazon. Pour un calcul précis, modifie ta redevance KDP dans les paramètres du livre.
+          </p>
+        </div>
+      )}
+
+      {/* ── Encart pédagogique : pub ≠ totalité des ventes ── */}
+      {sales > 0 && (
+        <div className="mb-6 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+          <p className="text-xs text-blue-800 leading-relaxed mb-2">
+            <span className="font-semibold">Ces chiffres ne comptent que les ventes via Amazon Ads</span>, pas tes ventes organiques. Même en perte sur la pub, ton livre peut être rentable au global.
+          </p>
+          <p className="text-xs text-blue-700 leading-relaxed">
+            La pub a deux objectifs : <span className="font-medium">1)</span> positionner ton livre en première page sur les bons mots-clés, ce qui génère des ventes organiques non comptées ici, et <span className="font-medium">2)</span> faire du profit direct, mais c'est plus long à obtenir.
+          </p>
+        </div>
+      )}
 
       {/* ── Onglets ── */}
       <div className="flex gap-1 mb-6 border-b border-slate-200">

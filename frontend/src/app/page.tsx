@@ -15,7 +15,7 @@ import {
   getWorkspaceId,
 } from '@/lib/api/client';
 import { computeStatus } from '@/lib/transforms/status';
-import { formatCurrency } from '@/lib/transforms/metrics';
+import { formatCurrency, computeRevenue, computeProfit, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 
 interface BookDashboard {
   book: any;
@@ -32,7 +32,7 @@ export default function HomePage() {
   const [createdBook, setCreatedBook] = useState<{ id: string; title: string } | null>(null);
 
   // Totaux pour le résumé
-  const [totals, setTotals] = useState({ profit: 0, sales: 0, spend: 0 });
+  const [totals, setTotals] = useState({ profit: 0, sales: 0, spend: 0, revenue: 0 });
 
   const handleBookCreated = (book: { id: string; title: string }) => {
     setShowCreateBook(false);
@@ -82,12 +82,16 @@ export default function HomePage() {
               status: computeStatus({ impressions: 0 }),
               profit: 0,
               profitFormatted: '0€',
+              revenue: 0,
+              revenueFormatted: '0.00 €',
               sales: 0,
               salesFormatted: '0.00 €',
               spend: 0,
               spendFormatted: '0.00 €',
               orders: 0,
               pendingRecommendations: 0,
+              royaltyRate: DEFAULT_ROYALTY_RATE,
+              isEstimated: true,
             } as BookCardData;
           }
 
@@ -95,7 +99,11 @@ export default function HomePage() {
           const m = dash.metrics || {};
           const sales = Number(m.sales || 0);
           const spend = Number(m.spend || 0);
-          const profit = sales - spend;
+          const royaltyRate = dash.book?.royaltyRate ? Number(dash.book.royaltyRate) : null;
+          const revenue = computeRevenue(sales, royaltyRate);
+          const profit = revenue - spend;
+          const rate = royaltyRate && royaltyRate > 0 ? royaltyRate : DEFAULT_ROYALTY_RATE;
+          const isEstimated = !royaltyRate || royaltyRate <= 0;
 
           totalSales += sales;
           totalSpend += spend;
@@ -107,6 +115,7 @@ export default function HomePage() {
             impressions: Number(m.impressions || 0),
             spend,
             sales,
+            royaltyRate,
           });
 
           return {
@@ -118,12 +127,16 @@ export default function HomePage() {
             status,
             profit,
             profitFormatted: `${profit >= 0 ? '+' : ''}${profit.toFixed(0)}€`,
+            revenue,
+            revenueFormatted: formatCurrency(revenue),
             sales,
             salesFormatted: formatCurrency(sales),
             spend,
             spendFormatted: formatCurrency(spend),
             orders: Number(m.orders || 0),
             pendingRecommendations: Array.isArray(dash.recommendations) ? dash.recommendations.length : 0,
+            royaltyRate: rate,
+            isEstimated,
           } as BookCardData;
         });
 
@@ -131,11 +144,15 @@ export default function HomePage() {
       const statusOrder: Record<string, number> = { danger: 0, warning: 1, success: 2 };
       enrichedBooks.sort((a, b) => (statusOrder[a.status.type] ?? 9) - (statusOrder[b.status.type] ?? 9));
 
+      // Calculer le profit total et les redevances totales à partir des profits par livre
+      const totalProfit = enrichedBooks.reduce((sum, b) => sum + b.profit, 0);
+      const totalRevenue = enrichedBooks.reduce((sum, b) => sum + b.revenue, 0);
       setBooks(enrichedBooks);
       setTotals({
-        profit: totalSales - totalSpend,
+        profit: totalProfit,
         sales: totalSales,
         spend: totalSpend,
+        revenue: totalRevenue,
       });
     } catch (e: any) {
       setError(e.message);
@@ -188,7 +205,7 @@ export default function HomePage() {
             <h2 className="text-sm font-medium text-slate-500 uppercase tracking-wide mb-3">
               {t('home.profit_title')}
             </h2>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {/* Profit — le chiffre clé */}
               <div className="text-center">
                 <p className={`text-3xl font-bold ${profitColor}`}>
@@ -201,6 +218,12 @@ export default function HomePage() {
                   {formatCurrency(totals.sales)}
                 </p>
                 <p className="text-xs text-slate-500 mt-1">{t('home.total_sales')}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xl font-semibold text-emerald-600">
+                  {formatCurrency(totals.revenue)}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">Redevances estimées</p>
               </div>
               <div className="text-center">
                 <p className="text-xl font-semibold text-slate-700">
@@ -230,6 +253,13 @@ export default function HomePage() {
                   {countByStatus.danger} en perte
                 </span>
               )}
+            </div>
+
+            {/* ── Encart pédagogique : ventes pub uniquement ── */}
+            <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+              <p className="text-xs text-blue-800 leading-relaxed">
+                <span className="font-semibold">Uniquement les ventes pub.</span> Ces chiffres ne comptent que les ventes générées par Amazon Ads, pas tes ventes organiques. Même si le bilan pub semble négatif, ton livre peut être rentable : la pub aide aussi à positionner ton livre en première page sur les bons mots-clés, ce qui génère des ventes organiques non comptées ici.
+              </p>
             </div>
           </CardContent>
         </Card>

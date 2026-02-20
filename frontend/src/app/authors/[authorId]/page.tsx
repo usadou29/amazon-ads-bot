@@ -7,7 +7,7 @@ import { CardSkeleton } from '@/components/ui/Skeleton';
 import { t } from '@/lib/i18n';
 import { fetchAuthorBooks } from '@/lib/api/client';
 import { computeStatus } from '@/lib/transforms/status';
-import { formatCurrency } from '@/lib/transforms/metrics';
+import { formatCurrency, computeRevenue, computeProfit, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 
 export default function AuthorBooksPage() {
   const params = useParams();
@@ -31,7 +31,11 @@ export default function AuthorBooksPage() {
           const m = b.metrics || {};
           const sales = Number(m.sales || 0);
           const spend = Number(m.spend || 0);
-          const profit = sales - spend;
+          const royaltyRate = b.royaltyRate ? Number(b.royaltyRate) : null;
+          const revenue = computeRevenue(sales, royaltyRate);
+          const profit = revenue - spend;
+          const rate = royaltyRate && royaltyRate > 0 ? royaltyRate : DEFAULT_ROYALTY_RATE;
+          const isEstimated = !royaltyRate || royaltyRate <= 0;
 
           totalSales += sales;
           totalSpend += spend;
@@ -43,6 +47,7 @@ export default function AuthorBooksPage() {
             impressions: Number(m.impressions || 0),
             spend,
             sales,
+            royaltyRate,
           });
 
           return {
@@ -54,12 +59,16 @@ export default function AuthorBooksPage() {
             status,
             profit,
             profitFormatted: `${profit >= 0 ? '+' : ''}${profit.toFixed(0)}€`,
+            revenue,
+            revenueFormatted: formatCurrency(revenue),
             sales,
             salesFormatted: formatCurrency(sales),
             spend,
             spendFormatted: formatCurrency(spend),
             orders: Number(m.orders || 0),
             pendingRecommendations: b.pendingRecommendations || 0,
+            royaltyRate: rate,
+            isEstimated,
           };
         });
 
@@ -67,8 +76,9 @@ export default function AuthorBooksPage() {
         const statusOrder: Record<string, number> = { danger: 0, warning: 1, success: 2 };
         enrichedBooks.sort((a, b) => (statusOrder[a.status.type] ?? 9) - (statusOrder[b.status.type] ?? 9));
 
+        const totalProfit = enrichedBooks.reduce((sum, b) => sum + b.profit, 0);
         setBooks(enrichedBooks);
-        setTotals({ profit: totalSales - totalSpend, sales: totalSales, spend: totalSpend });
+        setTotals({ profit: totalProfit, sales: totalSales, spend: totalSpend });
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));

@@ -28,6 +28,7 @@ export interface CreateBookDto {
   kdpId?: string;
   publicationDate?: string;
   acosTarget?: number;
+  royaltyRate?: number;
 }
 export const createBook = (dto: CreateBookDto) => api.post('/books', { workspaceId: getWorkspaceId(), ...dto }).then((r) => r.data);
 

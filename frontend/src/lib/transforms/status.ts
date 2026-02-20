@@ -1,4 +1,5 @@
 import { StatusType } from '@/lib/theme/tokens';
+import { computeRevenue, DEFAULT_ROYALTY_RATE } from './metrics';
 
 export interface StatusResult {
   type: StatusType;
@@ -18,14 +19,16 @@ interface StatusInput {
   impressions?: number;
   spend?: number;
   sales?: number;
+  royaltyRate?: number | null;
 }
 
 /**
- * Calcule le profit pub = ventes - dépenses
- * et retourne un statut orienté auteur
+ * Calcule le profit réel = redevance - dépenses
+ * redevance = ventes Amazon × (royaltyRate / 100)
+ * Si pas de royaltyRate → estimation à 25%
  */
 export function computeStatus(input: StatusInput): StatusResult {
-  const { acosTarget = 40, acos, roas, impressions = 0, spend = 0, sales = 0 } = input;
+  const { acosTarget = 40, acos, roas, impressions = 0, spend = 0, sales = 0, royaltyRate } = input;
 
   // Pas assez de données
   if (impressions < 100 || (acos === null && sales === 0 && spend === 0)) {
@@ -37,7 +40,10 @@ export function computeStatus(input: StatusInput): StatusResult {
     };
   }
 
-  const profit = sales - spend;
+  const revenue = computeRevenue(sales, royaltyRate);
+  const profit = revenue - spend;
+  const isEstimated = !royaltyRate || royaltyRate <= 0;
+  const estimateNote = isEstimated ? ' (estimation)' : '';
 
   // Perd de l'argent : profit négatif OU ACOS très élevé
   if (profit < 0 || (acos !== null && acos !== undefined && acos > acosTarget * 1.5)) {
@@ -46,8 +52,8 @@ export function computeStatus(input: StatusInput): StatusResult {
       label: 'Perd de l\'argent',
       emoji: '🔴',
       description: profit < 0
-        ? `Tu perds ${Math.abs(profit).toFixed(0)}€ avec la pub ce mois-ci.`
-        : `Tes pubs coûtent trop cher par rapport aux ventes.`,
+        ? `Tu perds ${Math.abs(profit).toFixed(0)}€ ce mois-ci${estimateNote}.`
+        : `Tes pubs coûtent trop cher par rapport à tes gains.`,
     };
   }
 
@@ -58,8 +64,8 @@ export function computeStatus(input: StatusInput): StatusResult {
       label: 'Fragile',
       emoji: '🟠',
       description: profit > 0
-        ? `Tu gagnes ${profit.toFixed(0)}€, mais c'est serré. On peut améliorer ça.`
-        : `La pub est à l'équilibre. Il y a de la marge pour mieux.`,
+        ? `Tu gagnes ${profit.toFixed(0)}€${estimateNote}, mais c'est serré. On peut améliorer ça.`
+        : `La pub est à l'équilibre${estimateNote}. Il y a de la marge pour mieux.`,
     };
   }
 
@@ -68,7 +74,7 @@ export function computeStatus(input: StatusInput): StatusResult {
     type: 'success',
     label: 'Rentable',
     emoji: '🟢',
-    description: `Tu gagnes ${profit.toFixed(0)}€ avec la pub ce mois-ci.`,
+    description: `Tu gagnes ${profit.toFixed(0)}€ ce mois-ci${estimateNote}.`,
   };
 }
 

@@ -13,12 +13,16 @@ export interface BookCardData {
   status: StatusResult;
   profit: number;
   profitFormatted: string;
+  revenue: number;
+  revenueFormatted: string;
   sales: number;
   salesFormatted: string;
   spend: number;
   spendFormatted: string;
   orders: number;
   pendingRecommendations: number;
+  royaltyRate: number;
+  isEstimated: boolean;
 }
 
 const statusBg: Record<string, string> = {
@@ -130,7 +134,9 @@ export function BookCard({ book, onDeleted }: BookCardProps) {
           <p className={`text-2xl font-bold ${profitColor(book.profit)}`}>
             {book.profitFormatted}
           </p>
-          <p className="text-xs text-slate-500">profit pub ce mois-ci</p>
+          <p className="text-xs text-slate-500">
+            gains réels ce mois-ci{book.isEstimated ? ' (estimé)' : ''}
+          </p>
         </div>
 
         {/* ── Résumé en langage naturel ── */}
@@ -140,7 +146,7 @@ export function BookCard({ book, onDeleted }: BookCardProps) {
 
         {/* ── Mini KPIs ── */}
         <div className="flex items-center gap-4 text-xs text-slate-500 mb-3">
-          <span>{book.salesFormatted} de ventes</span>
+          <span>{book.revenueFormatted} de redevances ({book.royaltyRate}%)</span>
           <span className="text-slate-300">|</span>
           <span>{book.spendFormatted} dépensé</span>
           {book.orders > 0 && (
