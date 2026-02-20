@@ -9,9 +9,12 @@ import {
   actionLog,
   marketplaceProfiles,
   adAccounts,
+  adGroups,
+  keywords,
 } from '@/db/schema';
 import { eq, and, inArray, sql, gte, lte, desc } from 'drizzle-orm';
 import type { Book, NewBook, CampaignBookMapping } from '@/db/schema';
+import type { LifecyclePhase } from '@/db/schema/books';
 
 export interface CreateBookDto {
   workspaceId: string;
@@ -26,6 +29,8 @@ export interface CreateBookDto {
   acosTarget?: number;
   dailyBudgetTarget?: number;
   royaltyRate?: number;
+  salePrice?: number;
+  royaltyPerUnit?: number;
 }
 
 export interface UpdateBookDto {
@@ -38,6 +43,9 @@ export interface UpdateBookDto {
   acosTarget?: number;
   dailyBudgetTarget?: number;
   royaltyRate?: number;
+  salePrice?: number;
+  royaltyPerUnit?: number;
+  lifecyclePhaseOverride?: string | null;
 }
 
 export interface BookWithCampaigns extends Book {
@@ -198,6 +206,8 @@ export class BooksService {
         acosTarget: dto.acosTarget?.toString(),
         dailyBudgetTarget: dto.dailyBudgetTarget?.toString(),
         royaltyRate: dto.royaltyRate?.toString(),
+        salePrice: dto.salePrice?.toString(),
+        royaltyPerUnit: dto.royaltyPerUnit?.toString(),
       })
       .returning();
 
@@ -233,6 +243,9 @@ export class BooksService {
     if (dto.acosTarget !== undefined) updateData.acosTarget = dto.acosTarget.toString();
     if (dto.dailyBudgetTarget !== undefined) updateData.dailyBudgetTarget = dto.dailyBudgetTarget.toString();
     if (dto.royaltyRate !== undefined) updateData.royaltyRate = dto.royaltyRate.toString();
+    if (dto.salePrice !== undefined) updateData.salePrice = dto.salePrice.toString();
+    if (dto.royaltyPerUnit !== undefined) updateData.royaltyPerUnit = dto.royaltyPerUnit.toString();
+    if (dto.lifecyclePhaseOverride !== undefined) updateData.lifecyclePhaseOverride = dto.lifecyclePhaseOverride;
 
     const [updated] = await this.db
       .update(books)
@@ -381,11 +394,171 @@ export class BooksService {
     return result.rows || result;
   }
 
+  // ─── Lifecycle Phase Detection ─────────────────────
+
+  /**
+   * Calcule le nombre de jours depuis la date de publication.
+   * Retourne Infinity si la date est null.
+   */
+  private daysSincePublication(publicationDate: string | null): number {
+    if (!publicationDate) return Infinity;
+    const pubDate = new Date(publicationDate);
+    if (isNaN(pubDate.getTime())) return Infinity;
+    return Math.floor((Date.now() - pubDate.getTime()) / (1000 * 60 * 60 * 24));
+  }
+
+  /**
+   * Auto-détecte la phase de cycle de vie d'un livre basé sur sa date de publication.
+   * La phase "relaunch" est uniquement manuelle (l'auteur la déclenche).
+   */
+  private detectLifecyclePhase(publicationDate: string | null): LifecyclePhase {
+    const days = this.daysSincePublication(publicationDate);
+
+    if (days <= 30) return 'launch';
+    if (days <= 180) return 'scale';
+    return 'evergreen';
+  }
+
+  /**
+   * Retourne la phase effective d'un livre :
+   * - Si override existe → utiliser l'override
+   * - Sinon → auto-détection basée sur publicationDate
+   */
+  getEffectiveLifecyclePhase(book: Book): LifecyclePhase {
+    if (book.lifecyclePhaseOverride) {
+      return book.lifecyclePhaseOverride as LifecyclePhase;
+    }
+    return this.detectLifecyclePhase(book.publicationDate);
+  }
+
+  /**
+   * Retourne les infos de phase pour l'affichage frontend.
+   */
+  private getPhaseInfo(phase: LifecyclePhase, publicationDate: string | null): {
+    phase: LifecyclePhase;
+    label: string;
+    emoji: string;
+    explanation: string;
+    color: string;
+  } {
+    const days = this.daysSincePublication(publicationDate);
+    const daysText = days !== Infinity ? `${days} jour${days > 1 ? 's' : ''}` : '';
+
+    const phaseInfoMap: Record<LifecyclePhase, { label: string; emoji: string; explanation: string; color: string }> = {
+      launch: {
+        label: 'Lancement',
+        emoji: '🚀',
+        explanation: daysText
+          ? `En lancement depuis ${daysText}. On explore les mots-clés, on collecte des données. C'est normal que l'ACoS soit élevé — Amazon apprend qui sont tes lecteurs.`
+          : 'Phase de lancement. On explore les mots-clés et on collecte des données. Tolérance haute sur l\'ACoS.',
+        color: 'blue',
+      },
+      scale: {
+        label: 'Croissance',
+        emoji: '📈',
+        explanation: 'Ton livre commence à trouver son public. On nettoie les mots-clés perdants, on pousse les gagnants, et on optimise le budget.',
+        color: 'amber',
+      },
+      evergreen: {
+        label: 'Régime de croisière',
+        emoji: '🌿',
+        explanation: 'Ton livre est bien installé. On maintient la rentabilité, on resserre l\'ACoS progressivement, et on surveille la concentration des ventes.',
+        color: 'emerald',
+      },
+      relaunch: {
+        label: 'Relance',
+        emoji: '🔄',
+        explanation: 'Mode relance activé. On traite ce livre comme un nouveau lancement : exploration large, tolérance haute, collecte de données fraîches.',
+        color: 'purple',
+      },
+    };
+
+    return {
+      phase,
+      ...phaseInfoMap[phase],
+    };
+  }
+
   // ─── Dashboard & Daily Metrics ─────────────────────
 
   /**
-   * Retourne la date range par defaut (30 jours)
+   * Calcule l'indice de dépendance publicitaire (0-100).
+   *
+   * Score élevé = le livre dépend beaucoup de la pub.
+   * Score bas = le livre montre des signes de référencement organique.
+   *
+   * Basé uniquement sur les métriques Ads disponibles :
+   * - ACoS (30%) : un ACoS élevé indique une forte dépendance
+   * - CVR (25%) : un bon CVR suggère un produit solide (moins dépendant)
+   * - CTR (20%) : un bon CTR montre de l'intérêt naturel
+   * - Volume de commandes (15%) : plus il y a de commandes, plus le livre a un historique
+   * - Volume d'impressions (10%) : un gros volume peut indiquer une position acquise
+   *
+   * Le score est lissé par des fonctions sigmoïdes pour éviter les variations brutales.
    */
+  private computeAdsDependencyScore(kpis: {
+    acos: number;
+    ctr: number;
+    cvr: number;
+    orders: number;
+    impressions: number;
+    spend: number;
+    sales: number;
+  }): number {
+    // Pas de données → pas de score
+    if (kpis.spend === 0 && kpis.impressions === 0) return -1;
+
+    // Fonction sigmoïde douce pour normaliser un score entre 0 et 1
+    // center = point milieu, steepness = pente (plus élevé = transition plus raide)
+    const sigmoid = (value: number, center: number, steepness: number): number => {
+      return 1 / (1 + Math.exp(-steepness * (value - center)));
+    };
+
+    // ── Score ACoS (30%) ──
+    // ACoS > 60% → très dépendant (score haut). ACoS < 15% → peu dépendant.
+    // On inverse : ACoS élevé = score de dépendance élevé
+    const acosScore = kpis.sales > 0
+      ? sigmoid(kpis.acos, 40, 0.06) // centré à 40%, transition douce
+      : 1.0; // pas de ventes = totalement dépendant
+
+    // ── Score CVR (25%) ──
+    // CVR élevé = les gens qui cliquent achètent = produit solide = moins dépendant
+    // On inverse : CVR élevé = score bas (moins dépendant)
+    const cvrScore = kpis.cvr > 0
+      ? 1 - sigmoid(kpis.cvr, 8, 0.3) // centré à 8%, transition douce
+      : 1.0; // pas de conversion = dépendant
+
+    // ── Score CTR (20%) ──
+    // CTR élevé = les gens sont intéressés = bon référencement
+    // On inverse : CTR élevé = score bas
+    const ctrScore = kpis.ctr > 0
+      ? 1 - sigmoid(kpis.ctr, 0.4, 4) // centré à 0.4%
+      : 1.0;
+
+    // ── Score volume commandes (15%) ──
+    // Plus de commandes = plus d'historique = le livre s'installe
+    // On inverse : beaucoup de commandes = score bas
+    const ordersScore = kpis.orders > 0
+      ? 1 - sigmoid(kpis.orders, 15, 0.15) // centré à 15 commandes/mois
+      : 1.0;
+
+    // ── Score volume impressions (10%) ──
+    // Un bon volume d'impressions avec un bon CTR indique une position acquise
+    const impressionsScore = kpis.impressions > 0
+      ? 1 - sigmoid(kpis.impressions, 5000, 0.0005) // centré à 5000 impressions
+      : 1.0;
+
+    // Score pondéré final (0 à 1) → converti en 0 à 100
+    const rawScore =
+      acosScore * 0.30 +
+      cvrScore * 0.25 +
+      ctrScore * 0.20 +
+      ordersScore * 0.15 +
+      impressionsScore * 0.10;
+
+    return Math.round(rawScore * 100);
+  }
+
   private getDefaultDateRange(): { startDate: string; endDate: string } {
     const end = new Date();
     const start = new Date();
@@ -397,9 +570,10 @@ export class BooksService {
   }
 
   /**
-   * Recupere les entity keys des campagnes liees a un livre
+   * Recupere les entity keys des campagnes liees a un livre.
+   * Si includeInactive = false (défaut), ne retourne que les campagnes enabled.
    */
-  private async getCampaignEntityKeys(bookId: string): Promise<string[]> {
+  private async getCampaignEntityKeys(bookId: string, includeInactive = false): Promise<string[]> {
     const mappings = await this.db
       .select({ campaignId: campaignBookMapping.campaignId })
       .from(campaignBookMapping)
@@ -409,12 +583,50 @@ export class BooksService {
 
     const campaignIds = mappings.map((m: any) => m.campaignId);
 
+    const conditions = includeInactive
+      ? [inArray(campaigns.id, campaignIds)]
+      : [inArray(campaigns.id, campaignIds), eq(campaigns.state, 'enabled')];
+
     const campaignData = await this.db
       .select({ amazonCampaignId: campaigns.amazonCampaignId })
       .from(campaigns)
-      .where(inArray(campaigns.id, campaignIds));
+      .where(and(...conditions));
 
     return campaignData.map((c: any) => `campaign:${c.amazonCampaignId}`);
+  }
+
+  /**
+   * Récupère la liste des campagnes associées à un livre avec leur état.
+   */
+  private async getBookCampaigns(bookId: string): Promise<{
+    id: string;
+    name: string;
+    campaignType: string;
+    state: string;
+    dailyBudget: string | null;
+    isPrimary: boolean;
+  }[]> {
+    const result = await this.db
+      .select({
+        id: campaigns.id,
+        name: campaigns.name,
+        campaignType: campaigns.campaignType,
+        state: campaigns.state,
+        dailyBudget: campaigns.dailyBudget,
+        isPrimary: campaignBookMapping.isPrimary,
+      })
+      .from(campaignBookMapping)
+      .innerJoin(campaigns, eq(campaigns.id, campaignBookMapping.campaignId))
+      .where(eq(campaignBookMapping.bookId, bookId));
+
+    return result.map((c: any) => ({
+      id: c.id,
+      name: c.name || 'Campagne sans nom',
+      campaignType: c.campaignType || 'sponsoredProducts',
+      state: c.state || 'enabled',
+      dailyBudget: c.dailyBudget || null,
+      isPrimary: c.isPrimary ?? false,
+    }));
   }
 
   /**
@@ -468,7 +680,9 @@ export class BooksService {
    * GET /api/books/:id/dashboard
    * Dashboard complet d'un livre : KPIs + tendances + recos + actions + daily metrics
    */
-  async getDashboard(bookId: string): Promise<any> {
+  async getDashboard(bookId: string, options?: { includeInactive?: boolean }): Promise<any> {
+    const includeInactive = options?.includeInactive ?? false;
+
     // 1. Recuperer le livre
     const [book] = await this.db
       .select()
@@ -481,7 +695,10 @@ export class BooksService {
     }
 
     const dateRange = this.getDefaultDateRange();
-    const entityKeys = await this.getCampaignEntityKeys(bookId);
+    const entityKeys = await this.getCampaignEntityKeys(bookId, includeInactive);
+
+    // Récupérer la liste de toutes les campagnes associées (toujours toutes, indépendamment du filtre)
+    const bookCampaigns = await this.getBookCampaigns(bookId);
 
     // 2. Metriques periode courante (30j)
     const currentMetrics = await this.aggregateMetricsForKeys(entityKeys, dateRange);
@@ -542,18 +759,118 @@ export class BooksService {
       cpc: calcChange(kpis.cpc, prevKpis.cpc),
     };
 
-    // 6. Recommandations pending pour ce workspace
-    const recos = await this.db
-      .select()
-      .from(recommendations)
-      .where(
-        and(
-          eq(recommendations.workspaceId, book.workspaceId),
-          eq(recommendations.status, 'pending'),
-        ),
-      )
-      .orderBy(desc(recommendations.createdAt))
-      .limit(20);
+    // 6. Recommandations pending pour CE livre
+    // On récupère les recos pour : campagnes, mots-clés et termes de recherche
+    // liés aux campagnes de ce livre
+    let recos: any[] = [];
+    if (entityKeys.length > 0) {
+      // Récupérer aussi les entityKeys des keywords liés aux campagnes du livre
+      const bookCampaignIds = (await this.db
+        .select({ id: campaigns.id })
+        .from(campaigns)
+        .where(inArray(campaigns.amazonCampaignId,
+          entityKeys.map((k: string) => Number(k.replace('campaign:', '')))
+        ))
+      ).map((c: any) => c.id);
+
+      let keywordEntityKeys: string[] = [];
+      if (bookCampaignIds.length > 0) {
+        const adGroupsData = await this.db
+          .select({ id: adGroups.id })
+          .from(adGroups)
+          .where(inArray(adGroups.campaignId, bookCampaignIds));
+
+        if (adGroupsData.length > 0) {
+          const adGroupIds = adGroupsData.map((a: any) => a.id);
+          const keywordsData = await this.db
+            .select({ amazonKeywordId: keywords.amazonKeywordId })
+            .from(keywords)
+            .where(inArray(keywords.adGroupId, adGroupIds));
+
+          keywordEntityKeys = keywordsData.map((k: any) => `keyword:${k.amazonKeywordId}`);
+        }
+      }
+
+      // Combiner toutes les entityKeys possibles
+      const allEntityKeys = [...entityKeys, ...keywordEntityKeys];
+
+      recos = await this.db
+        .select()
+        .from(recommendations)
+        .where(
+          and(
+            eq(recommendations.workspaceId, book.workspaceId),
+            eq(recommendations.status, 'pending'),
+            inArray(recommendations.entityKey, allEntityKeys),
+          ),
+        )
+        .orderBy(desc(recommendations.createdAt))
+        .limit(20);
+    }
+
+    // 6b. Résoudre les noms d'entités pour les recommandations
+    // (campagnes, mots-clés, termes de recherche)
+    const entityNameMap = new Map<string, string>();
+    if (recos.length > 0) {
+      // Grouper les entityKeys par type
+      const campaignIds: number[] = [];
+      const keywordIds: number[] = [];
+      const searchTermQueries: string[] = [];
+
+      for (const r of recos) {
+        const key = (r as any).entityKey || '';
+        if (key.startsWith('campaign:')) {
+          const id = Number(key.replace('campaign:', ''));
+          if (!isNaN(id)) campaignIds.push(id);
+        } else if (key.startsWith('keyword:')) {
+          const id = Number(key.replace('keyword:', ''));
+          if (!isNaN(id)) keywordIds.push(id);
+        } else if (key.startsWith('search_term:')) {
+          searchTermQueries.push(key.replace('search_term:', ''));
+        }
+      }
+
+      // Résoudre les noms de campagnes
+      if (campaignIds.length > 0) {
+        const campaignNames = await this.db
+          .select({
+            amazonCampaignId: campaigns.amazonCampaignId,
+            name: campaigns.name,
+          })
+          .from(campaigns)
+          .where(inArray(campaigns.amazonCampaignId, campaignIds));
+
+        for (const c of campaignNames) {
+          entityNameMap.set(`campaign:${c.amazonCampaignId}`, c.name);
+        }
+      }
+
+      // Résoudre les noms de mots-clés
+      if (keywordIds.length > 0) {
+        const keywordNames = await this.db
+          .select({
+            amazonKeywordId: keywords.amazonKeywordId,
+            keywordText: keywords.keywordText,
+            matchType: keywords.matchType,
+          })
+          .from(keywords)
+          .where(inArray(keywords.amazonKeywordId, keywordIds));
+
+        for (const k of keywordNames) {
+          const label = k.matchType
+            ? `${k.keywordText} (${k.matchType})`
+            : k.keywordText;
+          entityNameMap.set(`keyword:${k.amazonKeywordId}`, label);
+        }
+      }
+
+      // Résoudre les termes de recherche (entityKey = search_term:{query})
+      // Pour les search_terms, l'entityKey contient déjà le texte de la requête
+      // mais on nettoie quand même
+      for (const q of searchTermQueries) {
+        entityNameMap.set(`search_term:${q}`, `« ${q} »`);
+      }
+    }
 
     // 7. Actions recentes
     const recentActions = await this.db
@@ -588,6 +905,13 @@ export class BooksService {
         .orderBy(dailyMetrics.date);
     }
 
+    // ── Indice de dépendance publicitaire ──
+    const adsDependencyScore = this.computeAdsDependencyScore(kpis);
+
+    // ── Phase de cycle de vie ──
+    const lifecyclePhase = this.getEffectiveLifecyclePhase(book);
+    const phaseInfo = this.getPhaseInfo(lifecyclePhase, book.publicationDate);
+
     return {
       book: {
         id: book.id,
@@ -595,23 +919,45 @@ export class BooksService {
         asin: book.asin,
         author: book.author || 'Auteur inconnu',
         marketplace: book.marketplace,
+        publicationDate: book.publicationDate || null,
         acosTarget: book.acosTarget ? Number(book.acosTarget) : 40,
         royaltyRate: book.royaltyRate ? Number(book.royaltyRate) : null,
+        salePrice: book.salePrice ? Number(book.salePrice) : null,
+        royaltyPerUnit: book.royaltyPerUnit ? Number(book.royaltyPerUnit) : null,
+        lifecyclePhaseOverride: book.lifecyclePhaseOverride || null,
+        lifecyclePhase,
+        phaseInfo,
       },
+      adsDependencyScore,
       metrics: kpis,
       trends: { changes },
-      recommendations: recos.map((r: any) => ({
-        id: r.id,
-        entityType: r.entityType,
-        entityKey: r.entityKey,
-        actionType: r.actionType,
-        suggestedAction: r.suggestedAction,
-        contextData: r.contextData,
-        confidenceScore: r.confidenceScore ? Number(r.confidenceScore) : null,
-        ruleSnapshot: r.ruleSnapshot,
-        status: r.status,
-        createdAt: r.createdAt,
-      })),
+      recommendations: recos.map((r: any) => {
+        const entityKey = r.entityKey || '';
+        // Résoudre le nom ou fallback lisible
+        let entityName = entityNameMap.get(entityKey);
+        if (!entityName) {
+          // Fallback : extraire la partie après le ":" et rendre lisible
+          const parts = entityKey.split(':');
+          if (parts.length === 2) {
+            entityName = `${parts[0] === 'campaign' ? 'Campagne' : parts[0] === 'keyword' ? 'Mot-clé' : 'Terme'} #${parts[1]}`;
+          } else {
+            entityName = entityKey;
+          }
+        }
+        return {
+          id: r.id,
+          entityType: r.entityType,
+          entityKey: r.entityKey,
+          entityName,
+          actionType: r.actionType,
+          suggestedAction: r.suggestedAction,
+          contextData: r.contextData,
+          confidenceScore: r.confidenceScore ? Number(r.confidenceScore) : null,
+          ruleSnapshot: r.ruleSnapshot,
+          status: r.status,
+          createdAt: r.createdAt,
+        };
+      }),
       recentActions: recentActions.map((a: any) => ({
         id: a.id,
         entityType: a.entityType,
@@ -636,6 +982,8 @@ export class BooksService {
         clicks: Number(d.clicks),
         orders: Number(d.orders),
       })),
+      campaigns: bookCampaigns,
+      includeInactive,
     };
   }
 

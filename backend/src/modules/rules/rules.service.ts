@@ -41,6 +41,8 @@ export interface EvaluateRulesOptions {
   entityKeys?: string[];
   periodDays?: number;
   dryRun?: boolean;
+  /** Phase du cycle de vie du livre — filtre les règles applicables */
+  lifecyclePhase?: string;
 }
 
 export interface EvaluateRulesResult {
@@ -215,11 +217,23 @@ export class RulesService {
       details: [],
     };
 
-    // Recuperer les regles actives
-    const activeRules = await this.listRules(workspaceId, { activeOnly: true });
+    // Recuperer les regles actives, filtrees par phase si specifiee
+    let activeRules = await this.listRules(workspaceId, { activeOnly: true });
     if (activeRules.length === 0) {
       this.logger.debug('No active rules found');
       return result;
+    }
+
+    // Filtrer par phase de cycle de vie du livre
+    if (options.lifecyclePhase) {
+      const phase = options.lifecyclePhase;
+      activeRules = activeRules.filter((rule: any) => {
+        const rulePhases = rule.phases || ['launch', 'scale', 'evergreen', 'relaunch'];
+        return Array.isArray(rulePhases) && rulePhases.includes(phase);
+      });
+      this.logger.debug(
+        `Phase filter '${phase}': ${activeRules.length} rules applicable`,
+      );
     }
 
     // Recuperer les metriques agregees par entite

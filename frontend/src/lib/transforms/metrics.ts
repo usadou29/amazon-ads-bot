@@ -135,3 +135,102 @@ export function generateVerbalSummary(kpis: HumanMetric[], bookTitle: string, ro
 
   return `Attention, "${bookTitle}" te coûte ${Math.abs(profit).toFixed(0)}€ ce mois-ci${estimateNote}. Tu as dépensé ${spend?.value || '—'} en pub pour ${formatCurrency(revenue)} de redevances (${rate}% sur ${sales?.value || '—'} de ventes Amazon). On va arranger ça.`;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Indice de dépendance publicitaire
+// Score pédagogique basé uniquement sur les métriques Ads.
+// Pas un indicateur financier. N'influence aucune règle métier.
+// ═══════════════════════════════════════════════════════════════
+
+export interface AdsDependencyInfo {
+  /** Score 0-100 calculé côté backend. -1 = pas de données */
+  score: number;
+  label: string;
+  color: string;
+  bgColor: string;
+  borderColor: string;
+  emoji: string;
+  explanation: string;
+}
+
+/**
+ * Interprète le score de dépendance publicitaire (0-100)
+ * calculé côté backend à partir des métriques Ads uniquement.
+ *
+ * Score élevé = le livre dépend beaucoup de la pub.
+ * Score bas = le livre montre des signes de référencement organique.
+ *
+ * Cet indicateur n'est PAS un indicateur financier.
+ * Il ne doit influencer aucune règle métier automatique.
+ */
+export function interpretAdsDependency(score: number): AdsDependencyInfo {
+  if (score < 0) {
+    return {
+      score,
+      label: 'Pas encore de données',
+      color: 'text-slate-400',
+      bgColor: 'bg-slate-50',
+      borderColor: 'border-slate-200',
+      emoji: '⏳',
+      explanation: 'Lance tes premières campagnes pour voir apparaître cet indicateur.',
+    };
+  }
+
+  if (score <= 25) {
+    return {
+      score,
+      label: 'Se vend naturellement',
+      color: 'text-emerald-700',
+      bgColor: 'bg-emerald-50',
+      borderColor: 'border-emerald-200',
+      emoji: '🌟',
+      explanation: 'Ton livre a de bons signaux de référencement. Les gens qui voient ta pub cliquent et achètent facilement. C\'est signe que le livre plaît et se positionne bien sur Amazon.',
+    };
+  }
+
+  if (score <= 45) {
+    return {
+      score,
+      label: 'Commence à se référencer',
+      color: 'text-emerald-600',
+      bgColor: 'bg-emerald-50',
+      borderColor: 'border-emerald-200',
+      emoji: '🌱',
+      explanation: 'Ton livre montre des signes positifs : bon taux de clic et de conversion. La pub aide à construire ton référencement. Continue comme ça.',
+    };
+  }
+
+  if (score <= 65) {
+    return {
+      score,
+      label: 'Dépend encore de la publicité',
+      color: 'text-amber-600',
+      bgColor: 'bg-amber-50',
+      borderColor: 'border-amber-200',
+      emoji: '🔶',
+      explanation: 'Ton livre a besoin de la pub pour générer des ventes. C\'est normal en phase de lancement. Concentre-toi sur les mots-clés qui convertissent bien pour accélérer le référencement.',
+    };
+  }
+
+  if (score <= 85) {
+    return {
+      score,
+      label: 'Très dépendant de la publicité',
+      color: 'text-orange-600',
+      bgColor: 'bg-orange-50',
+      borderColor: 'border-orange-200',
+      emoji: '🔸',
+      explanation: 'Sans pub, ton livre aurait peu de visibilité. Ça peut être normal au début. Vérifie que tes mots-clés sont pertinents et que ta page produit (couverture, description) donne envie.',
+    };
+  }
+
+  return {
+    score,
+    label: 'Dépend totalement de la publicité',
+    color: 'text-red-600',
+    bgColor: 'bg-red-50',
+    borderColor: 'border-red-200',
+    emoji: '🔴',
+    explanation: 'Ton livre peine à convertir via la pub. Ça peut venir de plusieurs choses : mots-clés mal ciblés, couverture qui attire peu, prix mal positionné, ou description à retravailler. Avant d\'investir plus, optimise ta page produit.',
+  };
+}

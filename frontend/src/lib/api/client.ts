@@ -15,7 +15,10 @@ export function getWorkspaceId(): string {
 // ─── Authors & Books ───────────────────────────
 export const fetchAuthors = () => api.get(`/authors?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
 export const fetchAuthorBooks = (authorId: string) => api.get(`/authors/${authorId}/books?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
-export const fetchBookDashboard = (bookId: string) => api.get(`/books/${bookId}/dashboard`).then((r) => r.data);
+export const fetchBookDashboard = (bookId: string, includeInactive = false) => {
+  const params = includeInactive ? '?includeInactive=true' : '';
+  return api.get(`/books/${bookId}/dashboard${params}`).then((r) => r.data);
+};
 export const fetchBookDailyMetrics = (bookId: string, days = 30) => api.get(`/books/${bookId}/metrics/daily?days=${days}`).then((r) => r.data);
 export const fetchBooks = () => api.get(`/books?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
 export const deleteBook = (bookId: string) => api.delete(`/books/${bookId}`).then((r) => r.data);
@@ -29,8 +32,22 @@ export interface CreateBookDto {
   publicationDate?: string;
   acosTarget?: number;
   royaltyRate?: number;
+  salePrice?: number;
+  royaltyPerUnit?: number;
 }
 export const createBook = (dto: CreateBookDto) => api.post('/books', { workspaceId: getWorkspaceId(), ...dto }).then((r) => r.data);
+
+export interface UpdateBookDto {
+  title?: string;
+  author?: string;
+  publicationDate?: string;
+  acosTarget?: number;
+  royaltyRate?: number;
+  salePrice?: number;
+  royaltyPerUnit?: number;
+  lifecyclePhaseOverride?: string | null;
+}
+export const updateBook = (bookId: string, dto: UpdateBookDto) => api.patch(`/books/${bookId}`, dto).then((r) => r.data);
 
 // ─── Campaigns ─────────────────────────────────
 export const fetchCampaigns = () => api.get(`/campaigns?workspaceId=${getWorkspaceId()}`).then((r) => r.data);

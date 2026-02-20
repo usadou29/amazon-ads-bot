@@ -15,7 +15,7 @@ import {
   getWorkspaceId,
 } from '@/lib/api/client';
 import { computeStatus } from '@/lib/transforms/status';
-import { formatCurrency, computeRevenue, computeProfit, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
+import { formatCurrency, computeRevenue, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 
 interface BookDashboard {
   book: any;
@@ -232,6 +232,7 @@ export default function HomePage() {
                 <p className="text-xs text-slate-500 mt-1">{t('home.total_spend')}</p>
               </div>
             </div>
+
 
             {/* Mini résumé statuts */}
             <div className="flex items-center justify-center gap-4 mt-4 text-xs">

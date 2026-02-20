@@ -1,8 +1,9 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { createBook } from '@/lib/api/client';
+import { RoyaltyEditor, RoyaltyValues } from './RoyaltyEditor';
 import { t } from '@/lib/i18n';
 
 const MARKETPLACES = [
@@ -12,13 +13,6 @@ const MARKETPLACES = [
   { value: 'US', label: 'États-Unis (US)' },
   { value: 'ES', label: 'Espagne (ES)' },
   { value: 'IT', label: 'Italie (IT)' },
-];
-
-const ROYALTY_OPTIONS = [
-  { value: 'unknown', label: 'Je ne sais pas (on estimera à 25%)', rate: null },
-  { value: '35', label: '35% — Taux standard KDP', rate: 35 },
-  { value: '70', label: '70% — Taux premium KDP', rate: 70 },
-  { value: 'custom', label: 'Autre pourcentage...', rate: null },
 ];
 
 interface CreateBookModalProps {
@@ -32,53 +26,44 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [marketplace, setMarketplace] = useState('FR');
-  const [royaltyOption, setRoyaltyOption] = useState('unknown');
-  const [customRoyalty, setCustomRoyalty] = useState('');
+  const [publicationDate, setPublicationDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const royaltyRef = useRef<RoyaltyValues>({
+    royaltyRate: null,
+    salePrice: null,
+    royaltyPerUnit: null,
+  });
 
   const resetForm = () => {
     setAsin('');
     setTitle('');
     setAuthor('');
     setMarketplace('FR');
-    setRoyaltyOption('unknown');
-    setCustomRoyalty('');
+    setPublicationDate('');
     setError(null);
-  };
-
-  const getRoyaltyRate = (): number | undefined => {
-    if (royaltyOption === 'unknown') return undefined; // backend will use default 25%
-    if (royaltyOption === 'custom') {
-      const val = parseFloat(customRoyalty);
-      if (isNaN(val) || val < 1 || val > 100) return undefined;
-      return val;
-    }
-    return Number(royaltyOption);
+    royaltyRef.current = { royaltyRate: null, salePrice: null, royaltyPerUnit: null };
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!asin.trim()) { setError('L\'ASIN est requis'); return; }
 
-    if (royaltyOption === 'custom') {
-      const val = parseFloat(customRoyalty);
-      if (isNaN(val) || val < 1 || val > 100) {
-        setError('La redevance doit être entre 1% et 100%');
-        return;
-      }
-    }
-
     setLoading(true);
     setError(null);
 
     try {
+      const rv = royaltyRef.current;
       const result = await createBook({
         asin: asin.trim(),
         marketplace,
         title: title.trim() || undefined,
         author: author.trim() || undefined,
-        royaltyRate: getRoyaltyRate(),
+        publicationDate: publicationDate || undefined,
+        royaltyRate: rv.royaltyRate ?? undefined,
+        salePrice: rv.salePrice ?? undefined,
+        royaltyPerUnit: rv.royaltyPerUnit ?? undefined,
       });
       const bookId = result?.id || result?.book?.id;
       const bookTitle = title.trim() || asin.trim();
@@ -149,45 +134,24 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
           </select>
         </div>
 
-        {/* ── Redevance (royalty rate) ── */}
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">
-            Ta redevance KDP
-          </label>
-          <p className="text-xs text-slate-500 mb-2">
-            C'est le pourcentage que tu touches sur chaque vente. Ça nous permet de calculer ce que tu gagnes vraiment.
+          <label className="block text-sm font-medium text-slate-700 mb-1">Date de publication</label>
+          <input
+            type="date"
+            value={publicationDate}
+            onChange={(e) => setPublicationDate(e.target.value)}
+            className={inputClass}
+          />
+          <p className="text-xs text-slate-400 mt-1">
+            Permet de détecter automatiquement la phase du livre (lancement, croissance, croisière)
           </p>
-          <select
-            value={royaltyOption}
-            onChange={(e) => setRoyaltyOption(e.target.value)}
-            className={`${inputClass} bg-white`}
-          >
-            {ROYALTY_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-
-          {royaltyOption === 'custom' && (
-            <div className="mt-2 flex items-center gap-2">
-              <input
-                type="number"
-                value={customRoyalty}
-                onChange={(e) => setCustomRoyalty(e.target.value)}
-                placeholder="ex: 45"
-                min={1}
-                max={100}
-                className={`${inputClass} w-24`}
-              />
-              <span className="text-sm text-slate-500">%</span>
-            </div>
-          )}
-
-          {royaltyOption === 'unknown' && (
-            <p className="text-xs text-amber-600 mt-1">
-              On estimera tes gains à 25% des ventes Amazon. Tu pourras ajuster plus tard.
-            </p>
-          )}
         </div>
+
+        {/* ── Redevance ── */}
+        <RoyaltyEditor
+          onChange={(values) => { royaltyRef.current = values; }}
+          compact
+        />
 
         {error && (
           <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
