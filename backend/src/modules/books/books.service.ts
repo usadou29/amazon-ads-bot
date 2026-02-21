@@ -1165,9 +1165,14 @@ export class BooksService {
     }
 
     // 3. Date range
+    // Pour "Aujourd'hui" (days=1), on veut uniquement la date du jour
+    // Pour les autres périodes, on recule de (days-1) jours pour avoir exactement N jours
     const end = new Date();
     const start = new Date();
-    start.setDate(start.getDate() - days);
+    if (days > 1) {
+      start.setDate(start.getDate() - (days - 1));
+    }
+    // Quand days=1 : start = end = aujourd'hui
     const startDate = start.toISOString().split('T')[0];
     const endDate = end.toISOString().split('T')[0];
 

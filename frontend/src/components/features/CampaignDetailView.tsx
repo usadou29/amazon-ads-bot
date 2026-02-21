@@ -438,17 +438,23 @@ export function CampaignDetailView({ bookId, syncCompletedCount }: CampaignDetai
         </h3>
         <div className="flex items-center gap-2">
           <span className="text-xs text-slate-400">Période :</span>
-          {[7, 14, 30, 60].map((d) => (
+          {[
+            { value: 1, label: "Aujourd'hui" },
+            { value: 7, label: '7j' },
+            { value: 14, label: '14j' },
+            { value: 30, label: '30j' },
+            { value: 60, label: '60j' },
+          ].map((d) => (
             <button
-              key={d}
-              onClick={() => setDays(d)}
+              key={d.value}
+              onClick={() => setDays(d.value)}
               className={`px-2.5 py-1 text-xs rounded-full transition-colors ${
-                days === d
+                days === d.value
                   ? 'bg-brand-600 text-white'
                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
               }`}
             >
-              {d}j
+              {d.label}
             </button>
           ))}
         </div>

@@ -69,7 +69,7 @@ const REPORT_TYPE_ID_FIELD: Record<string, string> = {
 const ALL_REPORT_TYPES: ReportType[] = ['campaigns', 'ad_groups', 'keywords', 'targets', 'search_terms'];
 
 const BATCH_SIZE = 500;
-const POLL_INTERVAL_MS = 15_000;   // 15 secondes
+const POLL_INTERVAL_MS = 5_000;    // 5 secondes (réduit de 15s)
 const MAX_POLL_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
 @Injectable()
@@ -139,38 +139,56 @@ export class ReportsService {
     const createdJobs: ReportJob[] = [];
     const skippedReports: Array<{ reportType: string; marketplace: string; reason: string }> = [];
 
+    // Construire toutes les combinaisons profil × reportType et les envoyer en parallèle
+    const requestTasks: Array<{ profile: any; reportType: string }> = [];
     for (const profile of profiles) {
       for (const reportType of reportTypes) {
-        try {
+        requestTasks.push({ profile, reportType });
+      }
+    }
+
+    // Exécuter en parallèle par batches de 5
+    const REQUEST_PARALLEL_LIMIT = 5;
+    for (let i = 0; i < requestTasks.length; i += REQUEST_PARALLEL_LIMIT) {
+      const batch = requestTasks.slice(i, i + REQUEST_PARALLEL_LIMIT);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (task) => {
           this.logger.debug(
-            `Requesting report: ${reportType} for profile ${profile.profileId} (${profile.marketplace})`,
+            `Requesting report: ${task.reportType} for profile ${task.profile.profileId} (${task.profile.marketplace})`,
           );
-          const job = await this.requestSingleReport(
+          return this.requestSingleReport(
             adAccountId,
-            profile,
-            reportType,
+            task.profile,
+            task.reportType,
             startDate,
             endDate,
             workspaceId,
           );
-          if (job) createdJobs.push(job);
-        } catch (err) {
+        }),
+      );
+
+      for (let j = 0; j < batchResults.length; j++) {
+        const batchResult = batchResults[j];
+        const task = batch[j];
+        if (batchResult.status === 'fulfilled') {
+          if (batchResult.value) createdJobs.push(batchResult.value);
+        } else {
+          const err = batchResult.reason;
           const status = (err as any)?.response?.status;
           const message = (err as any)?.response?.data
             ? JSON.stringify((err as any).response.data)
             : (err instanceof Error ? err.message : String(err));
-
           const reason = `HTTP ${status || '?'}: ${message}`;
           if (status === 404 || status === 400) {
             this.logger.warn(
-              `Report "${reportType}" profile ${profile.profileId} (${profile.marketplace}): ${reason}`,
+              `Report "${task.reportType}" profile ${task.profile.profileId} (${task.profile.marketplace}): ${reason}`,
             );
           } else {
             this.logger.error(
-              `Report "${reportType}" profile ${profile.profileId} (${profile.marketplace}): ${reason}`,
+              `Report "${task.reportType}" profile ${task.profile.profileId} (${task.profile.marketplace}): ${reason}`,
             );
           }
-          skippedReports.push({ reportType, marketplace: profile.marketplace, reason });
+          skippedReports.push({ reportType: task.reportType, marketplace: task.profile.marketplace, reason });
         }
       }
     }
@@ -315,20 +333,28 @@ export class ReportsService {
       return { processed: 0, completed: 0, failed: 0, errors: [] };
     }
 
-    this.logger.log(`Processing ${pendingJobs.length} pending report jobs`);
+    this.logger.log(`Processing ${pendingJobs.length} pending report jobs IN PARALLEL`);
 
-    const result: ReportProcessResult = { processed: 0, completed: 0, failed: 0, errors: [] };
+    const result: ReportProcessResult = { processed: pendingJobs.length, completed: 0, failed: 0, errors: [] };
 
-    for (const job of pendingJobs) {
-      result.processed++;
-      try {
-        await this.pollAndProcessReport(job);
-        result.completed++;
-      } catch (err) {
-        result.failed++;
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        result.errors.push({ reportJobId: job.id, error: errorMsg });
-        this.logger.error(`Report job ${job.id} failed: ${errorMsg}`);
+    // Traiter tous les rapports en parallèle (max 5 simultanés pour éviter le throttling)
+    const PARALLEL_LIMIT = 5;
+    for (let i = 0; i < pendingJobs.length; i += PARALLEL_LIMIT) {
+      const batch = pendingJobs.slice(i, i + PARALLEL_LIMIT);
+      const batchResults = await Promise.allSettled(
+        batch.map((job: ReportJob) => this.pollAndProcessReport(job)),
+      );
+
+      for (let j = 0; j < batchResults.length; j++) {
+        const batchResult = batchResults[j];
+        if (batchResult.status === 'fulfilled') {
+          result.completed++;
+        } else {
+          result.failed++;
+          const errorMsg = batchResult.reason instanceof Error ? batchResult.reason.message : String(batchResult.reason);
+          result.errors.push({ reportJobId: batch[j].id, error: errorMsg });
+          this.logger.error(`Report job ${batch[j].id} failed: ${errorMsg}`);
+        }
       }
     }
 

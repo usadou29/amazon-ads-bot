@@ -12,7 +12,7 @@ import {
   productTargets,
   adAccounts,
 } from '@/db/schema';
-import { eq, and, count, sql } from 'drizzle-orm';
+import { eq, and, count, sql, inArray } from 'drizzle-orm';
 import { Marketplace } from '@/config/amazon';
 
 export type SyncType = 'full' | 'incremental';
@@ -198,28 +198,40 @@ export class SyncService {
         }
       }
 
-      // Sync keywords (dépend de campaigns + ad_groups)
-      if (entitiesToSync.includes('keywords')) {
-        for (const profile of profilesToSync) {
-          const keywordResult = await this.syncKeywords(adAccountId, profile, syncType);
-          result.recordsFetched += keywordResult.fetched;
-          result.recordsCreated += keywordResult.created;
-          result.recordsUpdated += keywordResult.updated;
-          result.recordsFailed += keywordResult.failed;
-          result.details![`keywords_${profile.marketplace}`] = keywordResult;
-        }
-      }
+      // Sync keywords + product targets en PARALLÈLE (les deux dépendent de campaigns + ad_groups, mais pas l'un de l'autre)
+      const syncKeywords = entitiesToSync.includes('keywords');
+      const syncTargets = entitiesToSync.includes('product_targets');
 
-      // Sync product targets (dépend de campaigns + ad_groups)
-      if (entitiesToSync.includes('product_targets')) {
-        for (const profile of profilesToSync) {
-          const targetResult = await this.syncProductTargets(adAccountId, profile, syncType);
-          result.recordsFetched += targetResult.fetched;
-          result.recordsCreated += targetResult.created;
-          result.recordsUpdated += targetResult.updated;
-          result.recordsFailed += targetResult.failed;
-          result.details![`product_targets_${profile.marketplace}`] = targetResult;
+      if (syncKeywords || syncTargets) {
+        const parallelTasks: Promise<void>[] = [];
+
+        if (syncKeywords) {
+          parallelTasks.push((async () => {
+            for (const profile of profilesToSync) {
+              const keywordResult = await this.syncKeywords(adAccountId, profile, syncType);
+              result.recordsFetched += keywordResult.fetched;
+              result.recordsCreated += keywordResult.created;
+              result.recordsUpdated += keywordResult.updated;
+              result.recordsFailed += keywordResult.failed;
+              result.details![`keywords_${profile.marketplace}`] = keywordResult;
+            }
+          })());
         }
+
+        if (syncTargets) {
+          parallelTasks.push((async () => {
+            for (const profile of profilesToSync) {
+              const targetResult = await this.syncProductTargets(adAccountId, profile, syncType);
+              result.recordsFetched += targetResult.fetched;
+              result.recordsCreated += targetResult.created;
+              result.recordsUpdated += targetResult.updated;
+              result.recordsFailed += targetResult.failed;
+              result.details![`product_targets_${profile.marketplace}`] = targetResult;
+            }
+          })());
+        }
+
+        await Promise.all(parallelTasks);
       }
 
       // Demander les rapports de performance (async – ne bloque pas le sync structurel)
@@ -512,7 +524,7 @@ export class SyncService {
   }
 
   /**
-   * Synchronise les campagnes pour un profil
+   * Synchronise les campagnes pour un profil (optimisé avec batch lookups)
    */
   private async syncCampaigns(
     adAccountId: string,
@@ -530,33 +542,29 @@ export class SyncService {
     let created = 0;
     let updated = 0;
 
-    for (const campaign of amazonCampaigns) {
-      const existingCampaign = await this.db
-        .select()
-        .from(campaigns)
-        .where(
-          and(
-            eq(campaigns.profileId, profile.id),
-            eq(campaigns.amazonCampaignId, campaign.campaignId),
-          ),
-        )
-        .limit(1);
+    // Batch: pré-charger toutes les campagnes existantes pour ce profil
+    const existingCampaigns = await this.db
+      .select({ id: campaigns.id, amazonCampaignId: campaigns.amazonCampaignId })
+      .from(campaigns)
+      .where(eq(campaigns.profileId, profile.id));
+    const existingCampaignMap = new Map<number, string>();
+    for (const c of existingCampaigns) {
+      existingCampaignMap.set(c.amazonCampaignId, c.id);
+    }
 
-      // Trouver le portfolio si present
-      let portfolioDbId = null;
-      if (campaign.portfolioId) {
-        const [portfolio] = await this.db
-          .select()
-          .from(portfolios)
-          .where(
-            and(
-              eq(portfolios.profileId, profile.id),
-              eq(portfolios.amazonPortfolioId, campaign.portfolioId),
-            ),
-          )
-          .limit(1);
-        portfolioDbId = portfolio?.id || null;
-      }
+    // Batch: pré-charger tous les portfolios pour ce profil
+    const existingPortfolios = await this.db
+      .select({ id: portfolios.id, amazonPortfolioId: portfolios.amazonPortfolioId })
+      .from(portfolios)
+      .where(eq(portfolios.profileId, profile.id));
+    const portfolioMap = new Map<number, string>();
+    for (const p of existingPortfolios) {
+      portfolioMap.set(p.amazonPortfolioId, p.id);
+    }
+
+    for (const campaign of amazonCampaigns) {
+      const existingId = existingCampaignMap.get(campaign.campaignId);
+      const portfolioDbId = campaign.portfolioId ? (portfolioMap.get(campaign.portfolioId) || null) : null;
 
       const campaignData = {
         profileId: profile.id,
@@ -576,19 +584,11 @@ export class SyncService {
         updatedAt: new Date(),
       };
 
-      if (existingCampaign.length === 0) {
-        // INSERT
-        await this.db.insert(campaigns).values({
-          ...campaignData,
-          createdAt: new Date(),
-        });
+      if (!existingId) {
+        await this.db.insert(campaigns).values({ ...campaignData, createdAt: new Date() });
         created++;
       } else {
-        // UPDATE (UPSERT)
-        await this.db
-          .update(campaigns)
-          .set(campaignData)
-          .where(eq(campaigns.id, existingCampaign[0].id));
+        await this.db.update(campaigns).set(campaignData).where(eq(campaigns.id, existingId));
         updated++;
       }
     }
@@ -603,7 +603,7 @@ export class SyncService {
   }
 
   /**
-   * Synchronise les ad groups pour un profil
+   * Synchronise les ad groups pour un profil (optimisé avec batch lookups)
    */
   private async syncAdGroups(
     adAccountId: string,
@@ -621,39 +621,41 @@ export class SyncService {
     const stats: EntitySyncStats = { fetched: amazonAdGroups.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
     const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
+    // Batch: pré-charger toutes les campagnes pour ce profil → Map(amazonCampaignId → dbId)
+    const profileCampaigns = await this.db
+      .select({ id: campaigns.id, amazonCampaignId: campaigns.amazonCampaignId })
+      .from(campaigns)
+      .where(eq(campaigns.profileId, profile.id));
+    const campaignMap = new Map<number, string>();
+    for (const c of profileCampaigns) {
+      campaignMap.set(c.amazonCampaignId, c.id);
+    }
+
+    // Batch: pré-charger tous les ad groups existants pour ces campagnes
+    const campaignDbIds = Array.from(campaignMap.values());
+    let existingAdGroupMap = new Map<string, string>(); // "campaignId:amazonAdGroupId" → dbId
+    if (campaignDbIds.length > 0) {
+      const existingAGs = await this.db
+        .select({ id: adGroups.id, campaignId: adGroups.campaignId, amazonAdGroupId: adGroups.amazonAdGroupId })
+        .from(adGroups)
+        .where(inArray(adGroups.campaignId, campaignDbIds));
+      for (const ag of existingAGs) {
+        existingAdGroupMap.set(`${ag.campaignId}:${ag.amazonAdGroupId}`, ag.id);
+      }
+    }
+
     for (const adGroup of amazonAdGroups) {
       try {
-        // Trouver la campagne parent
-        const [campaign] = await this.db
-          .select()
-          .from(campaigns)
-          .where(
-            and(
-              eq(campaigns.profileId, profile.id),
-              eq(campaigns.amazonCampaignId, adGroup.campaignId),
-            ),
-          )
-          .limit(1);
-
-        if (!campaign) {
-          this.logger.debug(`SKIP ad_group ${adGroup.adGroupId}: missing_campaign (amazonCampaignId=${adGroup.campaignId})`);
+        const campaignDbId = campaignMap.get(adGroup.campaignId);
+        if (!campaignDbId) {
           addSkip('missing_campaign');
           continue;
         }
 
-        const existingAdGroup = await this.db
-          .select()
-          .from(adGroups)
-          .where(
-            and(
-              eq(adGroups.campaignId, campaign.id),
-              eq(adGroups.amazonAdGroupId, adGroup.adGroupId),
-            ),
-          )
-          .limit(1);
+        const existingId = existingAdGroupMap.get(`${campaignDbId}:${adGroup.adGroupId}`);
 
         const adGroupData = {
-          campaignId: campaign.id,
+          campaignId: campaignDbId,
           amazonAdGroupId: adGroup.adGroupId,
           name: adGroup.name,
           state: adGroup.state?.toLowerCase() || 'enabled',
@@ -663,11 +665,13 @@ export class SyncService {
           updatedAt: new Date(),
         };
 
-        if (existingAdGroup.length === 0) {
-          await this.db.insert(adGroups).values({ ...adGroupData, createdAt: new Date() });
+        if (!existingId) {
+          const [inserted] = await this.db.insert(adGroups).values({ ...adGroupData, createdAt: new Date() }).returning({ id: adGroups.id });
+          // Ajouter au map pour les syncs suivants (keywords/targets en dépendent)
+          if (inserted) existingAdGroupMap.set(`${campaignDbId}:${adGroup.adGroupId}`, inserted.id);
           stats.created++;
         } else {
-          await this.db.update(adGroups).set(adGroupData).where(eq(adGroups.id, existingAdGroup[0].id));
+          await this.db.update(adGroups).set(adGroupData).where(eq(adGroups.id, existingId));
           stats.updated++;
         }
       } catch (err) {
@@ -684,7 +688,7 @@ export class SyncService {
   }
 
   /**
-   * Synchronise les keywords pour un profil
+   * Synchronise les keywords pour un profil (optimisé avec batch lookups)
    */
   private async syncKeywords(
     adAccountId: string,
@@ -702,56 +706,60 @@ export class SyncService {
     const stats: EntitySyncStats = { fetched: amazonKeywords.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
     const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
+    // Batch: pré-charger campagnes → Map(amazonCampaignId → dbId)
+    const profileCampaigns = await this.db
+      .select({ id: campaigns.id, amazonCampaignId: campaigns.amazonCampaignId })
+      .from(campaigns)
+      .where(eq(campaigns.profileId, profile.id));
+    const campaignMap = new Map<number, string>();
+    for (const c of profileCampaigns) {
+      campaignMap.set(c.amazonCampaignId, c.id);
+    }
+
+    // Batch: pré-charger ad groups → Map("campaignId:amazonAdGroupId" → dbId)
+    const campaignDbIds = Array.from(campaignMap.values());
+    const adGroupMap = new Map<string, string>();
+    if (campaignDbIds.length > 0) {
+      const allAdGroups = await this.db
+        .select({ id: adGroups.id, campaignId: adGroups.campaignId, amazonAdGroupId: adGroups.amazonAdGroupId })
+        .from(adGroups)
+        .where(inArray(adGroups.campaignId, campaignDbIds));
+      for (const ag of allAdGroups) {
+        adGroupMap.set(`${ag.campaignId}:${ag.amazonAdGroupId}`, ag.id);
+      }
+    }
+
+    // Batch: pré-charger keywords existants → Map("adGroupId:amazonKeywordId" → dbId)
+    const adGroupDbIds = Array.from(adGroupMap.values());
+    const existingKeywordMap = new Map<string, string>();
+    if (adGroupDbIds.length > 0) {
+      const existingKWs = await this.db
+        .select({ id: keywords.id, adGroupId: keywords.adGroupId, amazonKeywordId: keywords.amazonKeywordId })
+        .from(keywords)
+        .where(inArray(keywords.adGroupId, adGroupDbIds));
+      for (const kw of existingKWs) {
+        existingKeywordMap.set(`${kw.adGroupId}:${kw.amazonKeywordId}`, kw.id);
+      }
+    }
+
     for (const keyword of amazonKeywords) {
       try {
-        // Trouver la campagne parent
-        const [campaign] = await this.db
-          .select()
-          .from(campaigns)
-          .where(
-            and(
-              eq(campaigns.profileId, profile.id),
-              eq(campaigns.amazonCampaignId, keyword.campaignId),
-            ),
-          )
-          .limit(1);
-
-        if (!campaign) {
-          this.logger.debug(`SKIP keyword ${keyword.keywordId}: missing_campaign (amazonCampaignId=${keyword.campaignId})`);
+        const campaignDbId = campaignMap.get(keyword.campaignId);
+        if (!campaignDbId) {
           addSkip('missing_campaign');
           continue;
         }
 
-        const [adGroup] = await this.db
-          .select()
-          .from(adGroups)
-          .where(
-            and(
-              eq(adGroups.campaignId, campaign.id),
-              eq(adGroups.amazonAdGroupId, keyword.adGroupId),
-            ),
-          )
-          .limit(1);
-
-        if (!adGroup) {
-          this.logger.debug(`SKIP keyword ${keyword.keywordId}: missing_ad_group (amazonAdGroupId=${keyword.adGroupId})`);
+        const adGroupDbId = adGroupMap.get(`${campaignDbId}:${keyword.adGroupId}`);
+        if (!adGroupDbId) {
           addSkip('missing_ad_group');
           continue;
         }
 
-        const existingKeyword = await this.db
-          .select()
-          .from(keywords)
-          .where(
-            and(
-              eq(keywords.adGroupId, adGroup.id),
-              eq(keywords.amazonKeywordId, keyword.keywordId),
-            ),
-          )
-          .limit(1);
+        const existingId = existingKeywordMap.get(`${adGroupDbId}:${keyword.keywordId}`);
 
         const keywordData = {
-          adGroupId: adGroup.id,
+          adGroupId: adGroupDbId,
           amazonKeywordId: keyword.keywordId,
           keywordText: keyword.keywordText,
           matchType: keyword.matchType?.toLowerCase() || 'broad',
@@ -762,11 +770,11 @@ export class SyncService {
           updatedAt: new Date(),
         };
 
-        if (existingKeyword.length === 0) {
+        if (!existingId) {
           await this.db.insert(keywords).values({ ...keywordData, createdAt: new Date() });
           stats.created++;
         } else {
-          await this.db.update(keywords).set(keywordData).where(eq(keywords.id, existingKeyword[0].id));
+          await this.db.update(keywords).set(keywordData).where(eq(keywords.id, existingId));
           stats.updated++;
         }
       } catch (err) {
@@ -783,7 +791,7 @@ export class SyncService {
   }
 
   /**
-   * Synchronise les product targets pour un profil
+   * Synchronise les product targets pour un profil (optimisé avec batch lookups)
    */
   private async syncProductTargets(
     adAccountId: string,
@@ -801,55 +809,60 @@ export class SyncService {
     const stats: EntitySyncStats = { fetched: amazonTargets.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
     const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
+    // Batch: pré-charger campagnes → Map(amazonCampaignId → dbId)
+    const profileCampaigns = await this.db
+      .select({ id: campaigns.id, amazonCampaignId: campaigns.amazonCampaignId })
+      .from(campaigns)
+      .where(eq(campaigns.profileId, profile.id));
+    const campaignMap = new Map<number, string>();
+    for (const c of profileCampaigns) {
+      campaignMap.set(c.amazonCampaignId, c.id);
+    }
+
+    // Batch: pré-charger ad groups → Map("campaignId:amazonAdGroupId" → dbId)
+    const campaignDbIds = Array.from(campaignMap.values());
+    const adGroupMap = new Map<string, string>();
+    if (campaignDbIds.length > 0) {
+      const allAdGroups = await this.db
+        .select({ id: adGroups.id, campaignId: adGroups.campaignId, amazonAdGroupId: adGroups.amazonAdGroupId })
+        .from(adGroups)
+        .where(inArray(adGroups.campaignId, campaignDbIds));
+      for (const ag of allAdGroups) {
+        adGroupMap.set(`${ag.campaignId}:${ag.amazonAdGroupId}`, ag.id);
+      }
+    }
+
+    // Batch: pré-charger targets existants → Map("adGroupId:amazonTargetId" → dbId)
+    const adGroupDbIds = Array.from(adGroupMap.values());
+    const existingTargetMap = new Map<string, string>();
+    if (adGroupDbIds.length > 0) {
+      const existingTGs = await this.db
+        .select({ id: productTargets.id, adGroupId: productTargets.adGroupId, amazonTargetId: productTargets.amazonTargetId })
+        .from(productTargets)
+        .where(inArray(productTargets.adGroupId, adGroupDbIds));
+      for (const tg of existingTGs) {
+        existingTargetMap.set(`${tg.adGroupId}:${tg.amazonTargetId}`, tg.id);
+      }
+    }
+
     for (const target of amazonTargets) {
       try {
-        const [campaign] = await this.db
-          .select()
-          .from(campaigns)
-          .where(
-            and(
-              eq(campaigns.profileId, profile.id),
-              eq(campaigns.amazonCampaignId, target.campaignId),
-            ),
-          )
-          .limit(1);
-
-        if (!campaign) {
-          this.logger.debug(`SKIP target ${target.targetId}: missing_campaign (amazonCampaignId=${target.campaignId})`);
+        const campaignDbId = campaignMap.get(target.campaignId);
+        if (!campaignDbId) {
           addSkip('missing_campaign');
           continue;
         }
 
-        const [adGroup] = await this.db
-          .select()
-          .from(adGroups)
-          .where(
-            and(
-              eq(adGroups.campaignId, campaign.id),
-              eq(adGroups.amazonAdGroupId, target.adGroupId),
-            ),
-          )
-          .limit(1);
-
-        if (!adGroup) {
-          this.logger.debug(`SKIP target ${target.targetId}: missing_ad_group (amazonAdGroupId=${target.adGroupId})`);
+        const adGroupDbId = adGroupMap.get(`${campaignDbId}:${target.adGroupId}`);
+        if (!adGroupDbId) {
           addSkip('missing_ad_group');
           continue;
         }
 
-        const existingTarget = await this.db
-          .select()
-          .from(productTargets)
-          .where(
-            and(
-              eq(productTargets.adGroupId, adGroup.id),
-              eq(productTargets.amazonTargetId, target.targetId),
-            ),
-          )
-          .limit(1);
+        const existingId = existingTargetMap.get(`${adGroupDbId}:${target.targetId}`);
 
         const targetData = {
-          adGroupId: adGroup.id,
+          adGroupId: adGroupDbId,
           amazonTargetId: target.targetId,
           expressionType: target.expressionType || 'manual',
           expression: target.expression || [],
@@ -860,11 +873,11 @@ export class SyncService {
           updatedAt: new Date(),
         };
 
-        if (existingTarget.length === 0) {
+        if (!existingId) {
           await this.db.insert(productTargets).values({ ...targetData, createdAt: new Date() });
           stats.created++;
         } else {
-          await this.db.update(productTargets).set(targetData).where(eq(productTargets.id, existingTarget[0].id));
+          await this.db.update(productTargets).set(targetData).where(eq(productTargets.id, existingId));
           stats.updated++;
         }
       } catch (err) {

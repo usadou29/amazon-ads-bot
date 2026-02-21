@@ -10,7 +10,7 @@ function formatTimeRemaining(seconds: number): string {
 }
 
 export function SyncProgressBar() {
-  const { syncing, progress, success } = useSyncContext();
+  const { syncing, progress, success, estimatedDuration } = useSyncContext();
 
   // Rien à afficher
   if (!syncing && !success) return null;
@@ -19,17 +19,23 @@ export function SyncProgressBar() {
   const bgColor = success ? 'bg-emerald-50' : 'bg-brand-50';
   const textColor = success ? 'text-emerald-700' : 'text-brand-700';
 
-  // Estimation du temps restant (approximatif)
-  const remaining = syncing && progress > 0 && progress < 95
-    ? Math.round(((100 - progress) / progress) * (progress / 100) * 240) // rough estimate
-    : 0;
+  // ETA basé sur la durée estimée et la progression actuelle
+  let remaining = 0;
+  if (syncing && progress > 0 && progress < 95) {
+    // Inverse de la fonction asymptotique : ratio = -ln(1 - progress/100) / k
+    const k = 2.3;
+    const currentRatio = -Math.log(1 - progress / 100) / k;
+    const totalTime = estimatedDuration;
+    const elapsedEstimate = currentRatio * totalTime;
+    remaining = Math.max(0, Math.round(totalTime - elapsedEstimate));
+  }
 
   return (
     <div className={`w-full ${bgColor} border-b border-slate-200 transition-all duration-500`}>
       {/* Barre de progression */}
       <div className="h-1 w-full bg-slate-200/50">
         <div
-          className={`h-full ${barColor} transition-all duration-1000 ease-out`}
+          className={`h-full ${barColor} transition-all duration-500 ease-out`}
           style={{ width: `${progress}%` }}
         />
       </div>
@@ -53,7 +59,7 @@ export function SyncProgressBar() {
           <span className={`text-xs font-medium ${textColor}`}>
             {success
               ? 'Synchronisation terminée — données mises à jour'
-              : `Synchronisation en cours... ${progress}%`}
+              : `Synchronisation en cours... ${Math.round(progress)}%`}
           </span>
         </div>
         {syncing && remaining > 0 && (
