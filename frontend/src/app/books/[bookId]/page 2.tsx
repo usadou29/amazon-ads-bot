@@ -5,25 +5,22 @@ import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { MetricsGrid } from '@/components/ui/MetricCard';
 import { StatusBadge } from '@/components/ui/StatusBadge';
+import { RecommendationCard } from '@/components/features/RecommendationCard';
 import { RoyaltyEditor, RoyaltyValues } from '@/components/features/RoyaltyEditor';
-import { CampaignDetailView } from '@/components/features/CampaignDetailView';
 import { CardSkeleton } from '@/components/ui/Skeleton';
 import { useSafety } from '@/lib/hooks/useSafety';
 import {
   fetchBookDashboard,
-  fetchBookCampaignDetails,
   approveRecommendation,
   rejectRecommendation,
   dryRunAction,
   executeAction,
   updateBook,
 } from '@/lib/api/client';
-import { OverviewCampaignView } from '@/components/features/OverviewCampaignView';
 import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, interpretAdsDependency, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 import { computeStatus, StatusResult } from '@/lib/transforms/status';
-import { transformRecommendation, HumanRecommendation, groupRecommendationsByEntity, RecommendationGroup } from '@/lib/transforms/recommendations';
+import { transformRecommendation, HumanRecommendation } from '@/lib/transforms/recommendations';
 import { t } from '@/lib/i18n';
-import { useSyncContext } from '@/lib/contexts/SyncContext';
 
 export default function BookDetailPage() {
   const params = useParams();
@@ -49,14 +46,6 @@ export default function BookDetailPage() {
   // Filtre campagnes actives/inactives
   const [includeInactive, setIncludeInactive] = useState(false);
 
-  // Overview campaign details
-  const [overviewCampaignDetails, setOverviewCampaignDetails] = useState<any>(null);
-  const [overviewDays, setOverviewDays] = useState(14);
-  const [overviewLoading, setOverviewLoading] = useState(false);
-
-  // Recharger après synchro
-  const { syncCompletedCount } = useSyncContext();
-
   const royaltyValuesRef = useRef<RoyaltyValues>({ royaltyRate: null, salePrice: null, royaltyPerUnit: null });
 
   useEffect(() => {
@@ -66,17 +55,7 @@ export default function BookDetailPage() {
       .then(setDashboard)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [bookId, includeInactive, syncCompletedCount]);
-
-  // Fetch campaign details for overview tab
-  useEffect(() => {
-    if (!bookId) return;
-    setOverviewLoading(true);
-    fetchBookCampaignDetails(bookId, overviewDays)
-      .then(setOverviewCampaignDetails)
-      .catch(() => setOverviewCampaignDetails(null))
-      .finally(() => setOverviewLoading(false));
-  }, [bookId, overviewDays, syncCompletedCount]);
+  }, [bookId, includeInactive]);
 
   const handleSaveRoyalty = async () => {
     setSavingRoyalty(true);
@@ -189,19 +168,6 @@ export default function BookDetailPage() {
   const humanRecos: HumanRecommendation[] = (recommendations || []).map((r: any) =>
     transformRecommendation(r, safety.dryRun),
   );
-  // Ne garder que les recos recommandées par le Strategy Engine (score >= 70, recommendedForLifecycle = true)
-  // Les recos avec score=0 (ex: pause bloquée par le hard guard économique) ne doivent pas apparaître comme "conseils"
-  const recommendedRecos = humanRecos.filter(r => r.recommendedForLifecycle);
-  const recoGroups: RecommendationGroup[] = groupRecommendationsByEntity(recommendedRecos);
-
-  // Build recommendation map for overview campaign view (entityKey → RecommendationGroup[])
-  const recommendationMap = new Map<string, RecommendationGroup[]>();
-  for (const group of recoGroups) {
-    const existing = recommendationMap.get(group.entityKey) || [];
-    existing.push(group);
-    recommendationMap.set(group.entityKey, existing);
-  }
-
   const safetyMessage = safety.killSwitch
     ? t('safety.kill_switch_title')
     : safety.dryRun
@@ -484,7 +450,7 @@ export default function BookDetailPage() {
         {[
           { key: 'overview' as const, label: t('book_detail.tab_overview') },
           { key: 'details' as const, label: t('book_detail.tab_details') },
-          { key: 'advanced' as const, label: 'Campagnes' },
+          { key: 'advanced' as const, label: t('book_detail.tab_advanced') },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -539,32 +505,55 @@ export default function BookDetailPage() {
             </Card>
           )}
 
-          {/* ── Campagnes avec recommandations intégrées ── */}
-          <OverviewCampaignView
-            bookId={bookId}
-            campaignDetails={overviewCampaignDetails}
-            recommendationMap={recommendationMap}
-            handlers={{
-              onSimulate: async (id) => { await dryRunAction(id); },
-              onApply: async (id) => {
-                await approveRecommendation(id);
-                await executeAction(id);
-                const updated = await fetchBookDashboard(bookId, includeInactive);
-                setDashboard(updated);
-              },
-              onReject: async (id) => {
-                await rejectRecommendation(id);
-                const updated = await fetchBookDashboard(bookId, includeInactive);
-                setDashboard(updated);
-              },
-            }}
-            safetyBlocked={!safety.canExecute}
-            safetyMessage={safetyMessage}
-            days={overviewDays}
-            onDaysChange={setOverviewDays}
-            loading={overviewLoading}
-            lifecyclePhase={phaseInfo.phase as any}
-          />
+          {humanRecos.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Mes conseils pour toi ({humanRecos.length})
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Basé sur les 30 derniers jours
+                </p>
+              </div>
+              <div className="space-y-4">
+                {humanRecos.map((reco) => (
+                  <RecommendationCard
+                    key={reco.id}
+                    recommendation={reco}
+                    onSimulate={async (id) => { await dryRunAction(id); }}
+                    onApply={async (id) => {
+                      await approveRecommendation(id);
+                      await executeAction(id);
+                      // Recharger le dashboard après action
+                      const updated = await fetchBookDashboard(bookId, includeInactive);
+                      setDashboard(updated);
+                    }}
+                    onReject={async (id) => {
+                      await rejectRecommendation(id);
+                      // Retirer la reco de la liste
+                      const updated = await fetchBookDashboard(bookId, includeInactive);
+                      setDashboard(updated);
+                    }}
+                    safetyBlocked={!safety.canExecute}
+                    safetyMessage={safetyMessage}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {humanRecos.length === 0 && (
+            <Card className="border-l-4 border-l-emerald-400">
+              <CardContent>
+                <div className="text-center py-4">
+                  <p className="text-base font-medium text-emerald-700 mb-1">Tout roule !</p>
+                  <p className="text-sm text-slate-500">
+                    Pas de conseil pour le moment. Tes campagnes tournent bien. On te préviendra dès qu'on détecte une opportunité.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -610,9 +599,59 @@ export default function BookDetailPage() {
         </div>
       )}
 
-      {/* ══════════════ ONGLET 3: Campagnes — Vue détaillée ══════════════ */}
+      {/* ══════════════ ONGLET 3: Avancé — Campagnes associées ══════════════ */}
       {activeTab === 'advanced' && (
-        <CampaignDetailView bookId={bookId} syncCompletedCount={syncCompletedCount} />
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Campagnes associées ({(bookCampaigns || []).length})</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(!bookCampaigns || bookCampaigns.length === 0) ? (
+                <p className="text-sm text-slate-500 text-center py-6">
+                  Aucune campagne associée à ce livre. Lie des campagnes depuis la page d'accueil.
+                </p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {bookCampaigns.map((c: any) => {
+                    const stateConfig: Record<string, { label: string; bg: string; text: string }> = {
+                      enabled: { label: 'Active', bg: 'bg-emerald-100', text: 'text-emerald-700' },
+                      paused: { label: 'En pause', bg: 'bg-amber-100', text: 'text-amber-700' },
+                      archived: { label: 'Archivée', bg: 'bg-slate-100', text: 'text-slate-500' },
+                    };
+                    const sc = stateConfig[c.state] || stateConfig.enabled;
+                    const typeLabels: Record<string, string> = {
+                      sponsoredProducts: 'SP',
+                      sponsoredBrands: 'SB',
+                      sponsoredDisplay: 'SD',
+                    };
+                    return (
+                      <div key={c.id} className="flex items-center justify-between py-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${sc.bg} ${sc.text}`}>
+                            {sc.label}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-slate-900 truncate">
+                              {c.name}
+                              {c.isPrimary && (
+                                <span className="ml-2 text-xs text-brand-600 font-normal">(principale)</span>
+                              )}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              {typeLabels[c.campaignType] || c.campaignType}
+                              {c.dailyBudget && ` · ${Number(c.dailyBudget).toFixed(2)}€/jour`}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
   );

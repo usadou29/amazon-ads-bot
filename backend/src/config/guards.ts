@@ -27,6 +27,9 @@ export const GUARDS = {
 
   // ACOS par défaut
   DEFAULT_ACOS_TARGET: 40,
+
+  // Royalty rate par défaut (break-even ACoS)
+  DEFAULT_ROYALTY_RATE: 35,
 } as const;
 
 // Types pour les constantes

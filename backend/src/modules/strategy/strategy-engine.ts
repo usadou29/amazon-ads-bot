@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { LifecyclePhase } from '@/db/schema/books';
+import { GUARDS } from '@/config/guards';
 
 /**
  * StrategyEngine — Post-processing layer above the RulesEngine.
@@ -38,6 +39,21 @@ export interface StrategyResult {
   requiresConsent: boolean;
   consentLevel: ConsentLevel;
   consentMessage?: string;        // Message pédagogique si consentement requis
+}
+
+// ─── Economic Context ───────────────────────────────
+
+export interface StrategyContext {
+  royaltyRate?: number;        // Royalty rate du livre (ex: 35 = 35%)
+  defaultRoyaltyRate: number;  // Fallback (GUARDS.DEFAULT_ROYALTY_RATE)
+}
+
+type ProfitZone = 'profitable' | 'optimization' | 'exploration' | 'unprofitable';
+
+interface ProfitAnalysis {
+  breakEvenAcos: number;       // = royaltyRate
+  profitRatio: number;         // acos / breakEvenAcos (Infinity si pas d'ACoS)
+  zone: ProfitZone;
 }
 
 // ─── Scoring Matrix ──────────────────────────────────
@@ -142,6 +158,141 @@ const CONSENT_MESSAGES = {
 @Injectable()
 export class StrategyEngine {
   private readonly logger = new Logger(StrategyEngine.name);
+
+  // ─── Economic Analysis Methods ─────────────────────
+
+  /**
+   * Calcule le break-even ACoS à partir du royalty rate.
+   * Break-even ACoS = royalty rate (au-delà, on perd de l'argent).
+   */
+  private calculateBreakEvenAcos(context?: StrategyContext): number {
+    const rate = context?.royaltyRate ?? context?.defaultRoyaltyRate ?? GUARDS.DEFAULT_ROYALTY_RATE;
+    return Math.max(5, Math.min(100, rate));
+  }
+
+  /**
+   * Classifie la zone de profit d'un mot-clé/cible.
+   *
+   * - profitable:    ratio ≤ 0.8  → bonne marge, on peut investir plus
+   * - optimization:  0.8 < ratio ≤ 1.2  → près du break-even, optimiser
+   * - exploration:   1.2 < ratio ≤ 1.6 ET orders > 0  → risqué mais data
+   * - unprofitable:  ratio > 1.6 OU (ratio > 1.2 ET orders === 0)
+   */
+  private classifyProfitZone(acos: number, breakEvenAcos: number, orders: number): ProfitAnalysis {
+    // Si pas d'ACoS (pas de ventes), c'est unprofitable
+    if (!acos || acos <= 0) {
+      return {
+        breakEvenAcos,
+        profitRatio: orders > 0 ? 0 : Infinity,
+        zone: orders > 0 ? 'profitable' : 'unprofitable',
+      };
+    }
+
+    const profitRatio = acos / breakEvenAcos;
+
+    let zone: ProfitZone;
+    if (profitRatio <= 0.8) {
+      zone = 'profitable';
+    } else if (profitRatio <= 1.2) {
+      zone = 'optimization';
+    } else if (profitRatio <= 1.6 && orders > 0) {
+      zone = 'exploration';
+    } else {
+      zone = 'unprofitable';
+    }
+
+    return { breakEvenAcos, profitRatio, zone };
+  }
+
+  /**
+   * HARD GUARD : détermine si une pause doit être bloquée.
+   *
+   * Règles :
+   * - orders >= 3 ET acos <= breakEven * 1.2  → TOUJOURS bloquer
+   * - Pause autorisée SEULEMENT si :
+   *   - (orders === 0 ET clicks >= MIN_CLICKS) → pas de data, assez de clics
+   *   - OU (acos >= breakEven * 1.6 ET clicks >= MIN_CLICKS) → waste clair
+   * - Sinon → bloquer (pénalité de score)
+   *
+   * @returns penalty: nombre à soustraire du score (0 = pas de blocage)
+   */
+  private computePauseGuardPenalty(
+    category: ActionCategory,
+    metrics: Record<string, any>,
+    profitAnalysis: ProfitAnalysis,
+  ): number {
+    if (category !== 'pause') return 0;
+
+    const orders = Number(metrics.orders || 0);
+    const clicks = Number(metrics.clicks || 0);
+    const acos = Number(metrics.acos || 0);
+    const minClicks = GUARDS.MIN_CLICKS_FOR_DECISION;
+
+    // HARD GUARD : mot-clé rentable ou proche du break-even avec commandes
+    if (orders >= 3 && acos > 0 && acos <= profitAnalysis.breakEvenAcos * 1.2) {
+      return 60; // Blocage fort — ne devrait JAMAIS être recommandé
+    }
+
+    // Pause clairement autorisée : pas de commandes et assez de clics
+    if (orders === 0 && clicks >= minClicks) {
+      return 0; // Pas de pénalité, la pause est légitime
+    }
+
+    // Pause clairement autorisée : waste évident (ACoS >= 1.6x break-even)
+    if (acos >= profitAnalysis.breakEvenAcos * 1.6 && clicks >= minClicks) {
+      return 0; // Pas de pénalité, la pause est légitime
+    }
+
+    // Sinon : pénalité proportionnelle aux commandes
+    if (orders > 0) {
+      return 40; // A des commandes mais pas dans les cas clairs → bloquer
+    }
+
+    return 0; // Pas assez de data pour décider → laisser le score de base
+  }
+
+  /**
+   * Calcule les ajustements de score basés sur la zone de profit.
+   * Appliqué APRÈS le base score + riskPenalty, AVANT le contextBonus.
+   */
+  private computeProfitZoneAdjustment(
+    category: ActionCategory,
+    profitAnalysis: ProfitAnalysis,
+    orders: number,
+  ): number {
+    let adjustment = 0;
+
+    switch (profitAnalysis.zone) {
+      case 'profitable':
+        // Zone rentable : favoriser l'investissement
+        if (category === 'bid_up') adjustment += 20;
+        if (category === 'harvest') adjustment += 15;
+        if (category === 'pause') adjustment -= 30;
+        break;
+
+      case 'optimization':
+        // Zone d'optimisation : favoriser bid_down, pénaliser pause
+        if (category === 'bid_down') adjustment += 15;
+        if (category === 'pause') adjustment -= 25;
+        break;
+
+      case 'exploration':
+        // Zone exploration : monitoring, pas de bonus fort
+        if (category === 'bid_down') adjustment += 5;
+        break;
+
+      case 'unprofitable':
+        // Zone non rentable : logique existante suffit
+        break;
+    }
+
+    // Pénalité globale pause si le mot-clé a des commandes
+    if (category === 'pause' && orders > 0 && profitAnalysis.zone !== 'unprofitable') {
+      adjustment -= 15;
+    }
+
+    return adjustment;
+  }
 
   /**
    * Classifie un actionType en catégorie de la matrice.
@@ -330,17 +481,25 @@ export class StrategyEngine {
    * Post-process recommendations with strategy scoring.
    * Groups by entityKey, scores each, and marks the best per entity.
    *
+   * Now includes economic analysis: break-even ACoS, profit zones,
+   * and hard guards against pausing profitable keywords.
+   *
    * @param recos - Raw recommendations from the RulesEngine
    * @param lifecyclePhase - Current book lifecycle phase
+   * @param strategyContext - Economic context (royaltyRate for break-even)
    * @param budgetGuard - Optional budget guard settings
    * @returns Enriched recommendations with strategy fields
    */
   process(
     recos: StrategyInput[],
     lifecyclePhase: LifecyclePhase,
+    strategyContext?: StrategyContext,
     budgetGuard?: { maxSpend7d?: number; currentSpend7d?: number },
   ): StrategyResult[] {
     if (recos.length === 0) return [];
+
+    // ── Economic context ──
+    const breakEvenAcos = this.calculateBreakEvenAcos(strategyContext);
 
     // ── Step 1: Score each recommendation ──
     const scored: Array<StrategyInput & {
@@ -352,16 +511,27 @@ export class StrategyEngine {
       const category = this.categorizeAction(reco.actionType);
       const matrixEntry = SCORING_MATRIX[category]?.[lifecyclePhase] || { base: 50, riskPenalty: 0 };
       const metrics = reco.contextData?.metrics || {};
+      const acos = Number(metrics.acos || 0);
+      const orders = Number(metrics.orders || 0);
 
       // Base score from matrix
       let score = matrixEntry.base;
 
-      // Apply risk penalty
+      // Apply risk penalty (lifecycle-based)
       if (matrixEntry.riskPenalty) {
         score += matrixEntry.riskPenalty;
       }
 
-      // Context bonus
+      // ── Economic analysis ──
+      const profitAnalysis = this.classifyProfitZone(acos, breakEvenAcos, orders);
+
+      // HARD GUARD : pénalité pause si mot-clé rentable
+      score -= this.computePauseGuardPenalty(category, metrics, profitAnalysis);
+
+      // Ajustements basés sur la zone de profit
+      score += this.computeProfitZoneAdjustment(category, profitAnalysis, orders);
+
+      // Context bonus (existant — métriques granulaires)
       score += this.computeContextBonus(category, metrics, lifecyclePhase);
 
       // Confidence score bonus (0-10 points)
@@ -441,10 +611,21 @@ export class StrategyEngine {
       };
     });
 
-    this.logger.debug(
-      `Strategy processed ${recos.length} recos for phase=${lifecyclePhase}: ` +
+    this.logger.log(
+      `[BREAK-EVEN V2] Strategy processed ${recos.length} recos for phase=${lifecyclePhase} ` +
+      `(breakEvenACoS=${breakEvenAcos}%): ` +
       `${recommendedIds.size} recommended, ${recos.length - recommendedIds.size} alternatives`,
     );
+
+    // Log détaillé par reco pour debug
+    for (const item of scored) {
+      const metrics = item.contextData?.metrics || {};
+      this.logger.log(
+        `  [RECO] ${item.actionType} | entity=${item.entityKey} | ` +
+        `score=${item.score} | orders=${metrics.orders} | acos=${metrics.acos} | ` +
+        `clicks=${metrics.clicks} | category=${item.category}`,
+      );
+    }
 
     return results;
   }

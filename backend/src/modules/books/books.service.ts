@@ -17,6 +17,7 @@ import { eq, and, inArray, sql, gte, lte, desc } from 'drizzle-orm';
 import type { Book, NewBook, CampaignBookMapping } from '@/db/schema';
 import type { LifecyclePhase } from '@/db/schema/books';
 import { StrategyEngine } from '../strategy/strategy-engine';
+import { GUARDS } from '@/config/guards';
 
 export interface CreateBookDto {
   workspaceId: string;
@@ -818,6 +819,7 @@ export class BooksService {
     // entityCampaignMap : entityKey → nom de la campagne parente
     const entityNameMap = new Map<string, string>();
     const entityCampaignMap = new Map<string, string>();
+    const entityTargetingTypeMap = new Map<string, string>();
     if (recos.length > 0) {
       // Grouper les entityKeys par type
       const campaignIds: number[] = [];
@@ -837,18 +839,22 @@ export class BooksService {
         }
       }
 
-      // Résoudre les noms de campagnes
+      // Résoudre les noms de campagnes + targetingType
       if (campaignIds.length > 0) {
         const campaignNames = await this.db
           .select({
             amazonCampaignId: campaigns.amazonCampaignId,
             name: campaigns.name,
+            targetingType: campaigns.targetingType,
           })
           .from(campaigns)
           .where(inArray(campaigns.amazonCampaignId, campaignIds));
 
         for (const c of campaignNames) {
           entityNameMap.set(`campaign:${c.amazonCampaignId}`, c.name);
+          if (c.targetingType) {
+            entityTargetingTypeMap.set(`campaign:${c.amazonCampaignId}`, c.targetingType);
+          }
         }
       }
 
@@ -872,13 +878,15 @@ export class BooksService {
         }
         const adGroupIdsList = Array.from(adGroupIdSet);
 
-        // Map adGroupId → campaignName
+        // Map adGroupId → campaignName + targetingType
         const adGroupToCampaignName = new Map<string, string>();
+        const adGroupToTargetingType = new Map<string, string>();
         if (adGroupIdsList.length > 0) {
           const agCampaignData = await this.db
             .select({
               agId: adGroups.id,
               campaignName: campaigns.name,
+              targetingType: campaigns.targetingType,
             })
             .from(adGroups)
             .innerJoin(campaigns, eq(adGroups.campaignId, campaigns.id))
@@ -886,6 +894,9 @@ export class BooksService {
 
           for (const row of agCampaignData) {
             adGroupToCampaignName.set(row.agId, row.campaignName || 'Campagne sans nom');
+            if (row.targetingType) {
+              adGroupToTargetingType.set(row.agId, row.targetingType);
+            }
           }
         }
 
@@ -903,9 +914,12 @@ export class BooksService {
             : k.keywordText;
           entityNameMap.set(`keyword:${k.amazonKeywordId}`, label);
 
-          // Associer le nom de la campagne parente
+          // Associer le nom de la campagne parente + targetingType
           if (k.adGroupId && adGroupToCampaignName.has(k.adGroupId)) {
             entityCampaignMap.set(`keyword:${k.amazonKeywordId}`, adGroupToCampaignName.get(k.adGroupId)!);
+          }
+          if (k.adGroupId && adGroupToTargetingType.has(k.adGroupId)) {
+            entityTargetingTypeMap.set(`keyword:${k.amazonKeywordId}`, adGroupToTargetingType.get(k.adGroupId)!);
           }
         }
       }
@@ -958,17 +972,92 @@ export class BooksService {
     const lifecyclePhase = this.getEffectiveLifecyclePhase(book);
     const phaseInfo = this.getPhaseInfo(lifecyclePhase, book.publicationDate);
 
-    // ── Strategy Engine post-processing ──
-    const strategyInputs = recos.map((r: any) => ({
-      id: r.id,
-      entityKey: r.entityKey,
-      entityType: r.entityType,
-      actionType: r.actionType,
-      contextData: r.contextData,
-      confidenceScore: r.confidenceScore ? Number(r.confidenceScore) : null,
-    }));
+    // ── Métriques fraîches par entityKey (14j) pour le Strategy Engine ──
+    // Les contextData.metrics des recos sont des snapshots du moment où la règle a été créée.
+    // Pour que le Strategy Engine score sur la réalité actuelle, on charge des métriques fraîches.
+    const STRATEGY_METRICS_DAYS = 14;
+    const freshMetricsMap = new Map<string, Record<string, any>>();
 
-    const strategyResults = this.strategyEngine.process(strategyInputs, lifecyclePhase);
+    if (recos.length > 0) {
+      const recoEntityKeys = [...new Set(recos.map((r: any) => r.entityKey).filter(Boolean))];
+      const recoEntityTypes = [...new Set(recos.map((r: any) => r.entityType).filter(Boolean))];
+
+      if (recoEntityKeys.length > 0) {
+        const freshEnd = new Date();
+        const freshStart = new Date();
+        freshStart.setDate(freshStart.getDate() - (STRATEGY_METRICS_DAYS - 1));
+        const freshStartDate = freshStart.toISOString().split('T')[0];
+        const freshEndDate = freshEnd.toISOString().split('T')[0];
+
+        // Agréger métriques par entityKey, en prenant tous les entityTypes possibles
+        for (const entityType of recoEntityTypes) {
+          const entityKeysForType = recoEntityKeys.filter(k => k.startsWith(`${entityType}:`));
+          if (entityKeysForType.length === 0) continue;
+
+          const freshRows = await this.db
+            .select({
+              entityKey: dailyMetrics.entityKey,
+              impressions: sql<number>`COALESCE(SUM(${dailyMetrics.impressions}), 0)`,
+              clicks: sql<number>`COALESCE(SUM(${dailyMetrics.clicks}), 0)`,
+              spend: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.spend} AS DECIMAL)), 0)`,
+              sales: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.sales} AS DECIMAL)), 0)`,
+              orders: sql<number>`COALESCE(SUM(${dailyMetrics.orders}), 0)`,
+            })
+            .from(dailyMetrics)
+            .where(
+              and(
+                eq(dailyMetrics.entityType, entityType),
+                inArray(dailyMetrics.entityKey, entityKeysForType),
+                gte(dailyMetrics.date, freshStartDate),
+                lte(dailyMetrics.date, freshEndDate),
+              ),
+            )
+            .groupBy(dailyMetrics.entityKey);
+
+          for (const row of freshRows) {
+            const spend = Number(row.spend);
+            const sales = Number(row.sales);
+            const clicks = Number(row.clicks);
+            const orders = Number(row.orders);
+            freshMetricsMap.set(row.entityKey, {
+              impressions: Number(row.impressions),
+              clicks,
+              spend,
+              sales,
+              orders,
+              acos: sales > 0 ? Math.round((spend / sales) * 10000) / 100 : null,
+              ctr: Number(row.impressions) > 0 ? Math.round((clicks / Number(row.impressions)) * 10000) / 100 : 0,
+              cvr: clicks > 0 ? Math.round((orders / clicks) * 10000) / 100 : 0,
+            });
+          }
+        }
+      }
+    }
+
+    // ── Strategy Engine post-processing ──
+    // Override contextData.metrics avec les métriques fraîches si disponibles
+    const strategyInputs = recos.map((r: any) => {
+      const freshMetrics = freshMetricsMap.get(r.entityKey);
+      const contextData = freshMetrics
+        ? { ...r.contextData, metrics: freshMetrics }
+        : r.contextData;
+
+      return {
+        id: r.id,
+        entityKey: r.entityKey,
+        entityType: r.entityType,
+        actionType: r.actionType,
+        contextData,
+        confidenceScore: r.confidenceScore ? Number(r.confidenceScore) : null,
+      };
+    });
+
+    // Contexte économique : break-even ACoS basé sur le royalty rate du livre
+    const strategyContext = {
+      royaltyRate: book.royaltyRate ? Number(book.royaltyRate) : undefined,
+      defaultRoyaltyRate: GUARDS.DEFAULT_ROYALTY_RATE,
+    };
+    const strategyResults = this.strategyEngine.process(strategyInputs, lifecyclePhase, strategyContext);
     const strategyMap = new Map(strategyResults.map((s) => [s.id, s]));
 
     return {
@@ -1005,12 +1094,14 @@ export class BooksService {
         }
         const strategy = strategyMap.get(r.id);
         const campaignName = entityCampaignMap.get(entityKey) || null;
+        const campaignTargetingType = entityTargetingTypeMap.get(entityKey) || null;
         return {
           id: r.id,
           entityType: r.entityType,
           entityKey: r.entityKey,
           entityName,
           campaignName,
+          campaignTargetingType,
           actionType: r.actionType,
           suggestedAction: r.suggestedAction,
           contextData: r.contextData,
@@ -1363,6 +1454,7 @@ export class BooksService {
           : '';
         return {
           id: k.id,
+          amazonKeywordId: String(k.amazonKeywordId),
           keywordText: k.keywordText,
           matchType: matchLabel,
           matchTypeRaw: k.matchType,
@@ -1393,6 +1485,7 @@ export class BooksService {
         }
         return {
           id: t.id,
+          amazonTargetId: String(t.amazonTargetId),
           expressionType: t.expressionType,
           expression: label || t.expressionType || 'Cible produit',
           state: t.state,
