@@ -7,6 +7,7 @@ import { MetricsGrid } from '@/components/ui/MetricCard';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { RecommendationCard } from '@/components/features/RecommendationCard';
 import { RoyaltyEditor, RoyaltyValues } from '@/components/features/RoyaltyEditor';
+import { CampaignDetailView } from '@/components/features/CampaignDetailView';
 import { CardSkeleton } from '@/components/ui/Skeleton';
 import { useSafety } from '@/lib/hooks/useSafety';
 import {
@@ -525,7 +526,7 @@ export default function BookDetailPage() {
         {[
           { key: 'overview' as const, label: t('book_detail.tab_overview') },
           { key: 'details' as const, label: t('book_detail.tab_details') },
-          { key: 'advanced' as const, label: t('book_detail.tab_advanced') },
+          { key: 'advanced' as const, label: 'Campagnes' },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -587,7 +588,7 @@ export default function BookDetailPage() {
                   Mes conseils pour toi ({humanRecos.length})
                 </h2>
                 <p className="text-xs text-slate-400">
-                  Basé sur les 30 derniers jours
+                  Analyse sur les 7 derniers jours
                 </p>
               </div>
               <div className="space-y-6">
@@ -672,59 +673,9 @@ export default function BookDetailPage() {
         </div>
       )}
 
-      {/* ══════════════ ONGLET 3: Avancé — Campagnes associées ══════════════ */}
+      {/* ══════════════ ONGLET 3: Campagnes — Vue détaillée ══════════════ */}
       {activeTab === 'advanced' && (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Campagnes associées ({(bookCampaigns || []).length})</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {(!bookCampaigns || bookCampaigns.length === 0) ? (
-                <p className="text-sm text-slate-500 text-center py-6">
-                  Aucune campagne associée à ce livre. Lie des campagnes depuis la page d'accueil.
-                </p>
-              ) : (
-                <div className="divide-y divide-slate-100">
-                  {bookCampaigns.map((c: any) => {
-                    const stateConfig: Record<string, { label: string; bg: string; text: string }> = {
-                      enabled: { label: 'Active', bg: 'bg-emerald-100', text: 'text-emerald-700' },
-                      paused: { label: 'En pause', bg: 'bg-amber-100', text: 'text-amber-700' },
-                      archived: { label: 'Archivée', bg: 'bg-slate-100', text: 'text-slate-500' },
-                    };
-                    const sc = stateConfig[c.state] || stateConfig.enabled;
-                    const typeLabels: Record<string, string> = {
-                      sponsoredProducts: 'SP',
-                      sponsoredBrands: 'SB',
-                      sponsoredDisplay: 'SD',
-                    };
-                    return (
-                      <div key={c.id} className="flex items-center justify-between py-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${sc.bg} ${sc.text}`}>
-                            {sc.label}
-                          </span>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-slate-900 truncate">
-                              {c.name}
-                              {c.isPrimary && (
-                                <span className="ml-2 text-xs text-brand-600 font-normal">(principale)</span>
-                              )}
-                            </p>
-                            <p className="text-xs text-slate-400">
-                              {typeLabels[c.campaignType] || c.campaignType}
-                              {c.dailyBudget && ` · ${Number(c.dailyBudget).toFixed(2)}€/jour`}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <CampaignDetailView bookId={bookId} syncCompletedCount={syncCompletedCount} />
       )}
     </div>
   );

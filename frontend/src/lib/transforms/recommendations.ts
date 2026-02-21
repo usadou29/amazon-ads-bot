@@ -23,6 +23,8 @@ export interface HumanRecommendation {
   entityType: string;
   /** Clé d'entité brute (pour regroupement) */
   entityKey: string;
+  /** Nom de la campagne parente (pour keywords et search terms) */
+  campaignName: string | null;
   /** Score de confiance (0-100) */
   confidence: number | null;
   /** Métriques clés extraites de contextData */
@@ -58,6 +60,8 @@ export interface HumanRecommendation {
   consentLevel: 'none' | 'basic' | 'reinforced';
   /** Message pédagogique à afficher dans la modale de consentement */
   consentMessage?: string;
+  /** Période d'analyse des métriques (en jours) — ex: 7 = derniers 7 jours */
+  metricsPeriodDays: number;
 }
 
 interface RuleTemplate {
@@ -516,6 +520,7 @@ export function transformRecommendation(raw: any, safetyMode: boolean): HumanRec
     entityName,
     entityType,
     entityKey: raw.entityKey || '',
+    campaignName: raw.campaignName ?? null,
     confidence: raw.confidenceScore ?? null,
     metrics,
     createdAt: raw.createdAt || null,
@@ -531,6 +536,7 @@ export function transformRecommendation(raw: any, safetyMode: boolean): HumanRec
     requiresConsent: raw.requiresConsent ?? false,
     consentLevel: raw.consentLevel ?? 'none',
     consentMessage: raw.consentMessage ?? undefined,
+    metricsPeriodDays: raw.contextData?.periodDays ?? 7,
   };
 }
 

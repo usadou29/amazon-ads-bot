@@ -87,6 +87,30 @@ export class BooksController {
   }
 
   /**
+   * GET /api/books/:id/campaigns/detail
+   * Détail des campagnes avec keywords, targets et métriques
+   */
+  @Get(':id/campaigns/detail')
+  async getCampaignDetails(
+    @Param('id') id: string,
+    @Query('days') days?: string,
+  ) {
+    if (!id) {
+      throw new BadRequestException('Book ID is required');
+    }
+
+    const numDays = days ? parseInt(days, 10) : 30;
+
+    if (isNaN(numDays) || numDays < 1 || numDays > 365) {
+      throw new BadRequestException('days must be between 1 and 365');
+    }
+
+    this.logger.log(`Fetching campaign details for book ${id} (${numDays} days)`);
+
+    return this.booksService.getCampaignDetails(id, { days: numDays });
+  }
+
+  /**
    * GET /api/books/:id/metrics/daily
    * Donnees journalieres pour le graphique
    */

@@ -253,9 +253,16 @@ export function RecommendationCard({
                 </h4>
               </div>
               {reco.entityName && (
-                <p className="text-xs text-slate-400 ml-7 truncate">
-                  {reco.entityType === 'keyword' ? 'Mot-clé' : reco.entityType === 'search_term' ? 'Terme de recherche' : 'Campagne'} : {reco.entityName}
-                </p>
+                <div className="ml-7">
+                  <p className="text-xs text-slate-400 truncate">
+                    {reco.entityType === 'keyword' ? 'Mot-clé' : reco.entityType === 'search_term' ? 'Terme de recherche' : 'Campagne'} : {reco.entityName}
+                  </p>
+                  {reco.campaignName && (
+                    <p className="text-xs text-slate-300 truncate">
+                      Campagne : {reco.campaignName}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
             <div className="flex flex-col items-end gap-1 flex-shrink-0">
@@ -295,9 +302,12 @@ export function RecommendationCard({
             <p className="text-sm text-slate-700 leading-relaxed">{reco.why}</p>
           </div>
 
-          {/* ── Mini métriques (chips) ── */}
+          {/* ── Mini métriques (chips) + période ── */}
           {keyMetrics.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-3 ml-7">
+            <div className="flex flex-wrap items-center gap-2 mb-3 ml-7">
+              <span className="text-xs text-slate-300 italic">
+                {reco.metricsPeriodDays}j
+              </span>
               {keyMetrics.map((m) => (
                 <span
                   key={m.key}
