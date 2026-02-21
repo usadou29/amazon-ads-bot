@@ -228,22 +228,32 @@ export class ReportsService {
       )
       .limit(1);
 
-    // Re-request if failed OR if ingested with 0 records (likely bad columns)
+    // Re-request si :
+    // 1. Le job a échoué
+    // 2. Le job ingéré avec 0 records (probable mauvaises colonnes)
+    // 3. Le job a été ingéré il y a plus de STALE_THRESHOLD (les données changent en continu sur Amazon)
+    const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 heures
+    const isStale = existing.length > 0 &&
+      existing[0].status === 'ingested' &&
+      existing[0].ingestedAt &&
+      (Date.now() - new Date(existing[0].ingestedAt).getTime()) > STALE_THRESHOLD_MS;
+
     const shouldReRequest = existing.length > 0 && (
       existing[0].status === 'failed' ||
-      (existing[0].status === 'ingested' && (existing[0].recordsProcessed ?? 0) === 0)
+      (existing[0].status === 'ingested' && (existing[0].recordsProcessed ?? 0) === 0) ||
+      isStale
     );
 
     if (existing.length > 0 && !shouldReRequest) {
       this.logger.debug(
-        `Report job already exists for ${reportType} ${profile.marketplace} (${existing[0].status}, records=${existing[0].recordsProcessed}) – skipping`,
+        `Report job already exists for ${reportType} ${profile.marketplace} (${existing[0].status}, records=${existing[0].recordsProcessed}, age=${existing[0].ingestedAt ? Math.round((Date.now() - new Date(existing[0].ingestedAt).getTime()) / 60000) + 'min' : '?'}) – skipping`,
       );
       return existing[0];
     }
 
     if (existing.length > 0 && shouldReRequest) {
       this.logger.log(
-        `Re-requesting report ${reportType} ${profile.marketplace} (was ${existing[0].status}, records=${existing[0].recordsProcessed})`,
+        `Re-requesting report ${reportType} ${profile.marketplace} (was ${existing[0].status}, records=${existing[0].recordsProcessed}${isStale ? ', STALE' : ''})`,
       );
     }
 

@@ -563,9 +563,10 @@ export class BooksService {
   }
 
   private getDefaultDateRange(): { startDate: string; endDate: string } {
+    // 30 derniers jours incluant aujourd'hui (cohérent avec Amazon Ads)
     const end = new Date();
     const start = new Date();
-    start.setDate(start.getDate() - 30);
+    start.setDate(start.getDate() - 29); // 30 jours = aujourd'hui - 29
     return {
       startDate: start.toISOString().split('T')[0],
       endDate: end.toISOString().split('T')[0],
@@ -1077,9 +1078,10 @@ export class BooksService {
       return [];
     }
 
+    // Même logique que getCampaignDetails : N derniers jours incluant aujourd'hui
     const end = new Date();
     const start = new Date();
-    start.setDate(start.getDate() - days);
+    start.setDate(start.getDate() - (days - 1));
 
     const dailyData = await this.db
       .select({
@@ -1165,14 +1167,13 @@ export class BooksService {
     }
 
     // 3. Date range
-    // Pour "Aujourd'hui" (days=1), on veut uniquement la date du jour
-    // Pour les autres périodes, on recule de (days-1) jours pour avoir exactement N jours
+    // Amazon Ads "N derniers jours" = les N derniers jours calendaires INCLUANT aujourd'hui.
+    // Ex: "7 derniers jours" le 21 février = du 15 au 21 février (7 jours).
+    // "Aujourd'hui" (days=1) = uniquement le 21 février.
+    // Formule universelle : end = aujourd'hui, start = aujourd'hui - (days - 1)
     const end = new Date();
     const start = new Date();
-    if (days > 1) {
-      start.setDate(start.getDate() - (days - 1));
-    }
-    // Quand days=1 : start = end = aujourd'hui
+    start.setDate(start.getDate() - (days - 1));
     const startDate = start.toISOString().split('T')[0];
     const endDate = end.toISOString().split('T')[0];
 
