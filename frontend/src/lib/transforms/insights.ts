@@ -21,6 +21,7 @@ export enum TrendDirection {
 
 export enum EntityDiagnosisCode {
   NO_IMPRESSIONS = 'no_impressions',
+  ZERO_CLICKS_LOW_VOLUME = 'zero_clicks_low_volume',
   ZERO_CLICKS = 'zero_clicks',
   VERY_LOW_CLICKS = 'very_low_clicks',
   LOW_CLICKS = 'low_clicks',
@@ -73,6 +74,8 @@ export interface CampaignMacroStrategy {
   eligibleCount: number;
 }
 
+export type CampaignTargetingType = 'keyword' | 'product' | 'auto';
+
 export interface CampaignInsight {
   campaignId: string;
   diagnosisCode: CampaignDiagnosisCode;
@@ -87,6 +90,7 @@ export interface CampaignInsight {
     strategicCvr: number | null;
     trendCvr: number | null;
   };
+  targetingType?: CampaignTargetingType;
 }
 
 export interface EntityInsight {
@@ -196,6 +200,13 @@ const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
     summaryKey: 'insights.entity.no_impressions.summary',
     nextStepKey: 'insights.entity.no_impressions.nextStep',
   },
+  [EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME]: {
+    titleKey: 'insights.entity.zero_clicks_low_volume.title',
+
+    explanationKey: 'insights.entity.zero_clicks_low_volume.explanation',
+    summaryKey: 'insights.entity.zero_clicks_low_volume.summary',
+    nextStepKey: 'insights.entity.zero_clicks_low_volume.nextStep',
+  },
   [EntityDiagnosisCode.ZERO_CLICKS]: {
     titleKey: 'insights.entity.zero_clicks.title',
 
@@ -262,6 +273,7 @@ export const CAMPAIGN_DIAGNOSIS_COLORS: Record<string, { bg: string; text: strin
 
 export const ENTITY_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   [EntityDiagnosisCode.NO_IMPRESSIONS]: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
+  [EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
   [EntityDiagnosisCode.ZERO_CLICKS]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
   [EntityDiagnosisCode.VERY_LOW_CLICKS]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
   [EntityDiagnosisCode.LOW_CLICKS]: { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200' },
@@ -295,6 +307,19 @@ export const EXECUTION_COLORS: Record<ActionExecution, { bg: string; text: strin
   none: { bg: 'bg-slate-100', text: 'text-slate-600', icon: '👁' },
 };
 
+// ── Targeting Type Labels ────────────────────────────────────
+
+export function getEntityLabel(targetingType?: CampaignTargetingType, plural = false): string {
+  switch (targetingType) {
+    case 'product':
+      return plural ? 'produits ciblés' : 'produit ciblé';
+    case 'auto':
+      return plural ? 'cibles' : 'cible';
+    default:
+      return plural ? 'mots-clés' : 'mot-clé';
+  }
+}
+
 // ── Render Functions ────────────────────────────────────────
 
 function getConfidenceInfo(score: number): { label: string; level: 'high' | 'medium' | 'low' } {
@@ -327,7 +352,9 @@ export function renderCampaignInsight(insight: CampaignInsight): RenderedCampaig
   const conf = getConfidenceInfo(insight.confidenceScore);
   const ms = insight.macroStrategy;
 
-  // Build strategy-specific params
+  // Build strategy-specific params with dynamic entity labels
+  const entityLabel = getEntityLabel(insight.targetingType);
+  const entityLabelPlural = getEntityLabel(insight.targetingType, true);
   const strategyParams: Record<string, string | number> = {
     ...params,
     winnersCount: ms.winnersCount.toString(),
@@ -338,6 +365,8 @@ export function renderCampaignInsight(insight: CampaignInsight): RenderedCampaig
     expensiveCount: ms.expensiveCount.toString(),
     totalEntities: ms.totalEntities.toString(),
     eligibleCount: ms.eligibleCount.toString(),
+    entityLabel,
+    entityLabelPlural,
   };
 
   const trendDir = insight.trendDirection || TrendDirection.STABLE;
@@ -357,6 +386,14 @@ export function renderCampaignInsight(insight: CampaignInsight): RenderedCampaig
   };
 }
 
+function entityTypeToLabel(entityType: string): string {
+  switch (entityType) {
+    case 'target': return 'produit ciblé';
+    case 'search_term': return 'terme de recherche';
+    default: return 'mot-clé';
+  }
+}
+
 export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
   const template = ENTITY_INSIGHT_TEMPLATES[insight.diagnosisCode];
   if (!template) {
@@ -371,7 +408,10 @@ export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
     };
   }
 
-  const params = buildParams(insight.summaryFacts);
+  const params = {
+    ...buildParams(insight.summaryFacts),
+    entityLabel: entityTypeToLabel(insight.entityType),
+  };
   const conf = getConfidenceInfo(insight.confidenceScore);
 
   return {

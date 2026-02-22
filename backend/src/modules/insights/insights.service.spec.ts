@@ -16,7 +16,7 @@ import {
  *
  * Couvre :
  * - 7 Campaign Diagnosis Codes
- * - 8 Entity Diagnosis Codes (NO_IMPRESSIONS, ZERO_CLICKS, VERY_LOW_CLICKS, LOW_CLICKS, CLICKS_NO_SALES, EXPENSIVE_BUT_VALID, WINNER, BOOST_CANDIDATE)
+ * - 9 Entity Diagnosis Codes (NO_IMPRESSIONS, ZERO_CLICKS_LOW_VOLUME, ZERO_CLICKS, VERY_LOW_CLICKS, LOW_CLICKS, CLICKS_NO_SALES, EXPENSIVE_BUT_VALID, WINNER, BOOST_CANDIDATE)
  * - Eligibility (séparation diagnostic vs action)
  * - 3 Break-Even Guards
  * - 3 Lifecycle Variations
@@ -178,7 +178,30 @@ describe('InsightsService', () => {
       expect(insight.eligibility).toBe(false);
     });
 
-    it('ZERO_CLICKS: impressions > 0, clicks === 0 → "Vu mais ignoré"', () => {
+    it('ZERO_CLICKS_LOW_VOLUME: impressions < 300, clicks === 0 → "Peu de visibilité"', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 93, clicks: 0, spend: 0, sales: 0, orders: 0 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME);
+      expect(insight.eligibility).toBe(false);
+    });
+
+    it('ZERO_CLICKS_LOW_VOLUME: exactly 299 impressions → still low volume', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 299, clicks: 0, spend: 0, sales: 0, orders: 0 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME);
+    });
+
+    it('ZERO_CLICKS: impressions >= 300, clicks === 0 → "Vu mais ignoré"', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 500, clicks: 0, spend: 0, sales: 0, orders: 0 }),
@@ -188,6 +211,17 @@ describe('InsightsService', () => {
       );
       expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.ZERO_CLICKS);
       expect(insight.eligibility).toBe(false);
+    });
+
+    it('ZERO_CLICKS: exactly 300 impressions → confirmed ignored', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 300, clicks: 0, spend: 0, sales: 0, orders: 0 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.ZERO_CLICKS);
     });
 
     it('VERY_LOW_CLICKS: 1-4 clicks → "Très peu de clics"', () => {
@@ -346,7 +380,7 @@ describe('InsightsService', () => {
     it('should be false for all pre-15-clicks diagnoses', () => {
       const cases = [
         makeMetrics({ impressions: 0, clicks: 0 }),              // NO_IMPRESSIONS
-        makeMetrics({ impressions: 100, clicks: 0 }),             // ZERO_CLICKS
+        makeMetrics({ impressions: 100, clicks: 0 }),             // ZERO_CLICKS_LOW_VOLUME
         makeMetrics({ impressions: 100, clicks: 3 }),             // VERY_LOW_CLICKS
         makeMetrics({ impressions: 300, clicks: 10 }),            // LOW_CLICKS
       ];
@@ -375,7 +409,8 @@ describe('InsightsService', () => {
     it('every diagnosis should have a non-empty suggestedActions list (even pre-eligibility) for entity insights', () => {
       const cases = [
         makeMetrics({ impressions: 0 }),                         // NO_IMPRESSIONS
-        makeMetrics({ impressions: 100, clicks: 0 }),             // ZERO_CLICKS
+        makeMetrics({ impressions: 100, clicks: 0 }),             // ZERO_CLICKS_LOW_VOLUME
+        makeMetrics({ impressions: 500, clicks: 0 }),             // ZERO_CLICKS
         makeMetrics({ impressions: 200, clicks: 3 }),             // VERY_LOW_CLICKS
         makeMetrics({ impressions: 300, clicks: 10 }),            // LOW_CLICKS
         makeMetrics({ impressions: 500, clicks: 25, spend: 15, sales: 0, orders: 0 }), // CLICKS_NO_SALES
@@ -494,7 +529,7 @@ describe('InsightsService', () => {
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING);
     });
 
-    it('should handle zero clicks gracefully', () => {
+    it('should handle zero clicks gracefully (low volume)', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 100, clicks: 0, spend: 0, sales: 0 }),
@@ -502,7 +537,7 @@ describe('InsightsService', () => {
         BREAK_EVEN,
         PERIOD_DAYS,
       );
-      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.ZERO_CLICKS);
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME);
       expect(insight.summaryFacts.ctr).toBe(0);
       expect(insight.summaryFacts.cvr).toBeNull();
     });
@@ -578,7 +613,8 @@ describe('InsightsService', () => {
     it('should always produce 1-3 suggested actions for all entity codes', () => {
       const testCases = [
         makeMetrics({ impressions: 0 }),                                                   // NO_IMPRESSIONS
-        makeMetrics({ impressions: 100, clicks: 0 }),                                       // ZERO_CLICKS
+        makeMetrics({ impressions: 100, clicks: 0 }),                                       // ZERO_CLICKS_LOW_VOLUME
+        makeMetrics({ impressions: 500, clicks: 0 }),                                       // ZERO_CLICKS
         makeMetrics({ impressions: 200, clicks: 3 }),                                       // VERY_LOW_CLICKS
         makeMetrics({ impressions: 300, clicks: 10 }),                                      // LOW_CLICKS
         makeMetrics({ impressions: 500, clicks: 25, spend: 15, sales: 0, orders: 0 }),      // CLICKS_NO_SALES

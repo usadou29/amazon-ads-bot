@@ -43,6 +43,10 @@ export const GUARDS = {
   // Seuil minimum d'impressions pour avoir un signal fiable (campagne)
   MIN_IMPRESSIONS_FOR_SIGNAL: 300,
 
+  // Seuil minimum d'impressions pour juger le CTR d'une entité (mot-clé/produit)
+  // En dessous, on ne peut pas conclure si le problème vient de la couverture ou du manque de diffusion
+  MIN_IMPRESSIONS_FOR_CTR_SIGNAL: 300,
+
   // Période de tendance court terme (en jours)
   TREND_PERIOD_DAYS: 7,
 } as const;

@@ -17,7 +17,8 @@ export enum CampaignDiagnosisCode {
 // L'eligibility (assez de data pour une action exécutable) est séparée.
 export enum EntityDiagnosisCode {
   NO_IMPRESSIONS = 'no_impressions',     // impressions === 0
-  ZERO_CLICKS = 'zero_clicks',           // impressions > 0, clicks === 0
+  ZERO_CLICKS_LOW_VOLUME = 'zero_clicks_low_volume', // impressions > 0 && < 300, clicks === 0 → pas assez de volume pour juger
+  ZERO_CLICKS = 'zero_clicks',           // impressions >= 300, clicks === 0 → vraiment ignoré
   VERY_LOW_CLICKS = 'very_low_clicks',   // 1-4 clicks
   LOW_CLICKS = 'low_clicks',             // 5-14 clicks
   CLICKS_NO_SALES = 'clicks_no_sales',   // clicks >= 15, orders === 0 (ou ACoS trop haut)
@@ -64,6 +65,8 @@ export interface TrendAnalysis {
   trendCvr: number | null;
 }
 
+export type CampaignTargetingType = 'keyword' | 'product' | 'auto';
+
 export interface CampaignInsight {
   campaignId: string;
   diagnosisCode: CampaignDiagnosisCode;
@@ -73,6 +76,7 @@ export interface CampaignInsight {
   strategicPeriodDays: number;
   trendDirection: TrendDirection;
   trendAnalysis?: TrendAnalysis;
+  targetingType: CampaignTargetingType;
 }
 
 // ── Entity Insight ──────────────────────────────────────────

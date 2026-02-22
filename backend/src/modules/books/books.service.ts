@@ -1642,6 +1642,13 @@ export class BooksService {
         delete tg._rawRows; // clean up
       }
 
+      // Determine campaign targeting type for correct labels
+      const campTargetingType = camp.productTargets.length > 0
+        ? 'product' as const
+        : camp.targetingType === 'auto'
+          ? 'auto' as const
+          : 'keyword' as const;
+
       // Campaign insight — STRATEGIC metrics + trend, aggregates entity insights bottom-up
       camp.insight = this.insightsService.computeCampaignInsight(
         { id: camp.id, name: camp.name, dailyBudget: camp.dailyBudget },
@@ -1651,6 +1658,7 @@ export class BooksService {
         entityInsights,
         camp.dailyBudget ?? undefined,
         campTrendMetrics,
+        campTargetingType,
       );
       delete camp._campRawRows; // clean up
     }

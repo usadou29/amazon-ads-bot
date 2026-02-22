@@ -16,6 +16,7 @@ import {
   type EntityInsight,
   type InsightCampaignInput,
   type InsightEntityInput,
+  type CampaignTargetingType,
 } from './types';
 
 const MIN_CLICKS = GUARDS.MIN_CLICKS_FOR_DECISION; // 15
@@ -37,6 +38,7 @@ export class InsightsService {
     entityInsights: EntityInsight[],
     dailyBudget?: number,
     trendMetrics?: InsightMetrics,
+    targetingType?: CampaignTargetingType,
   ): CampaignInsight {
     const facts = this.buildSummaryFacts(metrics, periodDays);
     const diagnosisCode = this.diagnoseCampaign(
@@ -59,6 +61,7 @@ export class InsightsService {
       strategicPeriodDays: periodDays,
       trendDirection: trend.direction,
       trendAnalysis: trend.analysis,
+      targetingType: targetingType ?? 'keyword',
     };
   }
 
@@ -96,6 +99,7 @@ export class InsightsService {
           testingCount++;
           break;
         case EntityDiagnosisCode.NO_IMPRESSIONS:
+        case EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME:
         case EntityDiagnosisCode.ZERO_CLICKS:
           ignoredCount++;
           break;
@@ -256,6 +260,11 @@ export class InsightsService {
     }
 
     if (metrics.clicks === 0) {
+      // Pas assez d'impressions pour juger le CTR → on ne peut pas conclure
+      if (metrics.impressions < GUARDS.MIN_IMPRESSIONS_FOR_CTR_SIGNAL) {
+        return EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME;
+      }
+      // Assez d'impressions mais 0 clic → vraiment ignoré (couverture/titre à revoir)
       return EntityDiagnosisCode.ZERO_CLICKS;
     }
 
@@ -316,6 +325,10 @@ export class InsightsService {
     const actionMap: Record<EntityDiagnosisCode, InsightAction[]> = {
       [EntityDiagnosisCode.NO_IMPRESSIONS]: [
         this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
+      ],
+      [EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME]: [
+        this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
+        this.action('patience', 'none', 'insights.actions.patience', 2),
       ],
       [EntityDiagnosisCode.ZERO_CLICKS]: [
         this.action('improve_cover', 'book', 'insights.actions.improve_cover', 1),
