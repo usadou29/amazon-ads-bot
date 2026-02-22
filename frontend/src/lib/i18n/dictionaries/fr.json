@@ -36,7 +36,7 @@
     "tab_details": "Détails",
     "tab_advanced": "Avancé",
     "efficiency_title": "Efficacité de tes pubs",
-    "efficiency_desc": "Plus c'est bas, mieux c'est. En dessous de {target}%, tes pubs sont rentables.",
+    "efficiency_desc": "Plus c'est haut, mieux c'est. Au-dessus de {target}%, tes pubs sont rentables.",
     "advice_title": "Mes conseils pour toi"
   },
   "metrics": {

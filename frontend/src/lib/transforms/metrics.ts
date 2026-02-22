@@ -38,15 +38,19 @@ export function transformKPIs(raw: any, changes?: Record<string, number | null>)
   const items: { key: string; label: string; format: (v: any) => string }[] = [
     { key: 'spend', label: 'Dépenses pub', format: formatCurrency },
     { key: 'sales', label: 'Ventes générées', format: formatCurrency },
-    { key: 'acos', label: 'Efficacité pub', format: (v) => v !== null ? `${v.toFixed(1)}%` : '—' },
+    { key: 'acos', label: 'Efficacité pub', format: (v) => v !== null ? `${Math.max(0, 100 - v).toFixed(1)}%` : '—' },
     { key: 'roas', label: 'Retour sur invest.', format: (v) => v !== null ? `×${v.toFixed(2)}` : '—' },
     { key: 'impressions', label: 'Personnes touchées', format: formatNumber },
     { key: 'clicks', label: 'Clics vers ton livre', format: formatNumber },
     { key: 'orders', label: 'Ventes', format: formatNumber },
     { key: 'ctr', label: 'Taux d\'intérêt', format: formatPercent },
   ];
+  // Keys where lower raw value = better → invert trend direction
+  const invertedKeys = new Set(['acos']);
   return items.filter((i) => raw[i.key] !== undefined).map((item) => {
-    const trend = formatTrend(c[item.key] ?? null);
+    const rawChange = c[item.key] ?? null;
+    const trendChange = invertedKeys.has(item.key) && rawChange !== null ? -rawChange : rawChange;
+    const trend = formatTrend(trendChange);
     return { label: item.label, value: item.format(raw[item.key]), trend: trend?.text, trendDirection: trend?.dir };
   });
 }

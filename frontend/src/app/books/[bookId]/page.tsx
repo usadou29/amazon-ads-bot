@@ -509,32 +509,40 @@ export default function BookDetailPage() {
                 <h3 className="text-sm font-semibold text-slate-900 mb-2">
                   {t('book_detail.efficiency_title')}
                 </h3>
-                <p className="text-xs text-slate-500 mb-3">
-                  {t('book_detail.efficiency_desc').replace('{target}', String(acosTarget))}
-                </p>
-                <div className="relative h-4 bg-slate-100 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      Number(m.acos) <= acosTarget
-                        ? 'bg-emerald-500'
-                        : Number(m.acos) <= acosTarget * 1.5
-                          ? 'bg-amber-400'
-                          : 'bg-red-500'
-                    }`}
-                    style={{ width: `${Math.min(Number(m.acos), 100)}%` }}
-                  />
-                  <div
-                    className="absolute top-0 h-full w-0.5 bg-slate-400"
-                    style={{ left: `${Math.min(acosTarget, 100)}%` }}
-                  />
-                </div>
-                <div className="flex justify-between mt-1 text-xs text-slate-400">
-                  <span>0%</span>
-                  <span className="font-medium text-slate-600">
-                    Ton score : {Number(m.acos).toFixed(1)}% (cible : {acosTarget}%)
-                  </span>
-                  <span>100%</span>
-                </div>
+                {(() => {
+                  const effScore = Math.max(0, Math.min(100, 100 - Number(m.acos)));
+                  const effTarget = Math.max(0, Math.min(100, 100 - acosTarget));
+                  return (
+                    <>
+                      <p className="text-xs text-slate-500 mb-3">
+                        {t('book_detail.efficiency_desc').replace('{target}', String(effTarget))}
+                      </p>
+                      <div className="relative h-4 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            effScore >= effTarget
+                              ? 'bg-emerald-500'
+                              : effScore >= effTarget * 0.7
+                                ? 'bg-amber-400'
+                                : 'bg-red-500'
+                          }`}
+                          style={{ width: `${effScore}%` }}
+                        />
+                        <div
+                          className="absolute top-0 h-full w-0.5 bg-slate-400"
+                          style={{ left: `${effTarget}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between mt-1 text-xs text-slate-400">
+                        <span>0%</span>
+                        <span className="font-medium text-slate-600">
+                          Ton score : {effScore.toFixed(1)}% (cible : ≥{effTarget}%)
+                        </span>
+                        <span>100%</span>
+                      </div>
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
           )}
