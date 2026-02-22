@@ -3,6 +3,7 @@ import {
   CampaignDiagnosisCode,
   EntityDiagnosisCode,
   MacroStrategyCode,
+  TrendDirection,
   type InsightMetrics,
   type InsightCampaignInput,
   type InsightEntityInput,
@@ -104,7 +105,7 @@ describe('InsightsService', () => {
     it('should detect TOO_EARLY when clicks < 15', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
-        makeMetrics({ impressions: 200, clicks: 10, spend: 5, sales: 0, orders: 0 }),
+        makeMetrics({ impressions: 300, clicks: 10, spend: 5, sales: 0, orders: 0 }),
         BREAK_EVEN,
         PERIOD_DAYS,
         [],
@@ -728,12 +729,173 @@ describe('InsightsService', () => {
       const entityInsights: EntityInsight[] = [];
       const insight = service.computeCampaignInsight(
         makeCampaign(),
-        makeMetrics({ impressions: 200, clicks: 10, spend: 5, sales: 0, orders: 0 }),
+        makeMetrics({ impressions: 300, clicks: 10, spend: 5, sales: 0, orders: 0 }),
         BREAK_EVEN,
         PERIOD_DAYS,
         entityInsights,
       );
       expect(insight.macroStrategy.macroStrategyCode).toBe(MacroStrategyCode.NO_SIGNAL_YET);
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // LOW_SIGNAL CAMPAIGN DIAGNOSIS
+  // ══════════════════════════════════════════════════════════
+
+  describe('LOW_SIGNAL Campaign Diagnosis', () => {
+    it('should detect LOW_SIGNAL when impressions > 0 but < 300', () => {
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 150, clicks: 5, spend: 2, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        [],
+      );
+      expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.LOW_SIGNAL);
+    });
+
+    it('should NOT be LOW_SIGNAL with exactly 300 impressions', () => {
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 300, clicks: 0, spend: 0, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        [],
+      );
+      // 300 impressions, 0 clicks → IGNORED (not LOW_SIGNAL)
+      expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.IGNORED);
+    });
+
+    it('should NOT be LOW_SIGNAL with 299 impressions — should be LOW_SIGNAL', () => {
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 299, clicks: 3, spend: 1, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        [],
+      );
+      expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.LOW_SIGNAL);
+    });
+
+    it('should still be INVISIBLE when impressions === 0', () => {
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 0, clicks: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        [],
+      );
+      expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.INVISIBLE);
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // STRATEGIC PERIOD FIELDS
+  // ══════════════════════════════════════════════════════════
+
+  describe('Strategic Period Fields', () => {
+    it('should include strategicPeriodDays in campaign insight', () => {
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 500, clicks: 30, spend: 20, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        7, // strategic period = 7 days (launch)
+        [],
+      );
+      expect(insight.strategicPeriodDays).toBe(7);
+    });
+
+    it('should include trendDirection STABLE when no trend metrics provided', () => {
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 500, clicks: 30, spend: 20, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        [],
+      );
+      expect(insight.trendDirection).toBe(TrendDirection.STABLE);
+    });
+
+    it('should include trendDirection from trend metrics when provided', () => {
+      const strategicMetrics = makeMetrics({ impressions: 1000, clicks: 100, spend: 100, sales: 300, orders: 10 });
+      // ACoS strategic = 100/300*100 = 33.3%
+      const trendMetrics = makeMetrics({ impressions: 300, clicks: 30, spend: 20, sales: 150, orders: 5 });
+      // ACoS trend = 20/150*100 = 13.3% → much lower than 33.3% → UP
+
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        strategicMetrics,
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        [],
+        undefined,
+        trendMetrics,
+      );
+      expect(insight.trendDirection).toBe(TrendDirection.UP);
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // TREND ANALYSIS (4 tests)
+  // ══════════════════════════════════════════════════════════
+
+  describe('Trend Analysis', () => {
+    it('should detect UP when trend ACoS is much lower than strategic ACoS', () => {
+      const result = service.computeTrend(
+        makeMetrics({ impressions: 1000, clicks: 100, spend: 60, sales: 200, orders: 10 }),
+        // strategic ACoS = 60/200*100 = 30%
+        makeMetrics({ impressions: 300, clicks: 30, spend: 12, sales: 60, orders: 3 }),
+        // trend ACoS = 12/60*100 = 20% → 20 < 30*0.85=25.5 → UP
+      );
+      expect(result.direction).toBe(TrendDirection.UP);
+    });
+
+    it('should detect DOWN when trend ACoS is much higher than strategic ACoS', () => {
+      const result = service.computeTrend(
+        makeMetrics({ impressions: 1000, clicks: 100, spend: 60, sales: 200, orders: 10 }),
+        // strategic ACoS = 30%
+        makeMetrics({ impressions: 300, clicks: 30, spend: 30, sales: 60, orders: 3 }),
+        // trend ACoS = 30/60*100 = 50% → 50 > 30*1.15=34.5 → DOWN
+      );
+      expect(result.direction).toBe(TrendDirection.DOWN);
+    });
+
+    it('should detect STABLE when ACoS is similar', () => {
+      const result = service.computeTrend(
+        makeMetrics({ impressions: 1000, clicks: 100, spend: 60, sales: 200, orders: 10 }),
+        // strategic ACoS = 30%
+        makeMetrics({ impressions: 300, clicks: 30, spend: 18, sales: 60, orders: 3 }),
+        // trend ACoS = 18/60*100 = 30% → same → STABLE
+      );
+      expect(result.direction).toBe(TrendDirection.STABLE);
+    });
+
+    it('should detect STABLE when no clicks in trend period (not DOWN)', () => {
+      const result = service.computeTrend(
+        makeMetrics({ impressions: 1000, clicks: 100, spend: 60, sales: 200, orders: 10 }),
+        makeMetrics({ impressions: 50, clicks: 0, spend: 0, sales: 0, orders: 0 }),
+      );
+      expect(result.direction).toBe(TrendDirection.STABLE);
+    });
+
+    it('should detect UP when CVR is significantly higher in trend', () => {
+      const result = service.computeTrend(
+        makeMetrics({ impressions: 1000, clicks: 100, spend: 60, sales: 200, orders: 5 }),
+        // strategic CVR = 5/100*100 = 5%
+        makeMetrics({ impressions: 300, clicks: 30, spend: 18, sales: 60, orders: 3 }),
+        // trend CVR = 3/30*100 = 10% → 10 > 5*1.15=5.75 → UP
+      );
+      expect(result.direction).toBe(TrendDirection.UP);
+    });
+
+    it('should include trend analysis data', () => {
+      const result = service.computeTrend(
+        makeMetrics({ impressions: 1000, clicks: 100, spend: 60, sales: 200, orders: 10 }),
+        makeMetrics({ impressions: 300, clicks: 30, spend: 18, sales: 60, orders: 3 }),
+      );
+      expect(result.analysis).toBeDefined();
+      expect(result.analysis.strategicAcos).toBeCloseTo(30, 0);
+      expect(result.analysis.trendAcos).toBeCloseTo(30, 0);
     });
   });
 });

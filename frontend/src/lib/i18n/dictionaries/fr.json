@@ -112,6 +112,11 @@
         "summary": "0 impression sur {periodDays} jours",
         "explanation": "Personne ne voit ta campagne. Augmente les enchères ou vérifie que ta campagne est bien active."
       },
+      "low_signal": {
+        "title": "Signal faible",
+        "summary": "{impressions} impr. sur {periodDays}j — signal insuffisant",
+        "explanation": "Seulement {impressions} impressions sur {periodDays} jours. Il faut au moins 300 impressions pour tirer des conclusions fiables. Vérifie que tes enchères sont compétitives."
+      },
       "ignored": {
         "title": "Visible mais ignorée",
         "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
@@ -244,6 +249,14 @@
         "title": "Pas encore de signal",
         "summary": "Aucun mot-clé n'a encore accumulé assez de données. Patiente quelques jours."
       }
+    },
+    "trend": {
+      "up": "En amélioration",
+      "stable": "Stable",
+      "down": "En baisse"
+    },
+    "period": {
+      "label": "Sur {days}j"
     },
     "why_column": "Pourquoi ?",
     "campaign_summary": "Résumé campagne"

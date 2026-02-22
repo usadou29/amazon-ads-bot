@@ -6,6 +6,8 @@ import {
   renderCampaignInsight,
   CAMPAIGN_DIAGNOSIS_COLORS,
   MACRO_STRATEGY_COLORS,
+  TREND_COLORS,
+  TrendDirection,
 } from '@/lib/transforms/insights';
 
 interface CampaignInsightCardProps {
@@ -42,13 +44,33 @@ export function CampaignInsightCard({ insight }: CampaignInsightCardProps) {
           <h4 className={`text-sm font-semibold ${stratColors.text}`}>
             {rendered.strategyTitle}
           </h4>
+          {/* Trend badge */}
+          {(() => {
+            const trendColors = TREND_COLORS[rendered.trendDirection] || TREND_COLORS[TrendDirection.STABLE];
+            return (
+              <span
+                className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium ${trendColors.bg} ${trendColors.text}`}
+                title={insight.trendAnalysis
+                  ? `ACoS strat: ${insight.trendAnalysis.strategicAcos ?? '—'}% → 7j: ${insight.trendAnalysis.trendAcos ?? '—'}% | CVR strat: ${insight.trendAnalysis.strategicCvr ?? '—'}% → 7j: ${insight.trendAnalysis.trendCvr ?? '—'}%`
+                  : undefined
+                }
+              >
+                {trendColors.icon} {rendered.trendLabel}
+              </span>
+            );
+          })()}
         </div>
-        <span
-          className={`text-[10px] font-medium ${confidenceColors[rendered.confidenceLevel]}`}
-          title={`Score de confiance : ${insight.confidenceScore}%`}
-        >
-          {rendered.confidenceLabel}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-slate-400">
+            {rendered.periodLabel}
+          </span>
+          <span
+            className={`text-[10px] font-medium ${confidenceColors[rendered.confidenceLevel]}`}
+            title={`Score de confiance : ${insight.confidenceScore}%`}
+          >
+            {rendered.confidenceLabel}
+          </span>
+        </div>
       </div>
 
       {/* Strategy summary */}

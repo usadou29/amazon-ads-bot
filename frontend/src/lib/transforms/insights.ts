@@ -4,12 +4,19 @@ import { t } from '@/lib/i18n';
 
 export enum CampaignDiagnosisCode {
   INVISIBLE = 'invisible',
+  LOW_SIGNAL = 'low_signal',
   IGNORED = 'ignored',
   TOO_EARLY = 'too_early',
   ATTRACTIVE_NOT_CONVERTING = 'attractive_not_converting',
   PROMISING_BUT_EXPENSIVE = 'promising_but_expensive',
   PROFITABLE = 'profitable',
   LIMITED_BY_BUDGET = 'limited_by_budget',
+}
+
+export enum TrendDirection {
+  UP = 'up',
+  STABLE = 'stable',
+  DOWN = 'down',
 }
 
 export enum EntityDiagnosisCode {
@@ -72,6 +79,14 @@ export interface CampaignInsight {
   summaryFacts: SummaryFacts;
   macroStrategy: CampaignMacroStrategy;
   confidenceScore: number;
+  strategicPeriodDays: number;
+  trendDirection: TrendDirection;
+  trendAnalysis?: {
+    strategicAcos: number | null;
+    trendAcos: number | null;
+    strategicCvr: number | null;
+    trendCvr: number | null;
+  };
 }
 
 export interface EntityInsight {
@@ -115,6 +130,9 @@ export interface RenderedCampaignStrategy {
   summaryText: string;
   confidenceLabel: string;
   confidenceLevel: 'high' | 'medium' | 'low';
+  trendLabel: string;
+  trendDirection: TrendDirection;
+  periodLabel: string;
 }
 
 // ── Templates ───────────────────────────────────────────────
@@ -132,6 +150,11 @@ const CAMPAIGN_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
     titleKey: 'insights.campaign.invisible.title',
     explanationKey: 'insights.campaign.invisible.explanation',
     summaryKey: 'insights.campaign.invisible.summary',
+  },
+  [CampaignDiagnosisCode.LOW_SIGNAL]: {
+    titleKey: 'insights.campaign.low_signal.title',
+    explanationKey: 'insights.campaign.low_signal.explanation',
+    summaryKey: 'insights.campaign.low_signal.summary',
   },
   [CampaignDiagnosisCode.IGNORED]: {
     titleKey: 'insights.campaign.ignored.title',
@@ -228,6 +251,7 @@ const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
 
 export const CAMPAIGN_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   [CampaignDiagnosisCode.INVISIBLE]: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
+  [CampaignDiagnosisCode.LOW_SIGNAL]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
   [CampaignDiagnosisCode.IGNORED]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
   [CampaignDiagnosisCode.TOO_EARLY]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
   [CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING]: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-300' },
@@ -258,6 +282,12 @@ export const MACRO_STRATEGY_COLORS: Record<string, { bg: string; text: string; b
 };
 
 // ── Execution type colors ───────────────────────────────────
+
+export const TREND_COLORS: Record<TrendDirection, { bg: string; text: string; icon: string }> = {
+  [TrendDirection.UP]: { bg: 'bg-emerald-50', text: 'text-emerald-600', icon: '↗' },
+  [TrendDirection.STABLE]: { bg: 'bg-slate-50', text: 'text-slate-500', icon: '→' },
+  [TrendDirection.DOWN]: { bg: 'bg-red-50', text: 'text-red-600', icon: '↘' },
+};
 
 export const EXECUTION_COLORS: Record<ActionExecution, { bg: string; text: string; icon: string }> = {
   ads: { bg: 'bg-blue-100', text: 'text-blue-800', icon: '⚡' },
@@ -310,6 +340,8 @@ export function renderCampaignInsight(insight: CampaignInsight): RenderedCampaig
     eligibleCount: ms.eligibleCount.toString(),
   };
 
+  const trendDir = insight.trendDirection || TrendDirection.STABLE;
+
   return {
     strategyTitle: t(`insights.strategy.${ms.macroStrategyCode}.title`, strategyParams),
     strategySummary: t(`insights.strategy.${ms.macroStrategyCode}.summary`, strategyParams),
@@ -317,6 +349,11 @@ export function renderCampaignInsight(insight: CampaignInsight): RenderedCampaig
     summaryText: template ? t(template.summaryKey, params) : '',
     confidenceLabel: conf.label,
     confidenceLevel: conf.level,
+    trendLabel: t(`insights.trend.${trendDir}`),
+    trendDirection: trendDir,
+    periodLabel: t('insights.period.label', {
+      days: (insight.strategicPeriodDays || params.periodDays).toString(),
+    }),
   };
 }
 

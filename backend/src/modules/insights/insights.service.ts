@@ -5,10 +5,12 @@ import {
   CampaignDiagnosisCode,
   EntityDiagnosisCode,
   MacroStrategyCode,
+  TrendDirection,
   type ActionExecution,
   type InsightAction,
   type InsightMetrics,
   type SummaryFacts,
+  type TrendAnalysis,
   type CampaignInsight,
   type CampaignMacroStrategy,
   type EntityInsight,
@@ -17,6 +19,7 @@ import {
 } from './types';
 
 const MIN_CLICKS = GUARDS.MIN_CLICKS_FOR_DECISION; // 15
+const MIN_IMPRESSIONS = GUARDS.MIN_IMPRESSIONS_FOR_SIGNAL; // 300
 
 @Injectable()
 export class InsightsService {
@@ -33,6 +36,7 @@ export class InsightsService {
     periodDays: number,
     entityInsights: EntityInsight[],
     dailyBudget?: number,
+    trendMetrics?: InsightMetrics,
   ): CampaignInsight {
     const facts = this.buildSummaryFacts(metrics, periodDays);
     const diagnosisCode = this.diagnoseCampaign(
@@ -42,6 +46,9 @@ export class InsightsService {
       periodDays,
     );
     const macroStrategy = this.getCampaignMacroStrategy(entityInsights);
+    const trend = trendMetrics
+      ? this.computeTrend(metrics, trendMetrics)
+      : { direction: TrendDirection.STABLE, analysis: undefined };
 
     return {
       campaignId: campaign.id,
@@ -49,6 +56,9 @@ export class InsightsService {
       summaryFacts: facts,
       macroStrategy,
       confidenceScore: this.computeConfidence(metrics.clicks),
+      strategicPeriodDays: periodDays,
+      trendDirection: trend.direction,
+      trendAnalysis: trend.analysis,
     };
   }
 
@@ -169,11 +179,12 @@ export class InsightsService {
    * Priority check order:
    * 1. Budget cap (overlay — takes priority if detected)
    * 2. No impressions → INVISIBLE
-   * 3. No clicks → IGNORED
-   * 4. Insufficient clicks → TOO_EARLY
-   * 5. No orders with enough clicks → ATTRACTIVE_NOT_CONVERTING
-   * 6. Orders with acceptable ACoS → PROFITABLE
-   * 7. Orders with high ACoS → PROMISING_BUT_EXPENSIVE
+   * 3. Low impressions (< MIN_IMPRESSIONS_FOR_SIGNAL) → LOW_SIGNAL
+   * 4. No clicks → IGNORED
+   * 5. Insufficient clicks → TOO_EARLY
+   * 6. No orders with enough clicks → ATTRACTIVE_NOT_CONVERTING
+   * 7. Orders with acceptable ACoS → PROFITABLE
+   * 8. Orders with high ACoS → PROMISING_BUT_EXPENSIVE
    */
   diagnoseCampaign(
     metrics: InsightMetrics,
@@ -194,6 +205,10 @@ export class InsightsService {
 
     if (metrics.impressions === 0) {
       return CampaignDiagnosisCode.INVISIBLE;
+    }
+
+    if (metrics.impressions < MIN_IMPRESSIONS) {
+      return CampaignDiagnosisCode.LOW_SIGNAL;
     }
 
     if (metrics.clicks === 0) {
@@ -413,6 +428,73 @@ export class InsightsService {
     return result
       .sort((a, b) => a.priority - b.priority)
       .slice(0, 3);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // TREND ANALYSIS
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Compare short-term (7j) metrics to strategic-period metrics.
+   * Returns UP if ACoS is dropping or CVR is rising,
+   * DOWN if ACoS is rising or CVR is dropping,
+   * STABLE otherwise.
+   *
+   * Threshold: 15% variation to trigger UP or DOWN.
+   */
+  computeTrend(
+    strategicMetrics: InsightMetrics,
+    trendMetrics: InsightMetrics,
+  ): { direction: TrendDirection; analysis: TrendAnalysis } {
+    const strategicAcos = strategicMetrics.sales > 0
+      ? (strategicMetrics.spend / strategicMetrics.sales) * 100
+      : null;
+    const trendAcos = trendMetrics.sales > 0
+      ? (trendMetrics.spend / trendMetrics.sales) * 100
+      : null;
+    const strategicCvr = strategicMetrics.clicks > 0
+      ? (strategicMetrics.orders / strategicMetrics.clicks) * 100
+      : null;
+    const trendCvr = trendMetrics.clicks > 0
+      ? (trendMetrics.orders / trendMetrics.clicks) * 100
+      : null;
+
+    const analysis: TrendAnalysis = {
+      strategicAcos: strategicAcos !== null ? Math.round(strategicAcos * 100) / 100 : null,
+      trendAcos: trendAcos !== null ? Math.round(trendAcos * 100) / 100 : null,
+      strategicCvr: strategicCvr !== null ? Math.round(strategicCvr * 100) / 100 : null,
+      trendCvr: trendCvr !== null ? Math.round(trendCvr * 100) / 100 : null,
+    };
+
+    // Not enough trend data → STABLE
+    if (trendMetrics.clicks === 0) {
+      return { direction: TrendDirection.STABLE, analysis };
+    }
+
+    // Not enough strategic data to compare → STABLE
+    if (strategicMetrics.clicks === 0) {
+      return { direction: TrendDirection.STABLE, analysis };
+    }
+
+    let isUp = false;
+    let isDown = false;
+
+    // ACoS comparison (lower is better → lower trendAcos = UP)
+    if (strategicAcos !== null && trendAcos !== null && strategicAcos > 0) {
+      if (trendAcos < strategicAcos * 0.85) isUp = true;
+      if (trendAcos > strategicAcos * 1.15) isDown = true;
+    }
+
+    // CVR comparison (higher is better → higher trendCvr = UP)
+    if (strategicCvr !== null && trendCvr !== null && strategicCvr > 0) {
+      if (trendCvr > strategicCvr * 1.15) isUp = true;
+      if (trendCvr < strategicCvr * 0.85) isDown = true;
+    }
+
+    // UP takes priority over DOWN (mixed signals = improving)
+    if (isUp) return { direction: TrendDirection.UP, analysis };
+    if (isDown) return { direction: TrendDirection.DOWN, analysis };
+    return { direction: TrendDirection.STABLE, analysis };
   }
 
   // ══════════════════════════════════════════════════════════

@@ -3,6 +3,7 @@ import type { LifecyclePhase } from '@/db/schema/books';
 // ── Campaign Diagnosis Codes ────────────────────────────────
 export enum CampaignDiagnosisCode {
   INVISIBLE = 'invisible',
+  LOW_SIGNAL = 'low_signal',           // impressions > 0 mais < MIN_IMPRESSIONS_FOR_SIGNAL
   IGNORED = 'ignored',
   TOO_EARLY = 'too_early',
   ATTRACTIVE_NOT_CONVERTING = 'attractive_not_converting',
@@ -23,6 +24,13 @@ export enum EntityDiagnosisCode {
   EXPENSIVE_BUT_VALID = 'expensive_but_valid',
   WINNER = 'winner',
   BOOST_CANDIDATE = 'boost_candidate',
+}
+
+// ── Trend Direction ─────────────────────────────────────────
+export enum TrendDirection {
+  UP = 'up',         // ACoS baisse ET/OU conversion monte
+  STABLE = 'stable', // Pas de changement significatif
+  DOWN = 'down',     // ACoS monte OU conversion baisse
 }
 
 // ── Action Execution Types ──────────────────────────────────
@@ -49,12 +57,22 @@ export interface SummaryFacts {
 }
 
 // ── Campaign Insight ────────────────────────────────────────
+export interface TrendAnalysis {
+  strategicAcos: number | null;
+  trendAcos: number | null;
+  strategicCvr: number | null;
+  trendCvr: number | null;
+}
+
 export interface CampaignInsight {
   campaignId: string;
   diagnosisCode: CampaignDiagnosisCode;
   summaryFacts: SummaryFacts;
   macroStrategy: CampaignMacroStrategy;
   confidenceScore: number;
+  strategicPeriodDays: number;
+  trendDirection: TrendDirection;
+  trendAnalysis?: TrendAnalysis;
 }
 
 // ── Entity Insight ──────────────────────────────────────────
