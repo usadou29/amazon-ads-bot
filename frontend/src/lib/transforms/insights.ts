@@ -1,0 +1,285 @@
+import { t } from '@/lib/i18n';
+
+// ── Enums (mirror backend) ──────────────────────────────────
+
+export enum CampaignDiagnosisCode {
+  INVISIBLE = 'invisible',
+  IGNORED = 'ignored',
+  TOO_EARLY = 'too_early',
+  ATTRACTIVE_NOT_CONVERTING = 'attractive_not_converting',
+  PROMISING_BUT_EXPENSIVE = 'promising_but_expensive',
+  PROFITABLE = 'profitable',
+  LIMITED_BY_BUDGET = 'limited_by_budget',
+}
+
+export enum EntityDiagnosisCode {
+  NO_IMPRESSIONS = 'no_impressions',
+  LOW_CTR = 'low_ctr',
+  TOO_EARLY = 'too_early',
+  CLICKS_NO_SALES = 'clicks_no_sales',
+  EXPENSIVE_BUT_VALID = 'expensive_but_valid',
+  WINNER = 'winner',
+  BOOST_CANDIDATE = 'boost_candidate',
+}
+
+export type ActionExecution = 'ads' | 'book' | 'none';
+
+// ── Interfaces (mirror backend) ─────────────────────────────
+
+export interface InsightAction {
+  type: string;
+  execution: ActionExecution;
+  i18nKey: string;
+  priority: number;
+}
+
+export interface SummaryFacts {
+  impressions: number;
+  clicks: number;
+  ctr: number | null;
+  orders: number;
+  cvr: number | null;
+  spend: number;
+  sales: number;
+  acos: number | null;
+  periodDays: number;
+}
+
+export interface CampaignInsight {
+  campaignId: string;
+  diagnosisCode: CampaignDiagnosisCode;
+  summaryFacts: SummaryFacts;
+  suggestedActions: InsightAction[];
+  confidenceScore: number;
+}
+
+export interface EntityInsight {
+  entityKey: string;
+  entityType: 'keyword' | 'target' | 'search_term' | 'ad_group';
+  diagnosisCode: EntityDiagnosisCode;
+  summaryFacts: SummaryFacts;
+  suggestedActions: InsightAction[];
+  linkedRecommendation?: {
+    id: string;
+    actionType: string;
+    strategyScore: number;
+    strategyLabel: string;
+  };
+  confidenceScore: number;
+}
+
+// ── Rendered Insight ────────────────────────────────────────
+
+export interface RenderedInsight {
+  title: string;
+  explanation: string;
+  summaryText: string;
+  actions: Array<{
+    label: string;
+    execution: ActionExecution;
+    executionLabel: string;
+    type: string;
+  }>;
+  confidenceLabel: string;
+  confidenceLevel: 'high' | 'medium' | 'low';
+}
+
+// ── Templates ───────────────────────────────────────────────
+
+interface InsightTemplate {
+  titleKey: string;
+  explanationKey: string;
+  summaryKey: string;
+}
+
+const CAMPAIGN_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
+  [CampaignDiagnosisCode.INVISIBLE]: {
+    titleKey: 'insights.campaign.invisible.title',
+    explanationKey: 'insights.campaign.invisible.explanation',
+    summaryKey: 'insights.campaign.invisible.summary',
+  },
+  [CampaignDiagnosisCode.IGNORED]: {
+    titleKey: 'insights.campaign.ignored.title',
+    explanationKey: 'insights.campaign.ignored.explanation',
+    summaryKey: 'insights.campaign.ignored.summary',
+  },
+  [CampaignDiagnosisCode.TOO_EARLY]: {
+    titleKey: 'insights.campaign.too_early.title',
+    explanationKey: 'insights.campaign.too_early.explanation',
+    summaryKey: 'insights.campaign.too_early.summary',
+  },
+  [CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING]: {
+    titleKey: 'insights.campaign.attractive_not_converting.title',
+    explanationKey: 'insights.campaign.attractive_not_converting.explanation',
+    summaryKey: 'insights.campaign.attractive_not_converting.summary',
+  },
+  [CampaignDiagnosisCode.PROMISING_BUT_EXPENSIVE]: {
+    titleKey: 'insights.campaign.promising_but_expensive.title',
+    explanationKey: 'insights.campaign.promising_but_expensive.explanation',
+    summaryKey: 'insights.campaign.promising_but_expensive.summary',
+  },
+  [CampaignDiagnosisCode.PROFITABLE]: {
+    titleKey: 'insights.campaign.profitable.title',
+    explanationKey: 'insights.campaign.profitable.explanation',
+    summaryKey: 'insights.campaign.profitable.summary',
+  },
+  [CampaignDiagnosisCode.LIMITED_BY_BUDGET]: {
+    titleKey: 'insights.campaign.limited_by_budget.title',
+    explanationKey: 'insights.campaign.limited_by_budget.explanation',
+    summaryKey: 'insights.campaign.limited_by_budget.summary',
+  },
+};
+
+const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
+  [EntityDiagnosisCode.NO_IMPRESSIONS]: {
+    titleKey: 'insights.entity.no_impressions.title',
+    explanationKey: 'insights.entity.no_impressions.explanation',
+    summaryKey: 'insights.entity.no_impressions.summary',
+  },
+  [EntityDiagnosisCode.LOW_CTR]: {
+    titleKey: 'insights.entity.low_ctr.title',
+    explanationKey: 'insights.entity.low_ctr.explanation',
+    summaryKey: 'insights.entity.low_ctr.summary',
+  },
+  [EntityDiagnosisCode.TOO_EARLY]: {
+    titleKey: 'insights.entity.too_early.title',
+    explanationKey: 'insights.entity.too_early.explanation',
+    summaryKey: 'insights.entity.too_early.summary',
+  },
+  [EntityDiagnosisCode.CLICKS_NO_SALES]: {
+    titleKey: 'insights.entity.clicks_no_sales.title',
+    explanationKey: 'insights.entity.clicks_no_sales.explanation',
+    summaryKey: 'insights.entity.clicks_no_sales.summary',
+  },
+  [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: {
+    titleKey: 'insights.entity.expensive_but_valid.title',
+    explanationKey: 'insights.entity.expensive_but_valid.explanation',
+    summaryKey: 'insights.entity.expensive_but_valid.summary',
+  },
+  [EntityDiagnosisCode.WINNER]: {
+    titleKey: 'insights.entity.winner.title',
+    explanationKey: 'insights.entity.winner.explanation',
+    summaryKey: 'insights.entity.winner.summary',
+  },
+  [EntityDiagnosisCode.BOOST_CANDIDATE]: {
+    titleKey: 'insights.entity.boost_candidate.title',
+    explanationKey: 'insights.entity.boost_candidate.explanation',
+    summaryKey: 'insights.entity.boost_candidate.summary',
+  },
+};
+
+// ── Diagnosis colors (for badges) ───────────────────────────
+
+export const CAMPAIGN_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  [CampaignDiagnosisCode.INVISIBLE]: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
+  [CampaignDiagnosisCode.IGNORED]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
+  [CampaignDiagnosisCode.TOO_EARLY]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
+  [CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING]: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-300' },
+  [CampaignDiagnosisCode.PROMISING_BUT_EXPENSIVE]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
+  [CampaignDiagnosisCode.PROFITABLE]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300' },
+  [CampaignDiagnosisCode.LIMITED_BY_BUDGET]: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-300' },
+};
+
+export const ENTITY_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  [EntityDiagnosisCode.NO_IMPRESSIONS]: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
+  [EntityDiagnosisCode.LOW_CTR]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
+  [EntityDiagnosisCode.TOO_EARLY]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
+  [EntityDiagnosisCode.CLICKS_NO_SALES]: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-300' },
+  [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
+  [EntityDiagnosisCode.WINNER]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300' },
+  [EntityDiagnosisCode.BOOST_CANDIDATE]: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-300' },
+};
+
+// ── Execution type colors ───────────────────────────────────
+
+export const EXECUTION_COLORS: Record<ActionExecution, { bg: string; text: string; icon: string }> = {
+  ads: { bg: 'bg-blue-100', text: 'text-blue-800', icon: '⚡' },
+  book: { bg: 'bg-orange-100', text: 'text-orange-800', icon: '📖' },
+  none: { bg: 'bg-slate-100', text: 'text-slate-600', icon: '👁' },
+};
+
+// ── Render Functions ────────────────────────────────────────
+
+function getConfidenceInfo(score: number): { label: string; level: 'high' | 'medium' | 'low' } {
+  if (score >= 70) return { label: t('insights.confidence.high'), level: 'high' };
+  if (score >= 45) return { label: t('insights.confidence.medium'), level: 'medium' };
+  return { label: t('insights.confidence.low'), level: 'low' };
+}
+
+function buildParams(facts: SummaryFacts): Record<string, string | number> {
+  return {
+    impressions: facts.impressions.toLocaleString('fr-FR'),
+    clicks: facts.clicks.toLocaleString('fr-FR'),
+    ctr: facts.ctr !== null ? facts.ctr.toFixed(1) : '—',
+    orders: facts.orders.toString(),
+    cvr: facts.cvr !== null ? facts.cvr.toFixed(1) : '—',
+    spend: facts.spend.toFixed(2),
+    sales: facts.sales.toFixed(2),
+    acos: facts.acos !== null ? facts.acos.toFixed(1) : '—',
+    periodDays: facts.periodDays.toString(),
+    minClicks: '15',
+    breakEven: '35',
+  };
+}
+
+export function renderCampaignInsight(insight: CampaignInsight): RenderedInsight {
+  const template = CAMPAIGN_INSIGHT_TEMPLATES[insight.diagnosisCode];
+  if (!template) {
+    return {
+      title: insight.diagnosisCode,
+      explanation: '',
+      summaryText: '',
+      actions: [],
+      confidenceLabel: '',
+      confidenceLevel: 'low',
+    };
+  }
+
+  const params = buildParams(insight.summaryFacts);
+  const conf = getConfidenceInfo(insight.confidenceScore);
+
+  return {
+    title: t(template.titleKey, params),
+    explanation: t(template.explanationKey, params),
+    summaryText: t(template.summaryKey, params),
+    actions: insight.suggestedActions.map(a => ({
+      label: t(a.i18nKey),
+      execution: a.execution,
+      executionLabel: t(`insights.execution.${a.execution}`),
+      type: a.type,
+    })),
+    confidenceLabel: conf.label,
+    confidenceLevel: conf.level,
+  };
+}
+
+export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
+  const template = ENTITY_INSIGHT_TEMPLATES[insight.diagnosisCode];
+  if (!template) {
+    return {
+      title: insight.diagnosisCode,
+      explanation: '',
+      summaryText: '',
+      actions: [],
+      confidenceLabel: '',
+      confidenceLevel: 'low',
+    };
+  }
+
+  const params = buildParams(insight.summaryFacts);
+  const conf = getConfidenceInfo(insight.confidenceScore);
+
+  return {
+    title: t(template.titleKey, params),
+    explanation: t(template.explanationKey, params),
+    summaryText: t(template.summaryKey, params),
+    actions: insight.suggestedActions.map(a => ({
+      label: t(a.i18nKey),
+      execution: a.execution,
+      executionLabel: t(`insights.execution.${a.execution}`),
+      type: a.type,
+    })),
+    confidenceLabel: conf.label,
+    confidenceLevel: conf.level,
+  };
+}

@@ -3,7 +3,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Modal } from '@/components/ui/Modal';
 import { RecommendationCard } from '@/components/features/RecommendationCard';
+import { CampaignInsightCard } from '@/components/features/CampaignInsightCard';
+import { EntityInsightPopover } from '@/components/features/EntityInsightPopover';
 import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transforms/recommendations';
+import { type CampaignInsight, type EntityInsight } from '@/lib/transforms/insights';
 import { fetchBookCampaignDetails } from '@/lib/api/client';
 
 // ── Types ──
@@ -29,6 +32,7 @@ interface KeywordItem {
   state: string;
   bid: number | null;
   metrics: TargetMetrics;
+  insight?: EntityInsight;
 }
 
 interface ProductTargetItem {
@@ -39,6 +43,7 @@ interface ProductTargetItem {
   state: string;
   bid: number | null;
   metrics: TargetMetrics;
+  insight?: EntityInsight;
 }
 
 interface CampaignDetail {
@@ -53,11 +58,14 @@ interface CampaignDetail {
   metrics: TargetMetrics;
   keywords: KeywordItem[];
   productTargets: ProductTargetItem[];
+  insight?: CampaignInsight;
 }
 
 interface CampaignDetailsResponse {
   campaigns: CampaignDetail[];
   periodDays: number;
+  lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  breakEvenAcos?: number;
 }
 
 interface RecoHandlers {
@@ -443,6 +451,7 @@ function KeywordTableWithRecos({
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Pourquoi ?</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
             </tr>
           </thead>
@@ -483,6 +492,13 @@ function KeywordTableWithRecos({
                   }`}>
                     {kw.metrics.acos > 0 ? formatPct(kw.metrics.acos) : '—'}
                   </td>
+                  <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                    {kw.insight ? (
+                      <EntityInsightPopover insight={kw.insight} entityName={kw.keywordText} />
+                    ) : (
+                      <span className="text-[10px] text-slate-300">—</span>
+                    )}
+                  </td>
                   <td className="py-2 px-2 text-center">
                     <RecoBadge count={recoCount} onClick={() => openModal(kw)} />
                   </td>
@@ -516,6 +532,7 @@ function KeywordTableWithRecos({
                     return totalSales > 0 ? formatPct((totalSpend / totalSales) * 100) : '—';
                   })()}
                 </td>
+                <td className="py-2 px-2"></td>
                 <td className="py-2 px-2"></td>
               </tr>
             </tfoot>
@@ -596,6 +613,7 @@ function ProductTargetTableWithRecos({
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Pourquoi ?</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
             </tr>
           </thead>
@@ -636,6 +654,13 @@ function ProductTargetTableWithRecos({
                   }`}>
                     {tg.metrics.acos > 0 ? formatPct(tg.metrics.acos) : '—'}
                   </td>
+                  <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                    {tg.insight ? (
+                      <EntityInsightPopover insight={tg.insight} entityName={tg.expression} />
+                    ) : (
+                      <span className="text-[10px] text-slate-300">—</span>
+                    )}
+                  </td>
                   <td className="py-2 px-2 text-center">
                     <RecoBadge count={recoCount} onClick={() => openModal(tg)} />
                   </td>
@@ -669,6 +694,7 @@ function ProductTargetTableWithRecos({
                     return totalSales > 0 ? formatPct((totalSpend / totalSales) * 100) : '—';
                   })()}
                 </td>
+                <td className="py-2 px-2"></td>
                 <td className="py-2 px-2"></td>
               </tr>
             </tfoot>
@@ -792,6 +818,11 @@ function OverviewCampaignCard({
         <div className="mt-3 p-2.5 bg-slate-50 rounded-lg">
           <MetricChips m={campaign.metrics} />
         </div>
+
+        {/* Campaign insight */}
+        {campaign.insight && (
+          <CampaignInsightCard insight={campaign.insight} />
+        )}
 
         {/* Expanded content */}
         {expanded && hasData && (

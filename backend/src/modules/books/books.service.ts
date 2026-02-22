@@ -18,6 +18,7 @@ import type { Book, NewBook, CampaignBookMapping } from '@/db/schema';
 import type { LifecyclePhase } from '@/db/schema/books';
 import { reportJobs } from '@/db/schema/report-jobs';
 import { StrategyEngine } from '../strategy/strategy-engine';
+import { InsightsService } from '../insights/insights.service';
 import { GUARDS } from '@/config/guards';
 
 export interface CreateBookDto {
@@ -76,6 +77,7 @@ export class BooksService {
   constructor(
     @Inject(DATABASE_CONNECTION) private db: any,
     private readonly strategyEngine: StrategyEngine,
+    private readonly insightsService: InsightsService,
   ) {}
 
   /**
@@ -1557,6 +1559,52 @@ export class BooksService {
       });
     }
 
+    // ── Enrichir avec les Insights ──────────────────────────────
+    const lifecyclePhase = this.getEffectiveLifecyclePhase(book);
+    const breakEvenAcos = book.royaltyRate
+      ? Math.max(5, Math.min(100, Number(book.royaltyRate)))
+      : GUARDS.DEFAULT_ROYALTY_RATE;
+
+    for (const camp of campaignDetails as any[]) {
+      // Campaign insight
+      camp.insight = this.insightsService.computeCampaignInsight(
+        { id: camp.id, name: camp.name, dailyBudget: camp.dailyBudget },
+        camp.metrics,
+        lifecyclePhase,
+        breakEvenAcos,
+        days,
+      );
+
+      // Calculate avgCampaignCTR for BOOST_CANDIDATE detection
+      const avgCampaignCTR = camp.metrics.impressions > 0
+        ? (camp.metrics.clicks / camp.metrics.impressions) * 100
+        : 0;
+
+      // Entity insights — keywords
+      for (const kw of camp.keywords) {
+        kw.insight = this.insightsService.computeEntityInsight(
+          { key: `keyword:${kw.amazonKeywordId}`, type: 'keyword', name: kw.keywordText, campaignId: camp.id, campaignName: camp.name },
+          kw.metrics,
+          lifecyclePhase,
+          breakEvenAcos,
+          days,
+          avgCampaignCTR,
+        );
+      }
+
+      // Entity insights — product targets
+      for (const tg of camp.productTargets) {
+        tg.insight = this.insightsService.computeEntityInsight(
+          { key: `target:${tg.amazonTargetId}`, type: 'target', name: tg.expression, campaignId: camp.id, campaignName: camp.name },
+          tg.metrics,
+          lifecyclePhase,
+          breakEvenAcos,
+          days,
+          avgCampaignCTR,
+        );
+      }
+    }
+
     // Trier : campagnes actives d'abord, puis par dépenses
     campaignDetails.sort((a, b) => {
       if (a.state === 'enabled' && b.state !== 'enabled') return -1;
@@ -1567,6 +1615,8 @@ export class BooksService {
     return {
       campaigns: campaignDetails,
       periodDays: days,
+      lifecyclePhase,
+      breakEvenAcos,
     };
   }
 
