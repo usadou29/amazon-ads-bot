@@ -21,6 +21,12 @@ export interface HumanRecommendation {
   entityName: string;
   /** Type d'entité (campaign, keyword, search_term) */
   entityType: string;
+  /** Clé d'entité brute (pour regroupement) */
+  entityKey: string;
+  /** Nom de la campagne parente (pour keywords et search terms) */
+  campaignName: string | null;
+  /** Type de ciblage de la campagne parente ('manual' = mots-clés, 'auto' = automatique) */
+  campaignTargetingType: string | null;
   /** Score de confiance (0-100) */
   confidence: number | null;
   /** Métriques clés extraites de contextData */
@@ -43,6 +49,23 @@ export interface HumanRecommendation {
   };
   /** Conseil optionnel sur le livre (couverture, résumé, prix…) */
   bookAdvice?: string;
+  // ── Strategy Engine fields ──
+  /** Score stratégique (0-100) calculé par la matrice lifecycle */
+  strategyScore: number | null;
+  /** Label lisible : "Recommandé en Scaling", "Alternative prudente", etc. */
+  strategyLabel: string | null;
+  /** Cette reco est-elle la meilleure pour cette entité dans ce lifecycle ? */
+  recommendedForLifecycle: boolean;
+  /** Consentement requis avant application ? (surtout en Launch) */
+  requiresConsent: boolean;
+  /** Niveau de consentement : 'none' | 'basic' | 'reinforced' */
+  consentLevel: 'none' | 'basic' | 'reinforced';
+  /** Message pédagogique à afficher dans la modale de consentement */
+  consentMessage?: string;
+  /** Période d'analyse des métriques (en jours) — ex: 7 = derniers 7 jours */
+  metricsPeriodDays: number;
+  /** Identifiant interne de la règle — utilisé pour retrouver le bon template de texte */
+  _ruleId: string;
 }
 
 interface RuleTemplate {
@@ -64,6 +87,15 @@ interface TemplateContext {
   suggestedAction: Record<string, any>;
   /** Phase de cycle de vie du livre (si disponible) */
   phase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  /** Période d'analyse en jours (ex: 14 = derniers 14 jours) */
+  periodDays?: number;
+}
+
+/** Label lisible pour la période */
+function periodLabel(days?: number): string {
+  if (!days) return '';
+  if (days === 1) return "aujourd'hui";
+  return `sur les ${days} derniers jours`;
 }
 
 function getEntityLabel(entityType: string): string {
@@ -76,6 +108,170 @@ function getEntityLabel(entityType: string): string {
   }
 }
 
+// ── Lifecycle context helpers ──
+// Donne une explication du "pourquoi maintenant" selon la phase lifecycle
+const LIFECYCLE_LABELS: Record<string, string> = {
+  launch: 'Lancement',
+  scale: 'Croissance',
+  evergreen: 'Croisière',
+  relaunch: 'Relance',
+};
+
+type LifecyclePhase = 'launch' | 'scale' | 'evergreen' | 'relaunch';
+
+/**
+ * Contexte lifecycle pour "mettre en pause" ou "couper"
+ */
+function lifecycleWhyPause(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En phase de lancement, on teste beaucoup de mots-clés pour trouver ceux qui marchent. Ceux qui ne performent pas après suffisamment de données doivent être coupés pour concentrer le budget limité sur les pistes prometteuses.';
+    case 'scale':
+      return '\n\n📍 En phase de croissance, chaque euro doit aller vers ce qui convertit. Les mots-clés non rentables freinent ta montée en puissance — il faut les couper pour accélérer.';
+    case 'evergreen':
+      return '\n\n📍 En phase de croisière, l\'objectif est la rentabilité maximale. Un mot-clé qui ne vend pas est du budget gaspillé qui pourrait aller vers tes mots-clés rentables.';
+    case 'relaunch':
+      return '\n\n📍 En phase de relance, on repart sur des bases saines. Les mots-clés qui ne fonctionnaient pas avant doivent être nettoyés pour laisser place aux nouvelles opportunités.';
+  }
+}
+
+/**
+ * Contexte lifecycle pour "baisser l'enchère"
+ */
+function lifecycleWhyBidDown(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En lancement, on limite les pertes sur les mots-clés qui ne convertissent pas encore. Baisser l\'enchère permet de rester visible tout en réduisant le coût de l\'apprentissage.';
+    case 'scale':
+      return '\n\n📍 En croissance, on optimise agressivement. Baisser l\'enchère ici libère du budget pour investir davantage sur les mots-clés gagnants.';
+    case 'evergreen':
+      return '\n\n📍 En croisière, des ajustements réguliers maintiennent la rentabilité. Baisser légèrement permet de garder un ACoS optimal sur la durée.';
+    case 'relaunch':
+      return '\n\n📍 En relance, on recalibre toutes les enchères. Baisser celles qui sous-performent aide à retrouver rapidement un équilibre rentable.';
+  }
+}
+
+/**
+ * Contexte lifecycle pour "augmenter l'enchère / booster"
+ */
+function lifecycleWhyBidUp(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En lancement, investir plus sur ce qui montre des signaux positifs accélère la collecte de données et aide Amazon à mieux positionner ton livre.';
+    case 'scale':
+      return '\n\n📍 En croissance, c\'est le moment de doubler la mise sur les gagnants. Plus de visibilité sur un mot-clé rentable = croissance directe des ventes.';
+    case 'evergreen':
+      return '\n\n📍 En croisière, booster un mot-clé performant permet de maximiser les ventes sur un canal prouvé tout en maintenant la rentabilité.';
+    case 'relaunch':
+      return '\n\n📍 En relance, investir sur les mots-clés qui marchent aide à recréer rapidement la dynamique de ventes.';
+  }
+}
+
+/**
+ * Contexte lifecycle pour "ajouter en négatif"
+ */
+function lifecycleWhyNegative(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En lancement, chaque euro compte pour tester les bons mots-clés. Bloquer les termes inutiles dès maintenant évite de gaspiller ton budget d\'apprentissage.';
+    case 'scale':
+      return '\n\n📍 En croissance, nettoyer les termes non rentables est essentiel pour réinvestir chaque euro vers ce qui convertit.';
+    case 'evergreen':
+      return '\n\n📍 En croisière, un nettoyage régulier des termes non performants maintient la rentabilité sur la durée.';
+    case 'relaunch':
+      return '\n\n📍 En relance, on repart propre. Bloquer les termes qui n\'ont jamais marché évite de refaire les mêmes erreurs.';
+  }
+}
+
+/**
+ * Contexte lifecycle pour "harvester / exploiter un terme"
+ */
+function lifecycleWhyHarvest(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En lancement, découvrir et isoler les termes qui convertissent est la priorité #1. Créer un mot-clé dédié permet de mieux contrôler l\'enchère sur cette pépite.';
+    case 'scale':
+      return '\n\n📍 En croissance, transformer chaque terme profitable en mot-clé exact est la clé pour scaler. Tu gagnes en contrôle et en rentabilité.';
+    case 'evergreen':
+      return '\n\n📍 En croisière, ajouter de nouveaux mots-clés rentables diversifie tes sources de ventes et réduit le risque de dépendance.';
+    case 'relaunch':
+      return '\n\n📍 En relance, les termes qui convertissent déjà sont ton meilleur atout. Les isoler en mots-clés dédiés accélère la reprise.';
+  }
+}
+
+/**
+ * Contexte lifecycle pour alertes budget
+ */
+function lifecycleWhyBudget(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En lancement, atteindre le budget max signifie que tu rates des données précieuses. Augmenter le budget accélère ta phase d\'apprentissage.';
+    case 'scale':
+      return '\n\n📍 En croissance, un budget épuisé freine directement ta progression. Si le ROI est bon, chaque euro supplémentaire génère des ventes.';
+    case 'evergreen':
+      return '\n\n📍 En croisière, un budget saturé sur une campagne rentable = des ventes manquées chaque jour. Ajuste pour capter tout le potentiel.';
+    case 'relaunch':
+      return '\n\n📍 En relance, le budget doit être suffisant pour tester et retrouver les niveaux de performance. Ne bride pas ta reprise.';
+  }
+}
+
+/**
+ * Contexte lifecycle pour performance en baisse
+ */
+function lifecycleWhyDeclining(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En lancement, une baisse de performance peut indiquer un problème de ciblage. Il vaut mieux corriger tôt avant de dépenser davantage.';
+    case 'scale':
+      return '\n\n📍 En croissance, une dégradation doit être stoppée rapidement pour ne pas compromettre ta phase de scaling.';
+    case 'evergreen':
+      return '\n\n📍 En croisière, une baisse progressive peut signaler de la fatigue publicitaire ou une concurrence accrue. Agir maintenant évite de creuser les pertes.';
+    case 'relaunch':
+      return '\n\n📍 En relance, une performance qui baisse avant même d\'avoir retrouvé le rythme est un signal d\'alarme. Ajuste la stratégie rapidement.';
+  }
+}
+
+/**
+ * Contexte lifecycle pour ACoS au-dessus du taux de redevance
+ */
+function lifecycleWhyAcosAboveRoyalty(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En lancement, un ACoS supérieur à tes redevances est tolérable temporairement pour collecter des données. Mais surveille de près — ça ne doit pas durer.';
+    case 'scale':
+      return '\n\n📍 En croissance, chaque vente doit contribuer à ta rentabilité. Un ACoS au-dessus de tes redevances signifie que ta pub te coûte plus qu\'elle ne rapporte.';
+    case 'evergreen':
+      return '\n\n📍 En croisière, perdre de l\'argent sur chaque vente pub n\'est pas viable à long terme. Il faut absolument passer sous le seuil de rentabilité.';
+    case 'relaunch':
+      return '\n\n📍 En relance, repartir avec un ACoS non rentable peut vite creuser un déficit. Optimise les enchères pour retrouver l\'équilibre.';
+  }
+}
+
+/**
+ * Contexte lifecycle pour "faible visibilité / low impressions"
+ */
+function lifecycleWhyLowImpressions(phase?: LifecyclePhase): string {
+  if (!phase) return '';
+  switch (phase) {
+    case 'launch':
+      return '\n\n📍 En lancement, la visibilité est la priorité absolue. Sans impressions, ton livre ne peut pas être découvert et l\'algorithme ne peut pas apprendre.';
+    case 'scale':
+      return '\n\n📍 En croissance, manquer de visibilité freine ta progression. Augmenter l\'enchère permet de capter plus de recherches et de ventes potentielles.';
+    case 'evergreen':
+      return '\n\n📍 En croisière, une baisse de visibilité peut indiquer que la concurrence a augmenté ses enchères. Il faut s\'adapter pour maintenir ta position.';
+    case 'relaunch':
+      return '\n\n📍 En relance, retrouver de la visibilité est essentiel pour relancer la dynamique. Amazon a besoin de voir ton livre pour le recommander.';
+  }
+}
+
 const RULE_TEMPLATES: Record<string, RuleTemplate> = {
   pause_high_acos: {
     title: (ctx) => `Mettre en pause « ${ctx.entityName} »`,
@@ -84,13 +280,16 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       const sales = ctx.metrics.sales ?? 0;
       const acos = ctx.metrics.acos;
       const label = ctx.entityLabel;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      let base: string;
       if (spend > 0 && sales === 0) {
-        return `${label} a dépensé ${formatCurrency(spend)} sans générer aucune vente. L'argent investi n'a pas de retour.`;
+        base = `${label} a dépensé ${formatCurrency(spend)}${period} sans générer aucune vente. L'argent investi n'a pas de retour.`;
+      } else if (acos && acos > 100) {
+        base = `${period ? `Sur les ${ctx.periodDays} derniers jours, t` : 'T'}u dépenses ${formatCurrency(spend)} en pub pour ${formatCurrency(sales)} de ventes (ACoS de ${acos.toFixed(0)}%). Tu perds de l'argent sur chaque vente via ${label.toLowerCase()}.`;
+      } else {
+        base = `${label} a dépensé ${formatCurrency(spend)}${period} pour ${formatCurrency(sales)} de ventes (ACoS ${acos ? acos.toFixed(1) + '%' : 'N/A'}). Le ratio dépenses/résultats n'est pas optimal.`;
       }
-      if (acos && acos > 100) {
-        return `Tu dépenses ${formatCurrency(spend)} en pub pour ${formatCurrency(sales)} de ventes (ACoS de ${acos.toFixed(0)}%). Tu perds de l'argent sur chaque vente via ${label.toLowerCase()}.`;
-      }
-      return `${label} dépense beaucoup (${formatCurrency(spend)}) pour peu de résultats (${formatCurrency(sales)} de ventes). Le ratio n'est pas bon.`;
+      return base + lifecycleWhyPause(ctx.phase);
     },
     impact: (ctx) => {
       const spend = ctx.metrics.spend ?? 0;
@@ -107,10 +306,14 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       const spend = ctx.metrics.spend ?? 0;
       const clicks = ctx.metrics.clicks ?? 0;
       const orders = ctx.metrics.orders ?? 0;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      let base: string;
       if (orders === 0 && clicks > 0) {
-        return `${clicks} clics pour ${formatCurrency(spend)} dépensés, mais aucune commande. L'enchère actuelle est trop élevée par rapport aux résultats.`;
+        base = `${clicks} clics pour ${formatCurrency(spend)} dépensés${period}, mais aucune commande. L'enchère actuelle est trop élevée par rapport aux résultats.`;
+      } else {
+        base = `${period ? `Sur les ${ctx.periodDays} derniers jours, l` : 'L'}es résultats ne justifient pas l'enchère actuelle. ${clicks} clics pour seulement ${orders} commande${orders > 1 ? 's' : ''}.`;
       }
-      return `Les résultats ne justifient pas l'enchère actuelle. ${clicks} clics pour seulement ${orders} commande${orders > 1 ? 's' : ''}.`;
+      return base + lifecycleWhyBidDown(ctx.phase);
     },
     impact: (ctx) => {
       const adjustment = ctx.suggestedAction?.adjustment_value;
@@ -134,10 +337,14 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       const orders = ctx.metrics.orders ?? 0;
       const cvr = ctx.metrics.cvr;
       const label = ctx.entityLabel;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      let base: string;
       if (cvr && cvr > 5) {
-        return `${label} convertit très bien (${cvr.toFixed(1)}% de conversion). ${orders} commande${orders > 1 ? 's' : ''} pour ${formatCurrency(sales)} de ventes. Ça mérite plus de budget.`;
+        base = `${label} convertit très bien${period} (${cvr.toFixed(1)}% de conversion). ${orders} commande${orders > 1 ? 's' : ''} pour ${formatCurrency(sales)} de ventes. Ça mérite plus de budget.`;
+      } else {
+        base = `${label} génère de bons résultats${period} : ${orders} commande${orders > 1 ? 's' : ''}, ${formatCurrency(sales)} de ventes. Plus de visibilité = plus de ventes.`;
       }
-      return `${label} génère de bons résultats : ${orders} commande${orders > 1 ? 's' : ''}, ${formatCurrency(sales)} de ventes. Plus de visibilité = plus de ventes.`;
+      return base + lifecycleWhyBidUp(ctx.phase);
     },
     impact: (ctx) => {
       const adjustment = ctx.suggestedAction?.adjustment_value;
@@ -159,7 +366,9 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     why: (ctx) => {
       const spend = ctx.metrics.spend ?? 0;
       const clicks = ctx.metrics.clicks ?? 0;
-      return `Ce terme de recherche génère ${clicks} clics (${formatCurrency(spend)} dépensés) mais aucune vente. Les gens qui cherchent ça ne sont pas intéressés par ton livre.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      const base = `Ce terme de recherche a généré ${clicks} clics (${formatCurrency(spend)} dépensés)${period} mais aucune vente. Les gens qui cherchent ça ne sont pas intéressés par ton livre.`;
+      return base + lifecycleWhyNegative(ctx.phase);
     },
     impact: (ctx) => {
       const spend = ctx.metrics.spend ?? 0;
@@ -175,7 +384,9 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     why: (ctx) => {
       const sales = ctx.metrics.sales ?? 0;
       const orders = ctx.metrics.orders ?? 0;
-      return `Ce terme de recherche a généré ${orders} commande${orders > 1 ? 's' : ''} (${formatCurrency(sales)} de ventes). En créant un mot-clé dédié, tu pourras mieux contrôler l'enchère et maximiser ce qui marche.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      const base = `Ce terme de recherche a généré ${orders} commande${orders > 1 ? 's' : ''}${period} (${formatCurrency(sales)} de ventes). En créant un mot-clé dédié, tu pourras mieux contrôler l'enchère et maximiser ce qui marche.`;
+      return base + lifecycleWhyHarvest(ctx.phase);
     },
     impact: () => 'Meilleur contrôle des enchères sur un terme qui convertit. Plus de ventes potentielles.',
     risk: 'Possible doublon temporaire avant que l\'ancien terme soit exclu.',
@@ -191,7 +402,9 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     title: (ctx) => `Budget épuisé sur « ${ctx.entityName} »`,
     why: (ctx) => {
       const impressions = ctx.metrics.impressions ?? 0;
-      return `Cette campagne atteint son budget quotidien et s'arrête en cours de journée. Tu rates des impressions et potentiellement des ventes. (${impressions} impressions sur la période)`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      const base = `Cette campagne atteint son budget quotidien et s'arrête en cours de journée. Tu rates des impressions et potentiellement des ventes. (${impressions.toLocaleString('fr-FR')} impressions${period})`;
+      return base + lifecycleWhyBudget(ctx.phase);
     },
     impact: () => 'Augmenter le budget quotidien permet de capter les ventes manquées. Si le ROI est bon, c\'est du profit en plus.',
     risk: 'Augmentation des dépenses — à surveiller les premiers jours.',
@@ -203,7 +416,9 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     title: (ctx) => `Peu de visibilité sur « ${ctx.entityName} »`,
     why: (ctx) => {
       const impressions = ctx.metrics.impressions ?? 0;
-      return `Seulement ${impressions} impressions sur la période. Ton livre est très peu affiché — l'enchère est probablement trop basse ou les mots-clés trop concurrentiels.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : ' sur la période';
+      const base = `Seulement ${impressions} impressions${period}. Ton livre est très peu affiché — l'enchère est probablement trop basse ou les mots-clés trop concurrentiels.`;
+      return base + lifecycleWhyLowImpressions(ctx.phase);
     },
     impact: () => 'Plus d\'impressions = plus de chances de ventes. Sans visibilité, pas de résultats possibles.',
     risk: 'Augmenter l\'enchère coûtera un peu plus cher par clic.',
@@ -219,7 +434,9 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     title: (ctx) => `Performance en baisse sur « ${ctx.entityName} »`,
     why: (ctx) => {
       const acos = ctx.metrics.acos;
-      return `Les performances se dégradent depuis plusieurs jours${acos ? ` (ACoS actuel : ${acos.toFixed(1)}%)` : ''}. Le ratio dépenses/ventes empire.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      const base = `Les performances se dégradent${period}${acos ? ` (ACoS actuel : ${acos.toFixed(1)}%)` : ''}. Le ratio dépenses/ventes empire.`;
+      return base + lifecycleWhyDeclining(ctx.phase);
     },
     impact: () => 'Agir maintenant évite de creuser les pertes. Une pause ou baisse d\'enchère peut stopper l\'hémorragie.',
     risk: 'Perte de position si on réduit trop les enchères.',
@@ -231,7 +448,9 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     title: (ctx) => `Pub non rentable sur « ${ctx.entityName} »`,
     why: (ctx) => {
       const acos = ctx.metrics.acos;
-      return `Ton ACoS (${acos ? acos.toFixed(1) : '?'}%) dépasse ton taux de redevance. Concrètement, chaque vente pub te fait perdre de l'argent car la pub coûte plus que ce que tu touches par livre.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      const base = `Ton ACoS${period} (${acos ? acos.toFixed(1) : '?'}%) dépasse ton taux de redevance. Concrètement, chaque vente pub te fait perdre de l'argent car la pub coûte plus que ce que tu touches par livre.`;
+      return base + lifecycleWhyAcosAboveRoyalty(ctx.phase);
     },
     impact: () => 'Baisser l\'ACoS sous ton taux de redevance te rendra rentable sur chaque vente pub.',
     risk: 'Baisser les enchères peut réduire le volume de ventes.',
@@ -248,7 +467,8 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     title: (ctx) => `Ton livre n'est pas encore visible — « ${ctx.entityName} »`,
     why: (ctx) => {
       const impressions = ctx.metrics.impressions ?? 0;
-      return `Seulement ${impressions} impressions en phase de lancement. C'est normal au début, mais il faut que ton livre soit vu pour collecter des données. Sans visibilité, impossible de savoir ce qui marche.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      return `Seulement ${impressions} impressions${period} en phase de lancement. C'est normal au début, mais il faut que ton livre soit vu pour collecter des données. Sans visibilité, impossible de savoir ce qui marche.`;
     },
     impact: () => 'Plus d\'impressions = plus de données pour optimiser. C\'est l\'investissement initial indispensable en lancement.',
     risk: 'Coût par clic un peu plus élevé, mais c\'est le prix de la visibilité initiale.',
@@ -264,7 +484,8 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     why: (ctx) => {
       const impressions = ctx.metrics.impressions ?? 0;
       const ctr = ctx.metrics.ctr;
-      return `Ton livre est affiché (${impressions} impressions) mais le taux de clic est faible${ctr ? ` (${ctr.toFixed(2)}%)` : ''}. Quand les lecteurs voient ta couverture dans les résultats, ils ne cliquent pas assez. Le problème vient probablement de ta couverture ou de ton titre.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      return `Ton livre est affiché (${impressions} impressions${period}) mais le taux de clic est faible${ctr ? ` (${ctr.toFixed(2)}%)` : ''}. Quand les lecteurs voient ta couverture dans les résultats, ils ne cliquent pas assez. Le problème vient probablement de ta couverture ou de ton titre.`;
     },
     impact: () => 'Améliorer le taux de clic multiplie l\'efficacité de toutes tes pubs sans dépenser plus.',
     risk: 'Aucun risque pub — c\'est un conseil sur ton livre.',
@@ -278,7 +499,8 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     why: (ctx) => {
       const clicks = ctx.metrics.clicks ?? 0;
       const ctr = ctx.metrics.ctr;
-      return `Bonne nouvelle : ton livre attire les clics${ctr ? ` (${ctr.toFixed(2)}% de CTR)` : ''} — ${clicks} personnes ont cliqué. Mais personne n'achète. Le problème est sur ta page produit : résumé, avis, prix ou extrait.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      return `Bonne nouvelle : ton livre attire les clics${ctr ? ` (${ctr.toFixed(2)}% de CTR)` : ''} — ${clicks} personnes ont cliqué${period}. Mais personne n'achète. Le problème est sur ta page produit : résumé, avis, prix ou extrait.`;
     },
     impact: () => 'Corriger ta page produit peut transformer ces clics en ventes sans augmenter ton budget pub.',
     risk: 'Aucun risque pub — c\'est un conseil sur ta fiche livre.',
@@ -311,7 +533,8 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       const orders = ctx.metrics.orders ?? 0;
       const acos = ctx.metrics.acos;
       const sales = ctx.metrics.sales ?? 0;
-      return `${ctx.entityLabel} a prouvé son efficacité : ${orders} commande${orders > 1 ? 's' : ''}, ${formatCurrency(sales)} de ventes${acos ? `, ACoS de ${acos.toFixed(1)}%` : ''}. En phase de croissance, il faut doubler la mise sur les gagnants.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      return `${ctx.entityLabel} a prouvé son efficacité${period} : ${orders} commande${orders > 1 ? 's' : ''}, ${formatCurrency(sales)} de ventes${acos ? `, ACoS de ${acos.toFixed(1)}%` : ''}. En phase de croissance, il faut doubler la mise sur les gagnants.`;
     },
     impact: (ctx) => {
       const adj = ctx.suggestedAction?.adjustment_value;
@@ -332,7 +555,8 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     why: (ctx) => {
       const clicks = ctx.metrics.clicks ?? 0;
       const spend = ctx.metrics.spend ?? 0;
-      return `${clicks} clics, ${formatCurrency(spend)} dépensés, zéro commande. En phase de croissance, on a assez de données pour trancher : ce terme ne convertit pas. Chaque euro dépensé ici est un euro qui ne va pas vers ce qui marche.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      return `${clicks} clics, ${formatCurrency(spend)} dépensés${period}, zéro commande. En phase de croissance, on a assez de données pour trancher : ce terme ne convertit pas. Chaque euro dépensé ici est un euro qui ne va pas vers ce qui marche.`;
     },
     impact: (ctx) => {
       const spend = ctx.metrics.spend ?? 0;
@@ -349,7 +573,8 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       const orders = ctx.metrics.orders ?? 0;
       const acos = ctx.metrics.acos;
       const sales = ctx.metrics.sales ?? 0;
-      return `Ce terme de recherche a généré ${orders} commande${orders > 1 ? 's' : ''} (${formatCurrency(sales)})${acos ? ` avec un ACoS de ${acos.toFixed(1)}%` : ''}. C'est le moment de le promouvoir en mot-clé exact pour mieux contrôler l'enchère et maximiser ce levier.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
+      return `Ce terme de recherche a généré ${orders} commande${orders > 1 ? 's' : ''}${period} (${formatCurrency(sales)})${acos ? ` avec un ACoS de ${acos.toFixed(1)}%` : ''}. C'est le moment de le promouvoir en mot-clé exact pour mieux contrôler l'enchère et maximiser ce levier.`;
     },
     impact: () => 'Contrôle direct de l\'enchère sur un terme qui convertit. Optimisation du coût par vente.',
     risk: 'Doublon temporaire possible. On ajustera une fois le nouveau mot-clé actif.',
@@ -399,7 +624,8 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     why: (ctx) => {
       const clicks = ctx.metrics.clicks ?? 0;
       const spend = ctx.metrics.spend ?? 0;
-      return `${clicks} clics, ${formatCurrency(spend)} dépensés sur 14 jours, aucune commande. Même en croisière, il faut élaguer régulièrement les termes qui consomment du budget sans résultat.`;
+      const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : ' sur 14 jours';
+      return `${clicks} clics, ${formatCurrency(spend)} dépensés${period}, aucune commande. Même en croisière, il faut élaguer régulièrement les termes qui consomment du budget sans résultat.`;
     },
     impact: (ctx) => {
       const spend = ctx.metrics.spend ?? 0;
@@ -487,6 +713,7 @@ export function transformRecommendation(raw: any, safetyMode: boolean): HumanRec
     metrics,
     suggestedAction: raw.suggestedAction || {},
     phase,
+    periodDays: raw.contextData?.periodDays ?? 14,
   };
 
   return {
@@ -495,11 +722,14 @@ export function transformRecommendation(raw: any, safetyMode: boolean): HumanRec
     why: template.why(ctx),
     impact: template.impact(ctx),
     risk: template.risk,
-    riskLevel: template.riskLevel,
+    riskLevel: raw.riskLevel || template.riskLevel,
     canSimulate: true,
     canApply: !safetyMode,
     entityName,
     entityType,
+    entityKey: raw.entityKey || '',
+    campaignName: raw.campaignName ?? null,
+    campaignTargetingType: raw.campaignTargetingType ?? null,
     confidence: raw.confidenceScore ?? null,
     metrics,
     createdAt: raw.createdAt || null,
@@ -508,5 +738,117 @@ export function transformRecommendation(raw: any, safetyMode: boolean): HumanRec
       description: template.actionDesc(ctx),
     },
     bookAdvice: template.bookAdvice ? template.bookAdvice(ctx) : undefined,
+    // Strategy Engine fields (enrichis par le backend)
+    strategyScore: raw.strategyScore ?? null,
+    strategyLabel: raw.strategyLabel ?? null,
+    recommendedForLifecycle: raw.recommendedForLifecycle ?? false,
+    requiresConsent: raw.requiresConsent ?? false,
+    consentLevel: raw.consentLevel ?? 'none',
+    consentMessage: raw.consentMessage ?? undefined,
+    metricsPeriodDays: raw.contextData?.periodDays ?? 7,
+    _ruleId: ruleId,
+  };
+}
+
+/**
+ * Regroupe les recommandations par entityKey.
+ * Pour chaque groupe, la reco avec recommendedForLifecycle=true est mise en premier.
+ * Les autres sont triées par strategyScore décroissant.
+ */
+export interface RecommendationGroup {
+  entityKey: string;
+  entityName: string;
+  entityType: string;
+  campaignTargetingType: string | null;
+  recommended: HumanRecommendation | null;
+  alternatives: HumanRecommendation[];
+}
+
+export function groupRecommendationsByEntity(recos: HumanRecommendation[]): RecommendationGroup[] {
+  const groups: Record<string, HumanRecommendation[]> = {};
+
+  for (const reco of recos) {
+    const key = reco.entityKey || reco.id;
+    if (!groups[key]) {
+      groups[key] = [];
+    }
+    groups[key].push(reco);
+  }
+
+  const result: RecommendationGroup[] = [];
+
+  const keys = Object.keys(groups);
+  for (const entityKey of keys) {
+    const groupRecos = groups[entityKey];
+    // Trier par strategyScore décroissant
+    groupRecos.sort((a: HumanRecommendation, b: HumanRecommendation) =>
+      (b.strategyScore ?? 0) - (a.strategyScore ?? 0),
+    );
+
+    const recommended = groupRecos.find((r: HumanRecommendation) => r.recommendedForLifecycle) || null;
+    const alternatives = groupRecos.filter((r: HumanRecommendation) => r !== recommended);
+
+    // Si pas de recommended, prendre la première (meilleur score)
+    const primary = recommended || groupRecos[0];
+    const alts = recommended ? alternatives : groupRecos.slice(1);
+
+    result.push({
+      entityKey,
+      entityName: primary?.entityName || entityKey,
+      entityType: primary?.entityType || 'keyword',
+      campaignTargetingType: primary?.campaignTargetingType || null,
+      recommended: primary,
+      alternatives: alts,
+    });
+  }
+
+  // Trier les groupes : ceux avec une reco recommandée en premier, puis par score
+  result.sort((a: RecommendationGroup, b: RecommendationGroup) => {
+    const aScore = a.recommended?.strategyScore ?? 0;
+    const bScore = b.recommended?.strategyScore ?? 0;
+    const aRec = a.recommended?.recommendedForLifecycle ? 1 : 0;
+    const bRec = b.recommended?.recommendedForLifecycle ? 1 : 0;
+    if (aRec !== bRec) return bRec - aRec;
+    return bScore - aScore;
+  });
+
+  return result;
+}
+
+/**
+ * Régénère les textes (why, impact, action.description) d'une recommandation
+ * avec des métriques fraîches au lieu du snapshot figé.
+ */
+export function refreshRecommendationTexts(
+  reco: HumanRecommendation,
+  freshMetrics: HumanRecommendation['metrics'],
+  lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch',
+  periodDays?: number,
+): HumanRecommendation {
+  // Retrouver le template correspondant — utilise le même ruleId que transformRecommendation
+  const ruleId = (reco._ruleId || reco.action.type || '').toLowerCase();
+  const template = Object.entries(RULE_TEMPLATES)
+    .find(([k]) => ruleId.includes(k))?.[1] || DEFAULT_TEMPLATE;
+
+  const ctx: TemplateContext = {
+    entityName: reco.entityName,
+    entityLabel: getEntityLabel(reco.entityType),
+    metrics: freshMetrics,
+    suggestedAction: {},
+    phase: lifecyclePhase,
+    periodDays,
+  };
+
+  return {
+    ...reco,
+    metrics: freshMetrics,
+    why: template.why(ctx),
+    impact: template.impact(ctx),
+    title: template.title(ctx),
+    action: {
+      ...reco.action,
+      description: template.actionDesc(ctx),
+    },
+    bookAdvice: template.bookAdvice ? template.bookAdvice(ctx) : reco.bookAdvice,
   };
 }

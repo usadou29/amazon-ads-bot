@@ -62,14 +62,14 @@ const REPORT_TYPE_ID_FIELD: Record<string, string> = {
   campaigns: 'campaignId',
   ad_groups: 'adGroupId',
   keywords: 'keywordId',
-  targets: 'targetId',
+  targets: 'keywordId',  // spTargeting utilise keywordId pour TOUS les types de ciblage (keywords + product targets)
   // search_terms est traité à part (adGroupId + query)
 };
 
 const ALL_REPORT_TYPES: ReportType[] = ['campaigns', 'ad_groups', 'keywords', 'targets', 'search_terms'];
 
 const BATCH_SIZE = 500;
-const POLL_INTERVAL_MS = 15_000;   // 15 secondes
+const POLL_INTERVAL_MS = 5_000;    // 5 secondes (réduit de 15s)
 const MAX_POLL_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
 @Injectable()
@@ -139,38 +139,56 @@ export class ReportsService {
     const createdJobs: ReportJob[] = [];
     const skippedReports: Array<{ reportType: string; marketplace: string; reason: string }> = [];
 
+    // Construire toutes les combinaisons profil × reportType et les envoyer en parallèle
+    const requestTasks: Array<{ profile: any; reportType: string }> = [];
     for (const profile of profiles) {
       for (const reportType of reportTypes) {
-        try {
+        requestTasks.push({ profile, reportType });
+      }
+    }
+
+    // Exécuter en parallèle par batches de 5
+    const REQUEST_PARALLEL_LIMIT = 5;
+    for (let i = 0; i < requestTasks.length; i += REQUEST_PARALLEL_LIMIT) {
+      const batch = requestTasks.slice(i, i + REQUEST_PARALLEL_LIMIT);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (task) => {
           this.logger.debug(
-            `Requesting report: ${reportType} for profile ${profile.profileId} (${profile.marketplace})`,
+            `Requesting report: ${task.reportType} for profile ${task.profile.profileId} (${task.profile.marketplace})`,
           );
-          const job = await this.requestSingleReport(
+          return this.requestSingleReport(
             adAccountId,
-            profile,
-            reportType,
+            task.profile,
+            task.reportType,
             startDate,
             endDate,
             workspaceId,
           );
-          if (job) createdJobs.push(job);
-        } catch (err) {
+        }),
+      );
+
+      for (let j = 0; j < batchResults.length; j++) {
+        const batchResult = batchResults[j];
+        const task = batch[j];
+        if (batchResult.status === 'fulfilled') {
+          if (batchResult.value) createdJobs.push(batchResult.value);
+        } else {
+          const err = batchResult.reason;
           const status = (err as any)?.response?.status;
           const message = (err as any)?.response?.data
             ? JSON.stringify((err as any).response.data)
             : (err instanceof Error ? err.message : String(err));
-
           const reason = `HTTP ${status || '?'}: ${message}`;
           if (status === 404 || status === 400) {
             this.logger.warn(
-              `Report "${reportType}" profile ${profile.profileId} (${profile.marketplace}): ${reason}`,
+              `Report "${task.reportType}" profile ${task.profile.profileId} (${task.profile.marketplace}): ${reason}`,
             );
           } else {
             this.logger.error(
-              `Report "${reportType}" profile ${profile.profileId} (${profile.marketplace}): ${reason}`,
+              `Report "${task.reportType}" profile ${task.profile.profileId} (${task.profile.marketplace}): ${reason}`,
             );
           }
-          skippedReports.push({ reportType, marketplace: profile.marketplace, reason });
+          skippedReports.push({ reportType: task.reportType, marketplace: task.profile.marketplace, reason });
         }
       }
     }
@@ -210,22 +228,32 @@ export class ReportsService {
       )
       .limit(1);
 
-    // Re-request if failed OR if ingested with 0 records (likely bad columns)
+    // Re-request si :
+    // 1. Le job a échoué
+    // 2. Le job ingéré avec 0 records (probable mauvaises colonnes)
+    // 3. Le job a été ingéré il y a plus de STALE_THRESHOLD (les données changent en continu sur Amazon)
+    const STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 heures
+    const isStale = existing.length > 0 &&
+      existing[0].status === 'ingested' &&
+      existing[0].ingestedAt &&
+      (Date.now() - new Date(existing[0].ingestedAt).getTime()) > STALE_THRESHOLD_MS;
+
     const shouldReRequest = existing.length > 0 && (
       existing[0].status === 'failed' ||
-      (existing[0].status === 'ingested' && (existing[0].recordsProcessed ?? 0) === 0)
+      (existing[0].status === 'ingested' && (existing[0].recordsProcessed ?? 0) === 0) ||
+      isStale
     );
 
     if (existing.length > 0 && !shouldReRequest) {
       this.logger.debug(
-        `Report job already exists for ${reportType} ${profile.marketplace} (${existing[0].status}, records=${existing[0].recordsProcessed}) – skipping`,
+        `Report job already exists for ${reportType} ${profile.marketplace} (${existing[0].status}, records=${existing[0].recordsProcessed}, age=${existing[0].ingestedAt ? Math.round((Date.now() - new Date(existing[0].ingestedAt).getTime()) / 60000) + 'min' : '?'}) – skipping`,
       );
       return existing[0];
     }
 
     if (existing.length > 0 && shouldReRequest) {
       this.logger.log(
-        `Re-requesting report ${reportType} ${profile.marketplace} (was ${existing[0].status}, records=${existing[0].recordsProcessed})`,
+        `Re-requesting report ${reportType} ${profile.marketplace} (was ${existing[0].status}, records=${existing[0].recordsProcessed}${isStale ? ', STALE' : ''})`,
       );
     }
 
@@ -315,20 +343,28 @@ export class ReportsService {
       return { processed: 0, completed: 0, failed: 0, errors: [] };
     }
 
-    this.logger.log(`Processing ${pendingJobs.length} pending report jobs`);
+    this.logger.log(`Processing ${pendingJobs.length} pending report jobs IN PARALLEL`);
 
-    const result: ReportProcessResult = { processed: 0, completed: 0, failed: 0, errors: [] };
+    const result: ReportProcessResult = { processed: pendingJobs.length, completed: 0, failed: 0, errors: [] };
 
-    for (const job of pendingJobs) {
-      result.processed++;
-      try {
-        await this.pollAndProcessReport(job);
-        result.completed++;
-      } catch (err) {
-        result.failed++;
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        result.errors.push({ reportJobId: job.id, error: errorMsg });
-        this.logger.error(`Report job ${job.id} failed: ${errorMsg}`);
+    // Traiter tous les rapports en parallèle (max 5 simultanés pour éviter le throttling)
+    const PARALLEL_LIMIT = 5;
+    for (let i = 0; i < pendingJobs.length; i += PARALLEL_LIMIT) {
+      const batch = pendingJobs.slice(i, i + PARALLEL_LIMIT);
+      const batchResults = await Promise.allSettled(
+        batch.map((job: ReportJob) => this.pollAndProcessReport(job)),
+      );
+
+      for (let j = 0; j < batchResults.length; j++) {
+        const batchResult = batchResults[j];
+        if (batchResult.status === 'fulfilled') {
+          result.completed++;
+        } else {
+          result.failed++;
+          const errorMsg = batchResult.reason instanceof Error ? batchResult.reason.message : String(batchResult.reason);
+          result.errors.push({ reportJobId: batch[j].id, error: errorMsg });
+          this.logger.error(`Report job ${batch[j].id} failed: ${errorMsg}`);
+        }
       }
     }
 
@@ -463,6 +499,10 @@ export class ReportsService {
     }
 
     if (rows.length === 0) {
+      this.logger.warn(
+        `Report ${job.id} (${job.reportType}): EMPTY report — 0 rows returned by Amazon. ` +
+        `This means Amazon returned no data for this report type.`,
+      );
       await this.db
         .update(reportJobs)
         .set({ status: 'ingested', ingestedAt: new Date(), recordsProcessed: 0 })
@@ -490,6 +530,12 @@ export class ReportsService {
 
   /**
    * Ingère un rapport standard (campaigns, ad_groups, keywords, targets).
+   *
+   * Le rapport `targets` (spTargeting) utilise `keywordId` comme identifiant
+   * pour TOUS les types de ciblage (keywords ET product targets).
+   * Dans l'API structurelle, ce même ID est appelé `targetId` pour les product targets.
+   * On ingère toutes les lignes spTargeting comme entity_type='target'.
+   * Les métriques keywords sont déjà couvertes par le rapport `keywords` (spKeywords).
    */
   private async ingestStandardReport(
     rows: any[],
@@ -504,22 +550,15 @@ export class ReportsService {
       throw new Error(`Unknown report type for ingestion: ${reportType}`);
     }
 
-    // ── DIAGNOSTIC LOGGING ──
     this.logger.log(
       `[INGEST] reportType=${reportType}, entityType=${entityType}, idField=${idField}, totalRows=${rows.length}`,
     );
     if (rows.length > 0) {
       const sampleRow = rows[0];
-      const sampleKeys = Object.keys(sampleRow);
-      this.logger.log(`[INGEST] Sample row keys: ${sampleKeys.join(', ')}`);
+      this.logger.log(`[INGEST] Sample row keys: ${Object.keys(sampleRow).join(', ')}`);
       this.logger.log(`[INGEST] Sample row[${idField}] = ${JSON.stringify(sampleRow[idField])}`);
-      this.logger.log(`[INGEST] Sample row.date = ${JSON.stringify(sampleRow.date)}`);
-      this.logger.log(`[INGEST] Sample row.impressions = ${JSON.stringify(sampleRow.impressions)}`);
-      this.logger.log(`[INGEST] Sample row.clicks = ${JSON.stringify(sampleRow.clicks)}`);
-      this.logger.log(`[INGEST] Sample row.cost = ${JSON.stringify(sampleRow.cost)}, row.spend = ${JSON.stringify(sampleRow.spend)}`);
-      this.logger.log(`[INGEST] Sample row.sales14d = ${JSON.stringify(sampleRow.sales14d)}`);
+      this.logger.log(`[INGEST] Sample: date=${sampleRow.date}, impressions=${sampleRow.impressions}, clicks=${sampleRow.clicks}`);
     }
-    // ── END DIAGNOSTIC ──
 
     const metrics: NewDailyMetric[] = [];
     let skippedNoId = 0;
@@ -531,10 +570,15 @@ export class ReportsService {
         continue;
       }
 
+      // Pour le rapport targets (spTargeting), toutes les lignes utilisent keywordId
+      // et sont ingérées comme entity_type='target'. Le keywordId du rapport
+      // correspond au targetId de l'API structurelle pour les product targets.
+      const resolvedEntityType = entityType;
+
       metrics.push({
         workspaceId,
-        entityType,
-        entityKey: makeEntityKey(entityType, amazonId),
+        entityType: resolvedEntityType,
+        entityKey: makeEntityKey(resolvedEntityType, amazonId),
         profileId: profile.id,
         date: row.date,
         marketplace: profile.marketplace,
@@ -550,7 +594,7 @@ export class ReportsService {
     }
 
     this.logger.log(
-      `[INGEST] ${reportType}: ${metrics.length} metrics built, ${skippedNoId} rows skipped (no ${idField})`,
+      `[INGEST] ${reportType}: ${metrics.length} metrics built, ${skippedNoId} rows skipped (no ID)`,
     );
 
     if (metrics.length === 0) {

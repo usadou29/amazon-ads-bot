@@ -104,5 +104,105 @@
     "syncing": "Synchronisation...",
     "success": "C'est fait ! Rechargement..."
   },
-  "common": { "back": "Retour", "loading": "Chargement...", "error": "Une erreur est survenue", "save": "Enregistrer", "cancel": "Annuler" }
+  "common": { "back": "Retour", "loading": "Chargement...", "error": "Une erreur est survenue", "save": "Enregistrer", "cancel": "Annuler" },
+  "insights": {
+    "campaign": {
+      "invisible": {
+        "title": "Invisible aux yeux des clients",
+        "summary": "0 impression sur {periodDays} jours",
+        "explanation": "Personne ne voit ta campagne. Augmente les enchères ou vérifie que ta campagne est bien active."
+      },
+      "ignored": {
+        "title": "Visible mais ignorée",
+        "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
+        "explanation": "Les gens voient ton annonce mais ne cliquent pas. Vérifie ta couverture et ton titre — c'est la première chose qu'ils voient."
+      },
+      "too_early": {
+        "title": "Trop tôt pour conclure",
+        "summary": "{clicks} clics (il en faut au moins {minClicks}) sur {periodDays} jours",
+        "explanation": "Pas assez de données pour tirer une conclusion fiable. Laisse la campagne tourner quelques jours de plus."
+      },
+      "attractive_not_converting": {
+        "title": "Attire mais ne vend pas",
+        "summary": "{clicks} clics, 0 vente sur {periodDays} jours (CTR {ctr}%)",
+        "explanation": "Les gens cliquent sur ton annonce mais n'achètent pas. Le problème vient probablement de ta fiche livre : prix, couverture, résumé ou avis."
+      },
+      "promising_but_expensive": {
+        "title": "Vend, mais à quel prix",
+        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays} jours",
+        "explanation": "Tu fais des ventes mais le coût publicitaire est trop élevé par rapport à tes redevances. Optimise tes enchères ou améliore ta fiche pour augmenter la conversion."
+      },
+      "profitable": {
+        "title": "Rentable",
+        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays} jours",
+        "explanation": "Cette campagne te rapporte de l'argent. Tu peux envisager d'augmenter l'investissement pour accélérer."
+      },
+      "limited_by_budget": {
+        "title": "Freinée par le budget",
+        "summary": "{spend}€ dépensés sur {periodDays} jours (budget quasi atteint)",
+        "explanation": "Ta campagne est performante mais le budget quotidien la limite. Augmente-le pour lui donner plus d'espace."
+      }
+    },
+    "entity": {
+      "no_impressions": {
+        "title": "Jamais affiché",
+        "summary": "0 impression sur {periodDays} jours",
+        "explanation": "Ce mot-clé n'a généré aucune impression. L'enchère est probablement trop basse."
+      },
+      "low_ctr": {
+        "title": "Peu de clics",
+        "summary": "{clicks} clic(s) pour {impressions} impressions (CTR {ctr}%)",
+        "explanation": "Ton annonce apparaît mais n'attire pas les clics. Le problème vient souvent de la couverture ou du titre."
+      },
+      "too_early": {
+        "title": "Données insuffisantes",
+        "summary": "{clicks} clics (il en faut au moins {minClicks}) sur {periodDays} jours",
+        "explanation": "Pas assez de données pour décider. Patiente encore un peu."
+      },
+      "clicks_no_sales": {
+        "title": "Clics sans ventes",
+        "summary": "{clicks} clics, {spend}€ dépensés, 0 vente sur {periodDays} jours",
+        "explanation": "Les gens cliquent mais n'achètent pas. Le problème vient de ta fiche livre, pas du mot-clé."
+      },
+      "expensive_but_valid": {
+        "title": "Rentable... tout juste",
+        "summary": "{orders} vente(s), ACoS {acos}% (cible ≤{breakEven}%) sur {periodDays} jours",
+        "explanation": "Tu fais des ventes mais à un coût élevé. Baisse l'enchère pour améliorer la rentabilité."
+      },
+      "winner": {
+        "title": "Gagnant",
+        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays} jours",
+        "explanation": "Excellente performance. Ce mot-clé convertit bien et reste rentable."
+      },
+      "boost_candidate": {
+        "title": "Potentiel de croissance",
+        "summary": "{orders} vente(s), CTR {ctr}% (au-dessus de la moyenne) sur {periodDays} jours",
+        "explanation": "Ce mot-clé a un CTR supérieur à la moyenne et convertit bien. Augmente l'enchère pour capter plus de trafic."
+      }
+    },
+    "actions": {
+      "bid_up": "Augmenter l'enchère",
+      "bid_down": "Baisser l'enchère",
+      "pause": "Mettre en pause",
+      "harvest": "Récolter en exact",
+      "add_negative": "Bloquer ce terme",
+      "budget_increase": "Augmenter le budget",
+      "improve_listing": "Améliorer ta fiche livre",
+      "improve_cover": "Revoir ta couverture",
+      "monitor": "Surveiller",
+      "patience": "Patienter"
+    },
+    "execution": {
+      "ads": "Action pub",
+      "book": "Sur ta fiche",
+      "none": "Observation"
+    },
+    "confidence": {
+      "high": "Fiable",
+      "medium": "Modérée",
+      "low": "Exploratoire"
+    },
+    "why_column": "Pourquoi ?",
+    "campaign_summary": "Résumé campagne"
+  }
 }

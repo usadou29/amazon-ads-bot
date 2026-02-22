@@ -432,7 +432,7 @@ export class AmazonClientService {
       ad_groups: {
         reportTypeId: 'spCampaigns',
         groupBy: 'adGroup',
-        columns: ['adGroupId', 'campaignId', 'date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+        columns: ['adGroupId', 'date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
       keywords: {
         reportTypeId: 'spKeywords',
@@ -442,7 +442,7 @@ export class AmazonClientService {
       targets: {
         reportTypeId: 'spTargeting',
         groupBy: 'targeting',
-        columns: ['targetId', 'date', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+        columns: ['keywordId', 'targeting', 'date', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
       search_terms: {
         reportTypeId: 'spSearchTerm',

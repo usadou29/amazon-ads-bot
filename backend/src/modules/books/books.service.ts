@@ -11,10 +11,15 @@ import {
   adAccounts,
   adGroups,
   keywords,
+  productTargets,
 } from '@/db/schema';
 import { eq, and, inArray, sql, gte, lte, desc } from 'drizzle-orm';
 import type { Book, NewBook, CampaignBookMapping } from '@/db/schema';
 import type { LifecyclePhase } from '@/db/schema/books';
+import { reportJobs } from '@/db/schema/report-jobs';
+import { StrategyEngine } from '../strategy/strategy-engine';
+import { InsightsService } from '../insights/insights.service';
+import { GUARDS } from '@/config/guards';
 
 export interface CreateBookDto {
   workspaceId: string;
@@ -71,6 +76,8 @@ export class BooksService {
 
   constructor(
     @Inject(DATABASE_CONNECTION) private db: any,
+    private readonly strategyEngine: StrategyEngine,
+    private readonly insightsService: InsightsService,
   ) {}
 
   /**
@@ -560,9 +567,10 @@ export class BooksService {
   }
 
   private getDefaultDateRange(): { startDate: string; endDate: string } {
+    // 30 derniers jours incluant aujourd'hui (cohérent avec Amazon Ads)
     const end = new Date();
     const start = new Date();
-    start.setDate(start.getDate() - 30);
+    start.setDate(start.getDate() - 29); // 30 jours = aujourd'hui - 29
     return {
       startDate: start.toISOString().split('T')[0],
       endDate: end.toISOString().split('T')[0],
@@ -810,7 +818,11 @@ export class BooksService {
 
     // 6b. Résoudre les noms d'entités pour les recommandations
     // (campagnes, mots-clés, termes de recherche)
+    // entityNameMap : entityKey → nom lisible
+    // entityCampaignMap : entityKey → nom de la campagne parente
     const entityNameMap = new Map<string, string>();
+    const entityCampaignMap = new Map<string, string>();
+    const entityTargetingTypeMap = new Map<string, string>();
     if (recos.length > 0) {
       // Grouper les entityKeys par type
       const campaignIds: number[] = [];
@@ -830,37 +842,88 @@ export class BooksService {
         }
       }
 
-      // Résoudre les noms de campagnes
+      // Résoudre les noms de campagnes + targetingType
       if (campaignIds.length > 0) {
         const campaignNames = await this.db
           .select({
             amazonCampaignId: campaigns.amazonCampaignId,
             name: campaigns.name,
+            targetingType: campaigns.targetingType,
           })
           .from(campaigns)
           .where(inArray(campaigns.amazonCampaignId, campaignIds));
 
         for (const c of campaignNames) {
           entityNameMap.set(`campaign:${c.amazonCampaignId}`, c.name);
+          if (c.targetingType) {
+            entityTargetingTypeMap.set(`campaign:${c.amazonCampaignId}`, c.targetingType);
+          }
         }
       }
 
-      // Résoudre les noms de mots-clés
+      // Résoudre les noms de mots-clés + nom de la campagne parente
+      // Chaîne : keyword → adGroup → campaign
       if (keywordIds.length > 0) {
-        const keywordNames = await this.db
+        const keywordData = await this.db
           .select({
             amazonKeywordId: keywords.amazonKeywordId,
             keywordText: keywords.keywordText,
             matchType: keywords.matchType,
+            adGroupId: keywords.adGroupId,
           })
           .from(keywords)
           .where(inArray(keywords.amazonKeywordId, keywordIds));
 
-        for (const k of keywordNames) {
-          const label = k.matchType
-            ? `${k.keywordText} (${k.matchType})`
+        // Collecter les adGroupIds pour remonter aux campagnes
+        const adGroupIdSet = new Set<string>();
+        for (const k of keywordData) {
+          if (k.adGroupId) adGroupIdSet.add(k.adGroupId);
+        }
+        const adGroupIdsList = Array.from(adGroupIdSet);
+
+        // Map adGroupId → campaignName + targetingType
+        const adGroupToCampaignName = new Map<string, string>();
+        const adGroupToTargetingType = new Map<string, string>();
+        if (adGroupIdsList.length > 0) {
+          const agCampaignData = await this.db
+            .select({
+              agId: adGroups.id,
+              campaignName: campaigns.name,
+              targetingType: campaigns.targetingType,
+            })
+            .from(adGroups)
+            .innerJoin(campaigns, eq(adGroups.campaignId, campaigns.id))
+            .where(inArray(adGroups.id, adGroupIdsList));
+
+          for (const row of agCampaignData) {
+            adGroupToCampaignName.set(row.agId, row.campaignName || 'Campagne sans nom');
+            if (row.targetingType) {
+              adGroupToTargetingType.set(row.agId, row.targetingType);
+            }
+          }
+        }
+
+        // Traduction des match types API (anglais) → français
+        const matchTypeLabels: Record<string, string> = {
+          exact: 'Exacte',
+          phrase: 'Expression',
+          broad: 'Large',
+        };
+
+        for (const k of keywordData) {
+          const matchLabel = k.matchType ? (matchTypeLabels[k.matchType.toLowerCase()] || k.matchType) : '';
+          const label = matchLabel
+            ? `${k.keywordText} (${matchLabel})`
             : k.keywordText;
           entityNameMap.set(`keyword:${k.amazonKeywordId}`, label);
+
+          // Associer le nom de la campagne parente + targetingType
+          if (k.adGroupId && adGroupToCampaignName.has(k.adGroupId)) {
+            entityCampaignMap.set(`keyword:${k.amazonKeywordId}`, adGroupToCampaignName.get(k.adGroupId)!);
+          }
+          if (k.adGroupId && adGroupToTargetingType.has(k.adGroupId)) {
+            entityTargetingTypeMap.set(`keyword:${k.amazonKeywordId}`, adGroupToTargetingType.get(k.adGroupId)!);
+          }
         }
       }
 
@@ -912,6 +975,94 @@ export class BooksService {
     const lifecyclePhase = this.getEffectiveLifecyclePhase(book);
     const phaseInfo = this.getPhaseInfo(lifecyclePhase, book.publicationDate);
 
+    // ── Métriques fraîches par entityKey (14j) pour le Strategy Engine ──
+    // Les contextData.metrics des recos sont des snapshots du moment où la règle a été créée.
+    // Pour que le Strategy Engine score sur la réalité actuelle, on charge des métriques fraîches.
+    const STRATEGY_METRICS_DAYS = 14;
+    const freshMetricsMap = new Map<string, Record<string, any>>();
+
+    if (recos.length > 0) {
+      const recoEntityKeys = [...new Set(recos.map((r: any) => r.entityKey).filter(Boolean))];
+      const recoEntityTypes = [...new Set(recos.map((r: any) => r.entityType).filter(Boolean))];
+
+      if (recoEntityKeys.length > 0) {
+        const freshEnd = new Date();
+        const freshStart = new Date();
+        freshStart.setDate(freshStart.getDate() - (STRATEGY_METRICS_DAYS - 1));
+        const freshStartDate = freshStart.toISOString().split('T')[0];
+        const freshEndDate = freshEnd.toISOString().split('T')[0];
+
+        // Agréger métriques par entityKey, en prenant tous les entityTypes possibles
+        for (const entityType of recoEntityTypes) {
+          const entityKeysForType = recoEntityKeys.filter(k => k.startsWith(`${entityType}:`));
+          if (entityKeysForType.length === 0) continue;
+
+          const freshRows = await this.db
+            .select({
+              entityKey: dailyMetrics.entityKey,
+              impressions: sql<number>`COALESCE(SUM(${dailyMetrics.impressions}), 0)`,
+              clicks: sql<number>`COALESCE(SUM(${dailyMetrics.clicks}), 0)`,
+              spend: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.spend} AS DECIMAL)), 0)`,
+              sales: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.sales} AS DECIMAL)), 0)`,
+              orders: sql<number>`COALESCE(SUM(${dailyMetrics.orders}), 0)`,
+            })
+            .from(dailyMetrics)
+            .where(
+              and(
+                eq(dailyMetrics.entityType, entityType),
+                inArray(dailyMetrics.entityKey, entityKeysForType),
+                gte(dailyMetrics.date, freshStartDate),
+                lte(dailyMetrics.date, freshEndDate),
+              ),
+            )
+            .groupBy(dailyMetrics.entityKey);
+
+          for (const row of freshRows) {
+            const spend = Number(row.spend);
+            const sales = Number(row.sales);
+            const clicks = Number(row.clicks);
+            const orders = Number(row.orders);
+            freshMetricsMap.set(row.entityKey, {
+              impressions: Number(row.impressions),
+              clicks,
+              spend,
+              sales,
+              orders,
+              acos: sales > 0 ? Math.round((spend / sales) * 10000) / 100 : null,
+              ctr: Number(row.impressions) > 0 ? Math.round((clicks / Number(row.impressions)) * 10000) / 100 : 0,
+              cvr: clicks > 0 ? Math.round((orders / clicks) * 10000) / 100 : 0,
+            });
+          }
+        }
+      }
+    }
+
+    // ── Strategy Engine post-processing ──
+    // Override contextData.metrics avec les métriques fraîches si disponibles
+    const strategyInputs = recos.map((r: any) => {
+      const freshMetrics = freshMetricsMap.get(r.entityKey);
+      const contextData = freshMetrics
+        ? { ...r.contextData, metrics: freshMetrics }
+        : r.contextData;
+
+      return {
+        id: r.id,
+        entityKey: r.entityKey,
+        entityType: r.entityType,
+        actionType: r.actionType,
+        contextData,
+        confidenceScore: r.confidenceScore ? Number(r.confidenceScore) : null,
+      };
+    });
+
+    // Contexte économique : break-even ACoS basé sur le royalty rate du livre
+    const strategyContext = {
+      royaltyRate: book.royaltyRate ? Number(book.royaltyRate) : undefined,
+      defaultRoyaltyRate: GUARDS.DEFAULT_ROYALTY_RATE,
+    };
+    const strategyResults = this.strategyEngine.process(strategyInputs, lifecyclePhase, strategyContext);
+    const strategyMap = new Map(strategyResults.map((s) => [s.id, s]));
+
     return {
       book: {
         id: book.id,
@@ -944,11 +1095,16 @@ export class BooksService {
             entityName = entityKey;
           }
         }
+        const strategy = strategyMap.get(r.id);
+        const campaignName = entityCampaignMap.get(entityKey) || null;
+        const campaignTargetingType = entityTargetingTypeMap.get(entityKey) || null;
         return {
           id: r.id,
           entityType: r.entityType,
           entityKey: r.entityKey,
           entityName,
+          campaignName,
+          campaignTargetingType,
           actionType: r.actionType,
           suggestedAction: r.suggestedAction,
           contextData: r.contextData,
@@ -956,6 +1112,14 @@ export class BooksService {
           ruleSnapshot: r.ruleSnapshot,
           status: r.status,
           createdAt: r.createdAt,
+          // Strategy Engine fields
+          strategyScore: strategy?.strategyScore ?? null,
+          strategyLabel: strategy?.strategyLabel ?? null,
+          riskLevel: strategy?.riskLevel ?? 'medium',
+          recommendedForLifecycle: strategy?.recommendedForLifecycle ?? false,
+          requiresConsent: strategy?.requiresConsent ?? false,
+          consentLevel: strategy?.consentLevel ?? 'none',
+          consentMessage: strategy?.consentMessage ?? null,
         };
       }),
       recentActions: recentActions.map((a: any) => ({
@@ -1008,9 +1172,10 @@ export class BooksService {
       return [];
     }
 
+    // Même logique que getCampaignDetails : N derniers jours incluant aujourd'hui
     const end = new Date();
     const start = new Date();
-    start.setDate(start.getDate() - days);
+    start.setDate(start.getDate() - (days - 1));
 
     const dailyData = await this.db
       .select({
@@ -1046,5 +1211,459 @@ export class BooksService {
         ? Math.round((Number(d.spend) / Number(d.sales)) * 10000) / 100
         : 0,
     }));
+  }
+
+  // ─── Campaign Detail View ─────────────────────────
+  // Retourne le détail de chaque campagne liée au livre :
+  // mots-clés, product targets, avec métriques issues de daily_metrics
+
+  /**
+   * GET /api/books/:id/campaigns/detail
+   * Détail des campagnes avec keywords, targets et métriques
+   */
+  async getCampaignDetails(bookId: string, options?: { days?: number }): Promise<any> {
+    const days = options?.days ?? 30;
+
+    // 1. Vérifier le livre
+    const [book] = await this.db
+      .select()
+      .from(books)
+      .where(eq(books.id, bookId))
+      .limit(1);
+
+    if (!book) {
+      throw new NotFoundException(`Book ${bookId} not found`);
+    }
+
+    // 2. Récupérer les campagnes liées
+    const mappings = await this.db
+      .select({
+        campaignId: campaignBookMapping.campaignId,
+        isPrimary: campaignBookMapping.isPrimary,
+        campaign: {
+          id: campaigns.id,
+          name: campaigns.name,
+          campaignType: campaigns.campaignType,
+          state: campaigns.state,
+          targetingType: campaigns.targetingType,
+          dailyBudget: campaigns.dailyBudget,
+          biddingStrategy: campaigns.biddingStrategy,
+          amazonCampaignId: campaigns.amazonCampaignId,
+          startDate: campaigns.startDate,
+        },
+      })
+      .from(campaignBookMapping)
+      .innerJoin(campaigns, eq(campaignBookMapping.campaignId, campaigns.id))
+      .where(eq(campaignBookMapping.bookId, bookId));
+
+    if (mappings.length === 0) {
+      return { campaigns: [] };
+    }
+
+    // 3. Date range
+    // Amazon Ads "N derniers jours" = les N derniers jours calendaires INCLUANT aujourd'hui.
+    // Ex: "7 derniers jours" le 21 février = du 15 au 21 février (7 jours).
+    // "Aujourd'hui" (days=1) = uniquement le 21 février.
+    // Formule universelle : end = aujourd'hui, start = aujourd'hui - (days - 1)
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - (days - 1));
+    const startDate = start.toISOString().split('T')[0];
+    const endDate = end.toISOString().split('T')[0];
+
+    // 4. Pour chaque campagne, récupérer ad_groups → keywords + product_targets
+    const campaignDetails = [];
+
+    for (const mapping of mappings) {
+      const camp = mapping.campaign;
+
+      // Récupérer les ad groups de cette campagne
+      const adGroupsData = await this.db
+        .select({
+          id: adGroups.id,
+          name: adGroups.name,
+          amazonAdGroupId: adGroups.amazonAdGroupId,
+          state: adGroups.state,
+          defaultBid: adGroups.defaultBid,
+        })
+        .from(adGroups)
+        .where(eq(adGroups.campaignId, camp.id));
+
+      if (adGroupsData.length === 0) {
+        // Campagne sans ad group → métriques campagne seulement
+        const campaignEntityKey = `campaign:${camp.amazonCampaignId}`;
+        const [campMetrics] = await this.db
+          .select({
+            impressions: sql<number>`COALESCE(SUM(${dailyMetrics.impressions}), 0)`,
+            clicks: sql<number>`COALESCE(SUM(${dailyMetrics.clicks}), 0)`,
+            spend: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.spend} AS DECIMAL)), 0)`,
+            sales: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.sales} AS DECIMAL)), 0)`,
+            orders: sql<number>`COALESCE(SUM(${dailyMetrics.orders}), 0)`,
+            units: sql<number>`COALESCE(SUM(${dailyMetrics.units}), 0)`,
+          })
+          .from(dailyMetrics)
+          .where(
+            and(
+              eq(dailyMetrics.entityType, 'campaign'),
+              eq(dailyMetrics.entityKey, campaignEntityKey),
+              gte(dailyMetrics.date, startDate),
+              lte(dailyMetrics.date, endDate),
+            ),
+          );
+
+        campaignDetails.push({
+          id: camp.id,
+          name: camp.name,
+          campaignType: camp.campaignType,
+          state: camp.state,
+          targetingType: camp.targetingType,
+          dailyBudget: camp.dailyBudget ? Number(camp.dailyBudget) : null,
+          biddingStrategy: camp.biddingStrategy,
+          isPrimary: mapping.isPrimary ?? false,
+          metrics: this.formatMetrics(campMetrics),
+          keywords: [],
+          productTargets: [],
+          adGroups: [],
+        });
+        continue;
+      }
+
+      const adGroupIds = adGroupsData.map((ag: any) => ag.id);
+
+      // ── Récupérer les mots-clés ──
+      const keywordsData = await this.db
+        .select({
+          id: keywords.id,
+          amazonKeywordId: keywords.amazonKeywordId,
+          keywordText: keywords.keywordText,
+          matchType: keywords.matchType,
+          state: keywords.state,
+          bid: keywords.bid,
+          adGroupId: keywords.adGroupId,
+        })
+        .from(keywords)
+        .where(inArray(keywords.adGroupId, adGroupIds));
+
+      // ── Récupérer les product targets ──
+      const targetsData = await this.db
+        .select({
+          id: productTargets.id,
+          amazonTargetId: productTargets.amazonTargetId,
+          expressionType: productTargets.expressionType,
+          expression: productTargets.expression,
+          state: productTargets.state,
+          bid: productTargets.bid,
+          adGroupId: productTargets.adGroupId,
+        })
+        .from(productTargets)
+        .where(inArray(productTargets.adGroupId, adGroupIds));
+
+      // ── Récupérer les métriques pour tous les keywords ──
+      const keywordEntityKeys = keywordsData.map((k: any) => `keyword:${k.amazonKeywordId}`);
+      const targetEntityKeys = targetsData.map((t: any) => `target:${t.amazonTargetId}`);
+      const campaignEntityKey = `campaign:${camp.amazonCampaignId}`;
+
+      // Batch : métriques keywords
+      let keywordMetricsMap: Record<string, any> = {};
+      if (keywordEntityKeys.length > 0) {
+        const kwMetrics = await this.db
+          .select({
+            entityKey: dailyMetrics.entityKey,
+            impressions: sql<number>`COALESCE(SUM(${dailyMetrics.impressions}), 0)`,
+            clicks: sql<number>`COALESCE(SUM(${dailyMetrics.clicks}), 0)`,
+            spend: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.spend} AS DECIMAL)), 0)`,
+            sales: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.sales} AS DECIMAL)), 0)`,
+            orders: sql<number>`COALESCE(SUM(${dailyMetrics.orders}), 0)`,
+            units: sql<number>`COALESCE(SUM(${dailyMetrics.units}), 0)`,
+          })
+          .from(dailyMetrics)
+          .where(
+            and(
+              eq(dailyMetrics.entityType, 'keyword'),
+              inArray(dailyMetrics.entityKey, keywordEntityKeys),
+              gte(dailyMetrics.date, startDate),
+              lte(dailyMetrics.date, endDate),
+            ),
+          )
+          .groupBy(dailyMetrics.entityKey);
+
+        for (const row of kwMetrics) {
+          keywordMetricsMap[row.entityKey] = row;
+        }
+        this.logger.log(
+          `[CAMPAIGN-DETAIL] Keywords: ${keywordEntityKeys.length} entity keys queried, ` +
+          `${kwMetrics.length} rows returned from daily_metrics (${startDate} → ${endDate}). ` +
+          `Sample keys: ${keywordEntityKeys.slice(0, 3).join(', ')}`,
+        );
+      } else {
+        this.logger.log(`[CAMPAIGN-DETAIL] No keyword entity keys to query`);
+      }
+
+      // Batch : métriques targets
+      let targetMetricsMap: Record<string, any> = {};
+      if (targetEntityKeys.length > 0) {
+        const tgMetrics = await this.db
+          .select({
+            entityKey: dailyMetrics.entityKey,
+            impressions: sql<number>`COALESCE(SUM(${dailyMetrics.impressions}), 0)`,
+            clicks: sql<number>`COALESCE(SUM(${dailyMetrics.clicks}), 0)`,
+            spend: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.spend} AS DECIMAL)), 0)`,
+            sales: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.sales} AS DECIMAL)), 0)`,
+            orders: sql<number>`COALESCE(SUM(${dailyMetrics.orders}), 0)`,
+            units: sql<number>`COALESCE(SUM(${dailyMetrics.units}), 0)`,
+          })
+          .from(dailyMetrics)
+          .where(
+            and(
+              eq(dailyMetrics.entityType, 'target'),
+              inArray(dailyMetrics.entityKey, targetEntityKeys),
+              gte(dailyMetrics.date, startDate),
+              lte(dailyMetrics.date, endDate),
+            ),
+          )
+          .groupBy(dailyMetrics.entityKey);
+
+        for (const row of tgMetrics) {
+          targetMetricsMap[row.entityKey] = row;
+        }
+        this.logger.log(
+          `[CAMPAIGN-DETAIL] Targets: ${targetEntityKeys.length} entity keys queried, ` +
+          `${tgMetrics.length} rows returned from daily_metrics (${startDate} → ${endDate}). ` +
+          `Sample keys: ${targetEntityKeys.slice(0, 3).join(', ')}`,
+        );
+
+        // Diagnostic : vérifier s'il existe N'IMPORTE QUELLE donnée target dans daily_metrics
+        if (tgMetrics.length === 0) {
+          const [anyTargetData] = await this.db
+            .select({
+              cnt: sql<number>`COUNT(*)`,
+              sampleKey: sql<string>`MIN(${dailyMetrics.entityKey})`,
+            })
+            .from(dailyMetrics)
+            .where(eq(dailyMetrics.entityType, 'target'));
+
+          // Vérifier aussi les report_jobs pour targets
+          const recentTargetJobs = await this.db
+            .select({
+              status: reportJobs.status,
+              recordsProcessed: reportJobs.recordsProcessed,
+              errorMessage: reportJobs.errorMessage,
+              requestedAt: reportJobs.requestedAt,
+            })
+            .from(reportJobs)
+            .where(eq(reportJobs.reportType, 'targets'))
+            .orderBy(desc(reportJobs.requestedAt))
+            .limit(3);
+
+          this.logger.warn(
+            `[CAMPAIGN-DETAIL] DIAGNOSTIC: Total rows in daily_metrics with entity_type='target': ${anyTargetData?.cnt || 0}. ` +
+            `Sample key: ${anyTargetData?.sampleKey || 'NONE'}. ` +
+            `Expected keys: ${targetEntityKeys.slice(0, 3).join(', ')}. ` +
+            `Recent 'targets' report jobs: ${JSON.stringify(recentTargetJobs.map((j: any) => ({ status: j.status, records: j.recordsProcessed, error: j.errorMessage?.slice(0, 100), at: j.requestedAt })))}`,
+          );
+        }
+      } else {
+        this.logger.log(`[CAMPAIGN-DETAIL] No target entity keys to query`);
+      }
+
+      // Métriques campagne globale
+      const [campMetrics] = await this.db
+        .select({
+          impressions: sql<number>`COALESCE(SUM(${dailyMetrics.impressions}), 0)`,
+          clicks: sql<number>`COALESCE(SUM(${dailyMetrics.clicks}), 0)`,
+          spend: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.spend} AS DECIMAL)), 0)`,
+          sales: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.sales} AS DECIMAL)), 0)`,
+          orders: sql<number>`COALESCE(SUM(${dailyMetrics.orders}), 0)`,
+          units: sql<number>`COALESCE(SUM(${dailyMetrics.units}), 0)`,
+        })
+        .from(dailyMetrics)
+        .where(
+          and(
+            eq(dailyMetrics.entityType, 'campaign'),
+            eq(dailyMetrics.entityKey, campaignEntityKey),
+            gte(dailyMetrics.date, startDate),
+            lte(dailyMetrics.date, endDate),
+          ),
+        );
+
+      // Traduction match types
+      const matchTypeLabels: Record<string, string> = {
+        exact: 'Exacte',
+        phrase: 'Expression',
+        broad: 'Large',
+      };
+
+      // Construire les keywords avec métriques
+      const kwResult = keywordsData.map((k: any) => {
+        const entityKey = `keyword:${k.amazonKeywordId}`;
+        const m = keywordMetricsMap[entityKey];
+        const matchLabel = k.matchType
+          ? (matchTypeLabels[k.matchType.toLowerCase()] || k.matchType)
+          : '';
+        return {
+          id: k.id,
+          amazonKeywordId: String(k.amazonKeywordId),
+          keywordText: k.keywordText,
+          matchType: matchLabel,
+          matchTypeRaw: k.matchType,
+          state: k.state,
+          bid: k.bid ? Number(k.bid) : null,
+          metrics: m ? this.formatMetrics(m) : this.emptyMetrics(),
+        };
+      });
+
+      // Trier par dépenses décroissantes
+      kwResult.sort((a: any, b: any) => b.metrics.spend - a.metrics.spend);
+
+      // Construire les targets avec métriques
+      const tgResult = targetsData.map((t: any) => {
+        const entityKey = `target:${t.amazonTargetId}`;
+        const m = targetMetricsMap[entityKey];
+        // Extraire un label lisible de l'expression
+        let label = '';
+        if (t.expression && Array.isArray(t.expression)) {
+          const expr = t.expression[0];
+          if (expr && expr.value) {
+            label = expr.value;
+          } else if (expr && expr.type) {
+            label = expr.type;
+          }
+        } else if (typeof t.expression === 'string') {
+          label = t.expression;
+        }
+        return {
+          id: t.id,
+          amazonTargetId: String(t.amazonTargetId),
+          expressionType: t.expressionType,
+          expression: label || t.expressionType || 'Cible produit',
+          state: t.state,
+          bid: t.bid ? Number(t.bid) : null,
+          metrics: m ? this.formatMetrics(m) : this.emptyMetrics(),
+        };
+      });
+
+      tgResult.sort((a: any, b: any) => b.metrics.spend - a.metrics.spend);
+
+      campaignDetails.push({
+        id: camp.id,
+        name: camp.name,
+        campaignType: camp.campaignType,
+        state: camp.state,
+        targetingType: camp.targetingType,
+        dailyBudget: camp.dailyBudget ? Number(camp.dailyBudget) : null,
+        biddingStrategy: camp.biddingStrategy,
+        isPrimary: mapping.isPrimary ?? false,
+        metrics: this.formatMetrics(campMetrics),
+        keywords: kwResult,
+        productTargets: tgResult,
+      });
+    }
+
+    // ── Enrichir avec les Insights ──────────────────────────────
+    const lifecyclePhase = this.getEffectiveLifecyclePhase(book);
+    const breakEvenAcos = book.royaltyRate
+      ? Math.max(5, Math.min(100, Number(book.royaltyRate)))
+      : GUARDS.DEFAULT_ROYALTY_RATE;
+
+    for (const camp of campaignDetails as any[]) {
+      // Campaign insight
+      camp.insight = this.insightsService.computeCampaignInsight(
+        { id: camp.id, name: camp.name, dailyBudget: camp.dailyBudget },
+        camp.metrics,
+        lifecyclePhase,
+        breakEvenAcos,
+        days,
+      );
+
+      // Calculate avgCampaignCTR for BOOST_CANDIDATE detection
+      const avgCampaignCTR = camp.metrics.impressions > 0
+        ? (camp.metrics.clicks / camp.metrics.impressions) * 100
+        : 0;
+
+      // Entity insights — keywords
+      for (const kw of camp.keywords) {
+        kw.insight = this.insightsService.computeEntityInsight(
+          { key: `keyword:${kw.amazonKeywordId}`, type: 'keyword', name: kw.keywordText, campaignId: camp.id, campaignName: camp.name },
+          kw.metrics,
+          lifecyclePhase,
+          breakEvenAcos,
+          days,
+          avgCampaignCTR,
+        );
+      }
+
+      // Entity insights — product targets
+      for (const tg of camp.productTargets) {
+        tg.insight = this.insightsService.computeEntityInsight(
+          { key: `target:${tg.amazonTargetId}`, type: 'target', name: tg.expression, campaignId: camp.id, campaignName: camp.name },
+          tg.metrics,
+          lifecyclePhase,
+          breakEvenAcos,
+          days,
+          avgCampaignCTR,
+        );
+      }
+    }
+
+    // Trier : campagnes actives d'abord, puis par dépenses
+    campaignDetails.sort((a, b) => {
+      if (a.state === 'enabled' && b.state !== 'enabled') return -1;
+      if (a.state !== 'enabled' && b.state === 'enabled') return 1;
+      return b.metrics.spend - a.metrics.spend;
+    });
+
+    return {
+      campaigns: campaignDetails,
+      periodDays: days,
+      lifecyclePhase,
+      breakEvenAcos,
+    };
+  }
+
+  private formatMetrics(m: any): {
+    impressions: number;
+    clicks: number;
+    spend: number;
+    sales: number;
+    orders: number;
+    units: number;
+    acos: number;
+    ctr: number;
+    cvr: number;
+    cpc: number;
+  } {
+    const impressions = Number(m?.impressions || 0);
+    const clicks = Number(m?.clicks || 0);
+    const spend = Math.round(Number(m?.spend || 0) * 100) / 100;
+    const sales = Math.round(Number(m?.sales || 0) * 100) / 100;
+    const orders = Number(m?.orders || 0);
+    const units = Number(m?.units || 0);
+    return {
+      impressions,
+      clicks,
+      spend,
+      sales,
+      orders,
+      units,
+      acos: sales > 0 ? Math.round((spend / sales) * 10000) / 100 : 0,
+      ctr: impressions > 0 ? Math.round((clicks / impressions) * 10000) / 100 : 0,
+      cvr: clicks > 0 ? Math.round((orders / clicks) * 10000) / 100 : 0,
+      cpc: clicks > 0 ? Math.round((spend / clicks) * 100) / 100 : 0,
+    };
+  }
+
+  private emptyMetrics() {
+    return {
+      impressions: 0,
+      clicks: 0,
+      spend: 0,
+      sales: 0,
+      orders: 0,
+      units: 0,
+      acos: 0,
+      ctr: 0,
+      cvr: 0,
+      cpc: 0,
+    };
   }
 }
