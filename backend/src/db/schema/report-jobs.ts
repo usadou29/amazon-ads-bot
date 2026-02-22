@@ -2,7 +2,7 @@ import { pgTable, uuid, varchar, timestamp, integer, text, date, unique, index }
 import { marketplaceProfiles } from './marketplace-profiles';
 import { workspaces } from './workspaces';
 
-export const reportTypeEnum = ['campaigns', 'ad_groups', 'keywords', 'targets', 'search_terms'] as const;
+export const reportTypeEnum = ['campaigns', 'ad_groups', 'keywords', 'targets', 'search_terms', 'keywords_impression_share', 'targets_impression_share'] as const;
 export type ReportType = typeof reportTypeEnum[number];
 
 export const reportStatusEnum = ['pending', 'requested', 'processing', 'ready', 'downloaded', 'ingested', 'failed'] as const;

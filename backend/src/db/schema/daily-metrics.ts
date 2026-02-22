@@ -20,6 +20,7 @@ export const dailyMetrics = pgTable('daily_metrics', {
   sales: decimal('sales', { precision: 12, scale: 4 }).default('0'),
   orders: integer('orders').default(0),
   units: integer('units').default(0),
+  impressionShare: decimal('impression_share', { precision: 5, scale: 2 }),
   attributionWindow: varchar('attribution_window', { length: 10 }).default('7d'),
   syncedAt: timestamp('synced_at', { withTimezone: true }).defaultNow(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),

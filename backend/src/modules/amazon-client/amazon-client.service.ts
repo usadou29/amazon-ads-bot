@@ -423,7 +423,7 @@ export class AmazonClientService {
     //   - searchTerm (pas query)
     //   - groupBy en camelCase lowercase (pas UPPERCASE)
     //   - spAdGroups n'existe pas → utiliser spCampaigns avec groupBy: 'adGroup'
-    const REPORT_CONFIG: Record<string, { reportTypeId: string; groupBy: string; columns: string[] }> = {
+    const REPORT_CONFIG: Record<string, { reportTypeId: string; groupBy: string; columns: string[]; timeUnit?: string }> = {
       campaigns: {
         reportTypeId: 'spCampaigns',
         groupBy: 'campaign',
@@ -449,6 +449,19 @@ export class AmazonClientService {
         groupBy: 'searchTerm',
         columns: ['searchTerm', 'adGroupId', 'campaignId', 'date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
+      // Rapports SUMMARY pour l'impression share (topOfSearchImpressionShare nécessite timeUnit=SUMMARY)
+      keywords_impression_share: {
+        reportTypeId: 'spKeywords',
+        groupBy: 'adGroup',
+        columns: ['keywordId', 'impressions', 'topOfSearchImpressionShare'],
+        timeUnit: 'SUMMARY',
+      },
+      targets_impression_share: {
+        reportTypeId: 'spTargeting',
+        groupBy: 'targeting',
+        columns: ['keywordId', 'impressions', 'topOfSearchImpressionShare'],
+        timeUnit: 'SUMMARY',
+      },
     };
 
     const config = REPORT_CONFIG[reportType];
@@ -465,7 +478,7 @@ export class AmazonClientService {
         groupBy: [config.groupBy],
         columns: config.columns,
         reportTypeId: config.reportTypeId,
-        timeUnit: 'DAILY',
+        timeUnit: config.timeUnit || 'DAILY',
         format: 'GZIP_JSON',
       },
     };

@@ -1375,6 +1375,11 @@ export class BooksService {
             sales: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.sales} AS DECIMAL)), 0)`,
             orders: sql<number>`COALESCE(SUM(${dailyMetrics.orders}), 0)`,
             units: sql<number>`COALESCE(SUM(${dailyMetrics.units}), 0)`,
+            impressionShare: sql<number>`ROUND(
+              CASE WHEN COALESCE(SUM(${dailyMetrics.impressions}), 0) > 0
+              THEN SUM(CAST(${dailyMetrics.impressionShare} AS DECIMAL) * ${dailyMetrics.impressions}) / SUM(${dailyMetrics.impressions})
+              ELSE NULL END, 2
+            )`,
           })
           .from(dailyMetrics)
           .where(
@@ -1411,6 +1416,11 @@ export class BooksService {
             sales: sql<number>`COALESCE(SUM(CAST(${dailyMetrics.sales} AS DECIMAL)), 0)`,
             orders: sql<number>`COALESCE(SUM(${dailyMetrics.orders}), 0)`,
             units: sql<number>`COALESCE(SUM(${dailyMetrics.units}), 0)`,
+            impressionShare: sql<number>`ROUND(
+              CASE WHEN COALESCE(SUM(${dailyMetrics.impressions}), 0) > 0
+              THEN SUM(CAST(${dailyMetrics.impressionShare} AS DECIMAL) * ${dailyMetrics.impressions}) / SUM(${dailyMetrics.impressions})
+              ELSE NULL END, 2
+            )`,
           })
           .from(dailyMetrics)
           .where(
@@ -1631,6 +1641,7 @@ export class BooksService {
     ctr: number;
     cvr: number;
     cpc: number;
+    impressionShare: number | null;
   } {
     const impressions = Number(m?.impressions || 0);
     const clicks = Number(m?.clicks || 0);
@@ -1638,6 +1649,7 @@ export class BooksService {
     const sales = Math.round(Number(m?.sales || 0) * 100) / 100;
     const orders = Number(m?.orders || 0);
     const units = Number(m?.units || 0);
+    const rawImprShare = m?.impressionShare != null ? Number(m.impressionShare) : null;
     return {
       impressions,
       clicks,
@@ -1649,6 +1661,7 @@ export class BooksService {
       ctr: impressions > 0 ? Math.round((clicks / impressions) * 10000) / 100 : 0,
       cvr: clicks > 0 ? Math.round((orders / clicks) * 10000) / 100 : 0,
       cpc: clicks > 0 ? Math.round((spend / clicks) * 100) / 100 : 0,
+      impressionShare: rawImprShare != null && !isNaN(rawImprShare) ? rawImprShare : null,
     };
   }
 

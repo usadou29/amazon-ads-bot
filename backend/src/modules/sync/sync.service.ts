@@ -11,6 +11,7 @@ import {
   keywords,
   productTargets,
   adAccounts,
+  books,
 } from '@/db/schema';
 import { eq, and, count, sql, inArray } from 'drizzle-orm';
 import { Marketplace } from '@/config/amazon';
@@ -153,6 +154,9 @@ export class SyncService {
         result.recordsUpdated += profileResult.updated;
         result.details!.profiles = profileResult;
       }
+
+      // Auto-activer/désactiver les profils selon les marketplaces des livres
+      await this.autoActivateProfiles(adAccountId, account.workspaceId);
 
       // Recuperer les profils a synchroniser
       let profilesToSync = await this.getProfilesToSync(adAccountId, profileId);
@@ -993,6 +997,59 @@ export class SyncService {
       );
     } catch (err) {
       this.logger.warn(`[POST-SYNC COUNT] Failed to count: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /**
+   * Active automatiquement les profils marketplace qui ont au moins un livre,
+   * et désactive ceux qui n'en ont aucun.
+   * Ainsi, on ne synchronise que les marketplaces où l'utilisateur est présent.
+   */
+  private async autoActivateProfiles(adAccountId: string, workspaceId: string): Promise<void> {
+    // Récupérer les marketplaces qui ont au moins un livre
+    const bookMarketplaces = await this.db
+      .selectDistinct({ marketplace: books.marketplace })
+      .from(books)
+      .where(eq(books.workspaceId, workspaceId));
+
+    const activeMarketplaces = new Set(bookMarketplaces.map((b: { marketplace: string }) => b.marketplace));
+
+    // Récupérer tous les profils de ce compte
+    const allProfiles = await this.db
+      .select({ id: marketplaceProfiles.id, marketplace: marketplaceProfiles.marketplace, isActive: marketplaceProfiles.isActive })
+      .from(marketplaceProfiles)
+      .where(eq(marketplaceProfiles.adAccountId, adAccountId));
+
+    const toActivate: string[] = [];
+    const toDeactivate: string[] = [];
+
+    for (const profile of allProfiles) {
+      const shouldBeActive = activeMarketplaces.has(profile.marketplace);
+      if (shouldBeActive && !profile.isActive) {
+        toActivate.push(profile.id);
+      } else if (!shouldBeActive && profile.isActive) {
+        toDeactivate.push(profile.id);
+      }
+    }
+
+    if (toActivate.length > 0) {
+      await this.db
+        .update(marketplaceProfiles)
+        .set({ isActive: true })
+        .where(inArray(marketplaceProfiles.id, toActivate));
+      this.logger.log(`[AUTO-ACTIVATE] Activated ${toActivate.length} profile(s) matching book marketplaces`);
+    }
+
+    if (toDeactivate.length > 0) {
+      await this.db
+        .update(marketplaceProfiles)
+        .set({ isActive: false })
+        .where(inArray(marketplaceProfiles.id, toDeactivate));
+      this.logger.log(`[AUTO-ACTIVATE] Deactivated ${toDeactivate.length} profile(s) with no books`);
+    }
+
+    if (toActivate.length === 0 && toDeactivate.length === 0) {
+      this.logger.log(`[AUTO-ACTIVATE] All profiles already aligned with book marketplaces (${[...activeMarketplaces].join(', ') || 'none'})`);
     }
   }
 
