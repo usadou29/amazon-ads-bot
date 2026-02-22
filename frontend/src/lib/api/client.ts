@@ -82,6 +82,28 @@ export const dryRunAction = (recommendationId: string) => api.post('/actions/dry
 export const executeAction = (recommendationId: string) => api.post('/actions/execute', { recommendationId, executedBy: 'user' }).then((r) => r.data);
 export const fetchKillSwitchStatus = () => api.get('/actions/kill-switch').then((r) => r.data);
 
+// ─── Direct Actions (Phase Action) ─────────────
+export interface ActionSuggestionRequest {
+  workspaceId: string;
+  entityKey: string;
+  entityType: 'keyword' | 'target';
+  acosTarget: number;
+  lifecyclePhase?: string;
+}
+export interface ExecuteDirectActionRequest {
+  workspaceId: string;
+  entityKey: string;
+  entityType: 'keyword' | 'target';
+  actionType: 'adjust_bid' | 'pause';
+  newBid?: number;
+  rationale?: string;
+  dryRun?: boolean;
+}
+export const fetchActionSuggestion = (dto: ActionSuggestionRequest) =>
+  api.post('/actions/suggestion', dto).then((r) => r.data);
+export const executeDirectAction = (dto: ExecuteDirectActionRequest) =>
+  api.post('/actions/execute-direct', dto).then((r) => r.data);
+
 // ─── System ────────────────────────────────────
 export const fetchFeatureFlag = (name: string) => api.get(`/system/features/${name}`).then((r) => r.data);
 

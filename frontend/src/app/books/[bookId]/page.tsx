@@ -17,6 +17,7 @@ import {
   dryRunAction,
   executeAction,
   updateBook,
+  getWorkspaceId,
 } from '@/lib/api/client';
 import { OverviewCampaignView } from '@/components/features/OverviewCampaignView';
 import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, interpretAdsDependency, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
@@ -572,6 +573,14 @@ export default function BookDetailPage() {
             onDaysChange={setOverviewDays}
             loading={overviewLoading}
             lifecyclePhase={phaseInfo.phase as any}
+            workspaceId={getWorkspaceId()}
+            acosTarget={acosTarget}
+            onActionExecuted={async () => {
+              const updated = await fetchBookDashboard(bookId, includeInactive);
+              setDashboard(updated);
+              const updatedDetails = await fetchBookCampaignDetails(bookId, overviewDays);
+              setOverviewCampaignDetails(updatedDetails);
+            }}
           />
         </div>
       )}

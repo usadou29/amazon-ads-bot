@@ -17,6 +17,7 @@ import { AuthorsModule } from '@/modules/authors/authors.module';
 import { CampaignsModule } from '@/modules/campaigns/campaigns.module';
 import { SchedulerModule } from '@/modules/scheduler/scheduler.module';
 import { InsightsModule } from '@/modules/insights/insights.module';
+import { ActionsModule } from '@/modules/actions/actions.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { InsightsModule } from '@/modules/insights/insights.module';
     CampaignsModule,
     SchedulerModule,
     InsightsModule,
+    ActionsModule,
   ],
 })
 export class AppModule {}

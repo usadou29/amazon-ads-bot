@@ -87,6 +87,9 @@ interface OverviewCampaignViewProps {
   onDaysChange: (days: number) => void;
   loading: boolean;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  workspaceId?: string;
+  acosTarget?: number;
+  onActionExecuted?: () => void;
 }
 
 // ── Helpers ──
@@ -494,6 +497,9 @@ function KeywordTableWithRecos({
   bookId,
   parentDays,
   lifecyclePhase,
+  workspaceId,
+  acosTarget,
+  onActionExecuted,
 }: {
   keywords: KeywordItem[];
   recommendationMap: Map<string, RecommendationGroup[]>;
@@ -503,6 +509,9 @@ function KeywordTableWithRecos({
   bookId: string;
   parentDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  workspaceId?: string;
+  acosTarget?: number;
+  onActionExecuted?: () => void;
 }) {
   const [modalKeyword, setModalKeyword] = useState<KeywordItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
@@ -589,7 +598,7 @@ function KeywordTableWithRecos({
                   </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {kw.insight ? (
-                      <EntityInsightPopover insight={kw.insight} entityName={kw.keywordText} />
+                      <EntityInsightPopover insight={kw.insight} entityName={kw.keywordText} workspaceId={workspaceId} acosTarget={acosTarget} lifecyclePhase={lifecyclePhase} />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
                     )}
@@ -677,6 +686,9 @@ function ProductTargetTableWithRecos({
   bookId,
   parentDays,
   lifecyclePhase,
+  workspaceId,
+  acosTarget,
+  onActionExecuted,
 }: {
   targets: ProductTargetItem[];
   recommendationMap: Map<string, RecommendationGroup[]>;
@@ -686,6 +698,9 @@ function ProductTargetTableWithRecos({
   bookId: string;
   parentDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  workspaceId?: string;
+  acosTarget?: number;
+  onActionExecuted?: () => void;
 }) {
   const [modalTarget, setModalTarget] = useState<ProductTargetItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
@@ -772,7 +787,7 @@ function ProductTargetTableWithRecos({
                   </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {tg.insight ? (
-                      <EntityInsightPopover insight={tg.insight} entityName={tg.expression} />
+                      <EntityInsightPopover insight={tg.insight} entityName={tg.expression} workspaceId={workspaceId} acosTarget={acosTarget} lifecyclePhase={lifecyclePhase} />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
                     )}
@@ -859,6 +874,9 @@ function OverviewCampaignCard({
   bookId,
   parentDays,
   lifecyclePhase,
+  workspaceId,
+  acosTarget,
+  onActionExecuted,
 }: {
   campaign: CampaignDetail;
   recommendationMap: Map<string, RecommendationGroup[]>;
@@ -868,6 +886,9 @@ function OverviewCampaignCard({
   bookId: string;
   parentDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  workspaceId?: string;
+  acosTarget?: number;
+  onActionExecuted?: () => void;
 }) {
   const [expanded, setExpanded] = useState(campaign.state === 'enabled');
   const sc = stateConfig[campaign.state] || stateConfig.enabled;
@@ -963,6 +984,9 @@ function OverviewCampaignCard({
                 bookId={bookId}
                 parentDays={parentDays}
                 lifecyclePhase={lifecyclePhase}
+                workspaceId={workspaceId}
+                acosTarget={acosTarget}
+                onActionExecuted={onActionExecuted}
               />
             )}
             {hasTargets && (
@@ -975,6 +999,9 @@ function OverviewCampaignCard({
                 bookId={bookId}
                 parentDays={parentDays}
                 lifecyclePhase={lifecyclePhase}
+                workspaceId={workspaceId}
+                acosTarget={acosTarget}
+                onActionExecuted={onActionExecuted}
               />
             )}
           </div>
@@ -1006,6 +1033,9 @@ export function OverviewCampaignView({
   onDaysChange,
   loading,
   lifecyclePhase,
+  workspaceId,
+  acosTarget,
+  onActionExecuted,
 }: OverviewCampaignViewProps) {
 
   if (loading) {
@@ -1084,6 +1114,9 @@ export function OverviewCampaignView({
           bookId={bookId}
           parentDays={days}
           lifecyclePhase={lifecyclePhase}
+          workspaceId={workspaceId}
+          acosTarget={acosTarget}
+          onActionExecuted={onActionExecuted}
         />
       ))}
     </div>

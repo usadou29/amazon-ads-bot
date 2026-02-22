@@ -267,5 +267,36 @@
     },
     "why_column": "Pourquoi ?",
     "campaign_summary": "Résumé campagne"
+  },
+  "actionModal": {
+    "title": "Action — « {entityName} »",
+    "diagnostic": "Diagnostic",
+    "confidence": "Confiance",
+    "metrics": "Métriques",
+    "currentBid": "Enchère actuelle",
+    "recommendedBid": "Enchère recommandée (Endromède)",
+    "amazonBid": "Enchère suggérée Amazon",
+    "amazonRange": "{min} – {max}",
+    "sliderLabel": "Ajuster l'enchère",
+    "simulate": "Simuler",
+    "apply": "Appliquer",
+    "pause": "Mettre en pause",
+    "cancel": "Annuler",
+    "guards": "Garde-fous : +{maxIncrease}% max / {minBid}–{maxBid}€",
+    "eligibility": {
+      "insufficient_data": "Pas assez de données ({clicks} clics). Il faut au minimum 5 clics pour agir.",
+      "observe_only": "Phase d'observation. {clicks} clics, 0 vente — patience recommandée.",
+      "small_tweak_max": "Ajustement limité à ±10%. Données encore insuffisantes pour un calcul complet.",
+      "full_calculation": "Calcul complet basé sur {clicks} clics et {orders} vente(s)."
+    },
+    "confirmApply": "Confirmer le changement d'enchère de {currentBid}€ → {newBid}€ ?",
+    "confirmPause": "Confirmer la mise en pause de « {entityName} » ?",
+    "success": "Action exécutée avec succès",
+    "error": "Erreur lors de l'exécution",
+    "loading": "Chargement de la suggestion...",
+    "retry": "Réessayer",
+    "dryRunResult": "Simulation : {currentBid}€ → {newBid}€",
+    "actionButton": "Agir",
+    "noAction": "Aucune action disponible"
   }
 }

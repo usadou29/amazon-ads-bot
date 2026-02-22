@@ -6,6 +6,7 @@ import {
   actionLog,
   systemConfig,
   keywords,
+  productTargets,
   adGroups,
   campaigns,
   marketplaceProfiles,
@@ -859,5 +860,251 @@ export class ExecutorService {
       profileId: isNaN(profileId) ? 0 : profileId,
       marketplace: row.marketplace ?? 'FR',
     };
+  }
+
+  /**
+   * Récupère le product target + contexte par entity_key et workspace.
+   */
+  private async getTargetContextByEntityKey(
+    workspaceId: string,
+    amazonTargetId: number,
+  ): Promise<
+    | { target: typeof productTargets.$inferSelect; adAccountId: string; profileId: number; marketplace: string }
+    | null
+  > {
+    const rows = await this.db
+      .select({
+        target: productTargets,
+        adAccountId: adAccounts.id,
+        profileId: marketplaceProfiles.profileId,
+        marketplace: marketplaceProfiles.marketplace,
+      })
+      .from(productTargets)
+      .innerJoin(adGroups, eq(productTargets.adGroupId, adGroups.id))
+      .innerJoin(campaigns, eq(adGroups.campaignId, campaigns.id))
+      .innerJoin(marketplaceProfiles, eq(campaigns.profileId, marketplaceProfiles.id))
+      .innerJoin(adAccounts, eq(marketplaceProfiles.adAccountId, adAccounts.id))
+      .where(
+        and(
+          eq(adAccounts.workspaceId, workspaceId),
+          eq(productTargets.amazonTargetId, amazonTargetId),
+        ),
+      )
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) return null;
+
+    const profileId = Number(row.profileId);
+    return {
+      target: row.target,
+      adAccountId: row.adAccountId,
+      profileId: isNaN(profileId) ? 0 : profileId,
+      marketplace: row.marketplace ?? 'FR',
+    };
+  }
+
+  // ============================================
+  // EXECUTE DIRECT ACTION (sans recommendation)
+  // ============================================
+
+  /**
+   * Exécute une action directe (adjust_bid ou pause) sans passer par le système de recommendations.
+   * Utilisé par le ActionModal frontend.
+   */
+  async executeDirectAction(dto: {
+    workspaceId: string;
+    entityKey: string;
+    entityType: 'keyword' | 'target';
+    actionType: 'adjust_bid' | 'pause';
+    newBid?: number;
+    rationale?: string;
+    dryRun?: boolean;
+  }): Promise<ExecuteActionResult> {
+    const { workspaceId, entityKey, entityType, actionType, newBid, rationale, dryRun = false } = dto;
+
+    // 1. Kill switch check
+    const killSwitch = await this.isKillSwitchActive();
+    if (killSwitch.active) {
+      return {
+        success: false,
+        error: `Kill switch is active: ${killSwitch.reason}`,
+        dryRun,
+      };
+    }
+
+    // 2. Daily limits check (sauf dry-run)
+    if (!dryRun) {
+      const dailyCheck = await this.checkDailyLimits(workspaceId);
+      if (!dailyCheck.canExecute) {
+        return {
+          success: false,
+          error: dailyCheck.reason,
+          dryRun,
+        };
+      }
+    }
+
+    // 3. Résoudre le contexte (keyword ou target)
+    const amazonId = extractAmazonId(entityKey);
+    if (amazonId === null) {
+      throw new BadRequestException(`Invalid entity key: ${entityKey}`);
+    }
+
+    if (entityType === 'keyword') {
+      return this.executeDirectKeywordAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun);
+    } else {
+      return this.executeDirectTargetAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun);
+    }
+  }
+
+  private async executeDirectKeywordAction(
+    workspaceId: string,
+    amazonKeywordId: number,
+    entityKey: string,
+    actionType: 'adjust_bid' | 'pause',
+    newBid: number | undefined,
+    rationale: string | undefined,
+    dryRun: boolean,
+  ): Promise<ExecuteActionResult> {
+    const ctx = await this.getKeywordContextByEntityKey(workspaceId, amazonKeywordId);
+    if (!ctx) {
+      throw new NotFoundException(`Keyword not found: ${entityKey}`);
+    }
+    const { keyword } = ctx;
+
+    if (actionType === 'adjust_bid') {
+      if (newBid == null) throw new BadRequestException('newBid is required for adjust_bid');
+
+      const currentBid = Number(keyword.bid) || 0;
+      const validation = validateBidChange(currentBid, newBid);
+      const finalBid = validation.adjustedValue;
+
+      const beforeValue = { bid: currentBid };
+      const afterValue = { bid: finalBid };
+      const apiRequest = { keywordId: keyword.amazonKeywordId, updates: { bid: finalBid } };
+      let apiResponse: any;
+
+      if (!dryRun) {
+        apiResponse = await this.amazonClient.updateKeyword(
+          ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
+          keyword.amazonKeywordId, { bid: finalBid },
+        );
+        await this.db.update(keywords).set({ bid: String(finalBid), updatedAt: new Date() })
+          .where(eq(keywords.id, keyword.id));
+      }
+
+      const actionLogEntry = await this.logAction({
+        workspaceId, entityType: 'keyword', entityKey,
+        amazonEntityId: keyword.amazonKeywordId,
+        actionType: 'adjust_bid', beforeValue, afterValue,
+        rationale: rationale || `Direct bid change from ${currentBid} to ${finalBid}`,
+        executedBy: 'user', status: dryRun ? 'simulated' : 'success',
+        apiRequest, apiResponse, isReversible: true, dryRun,
+      });
+
+      return { success: true, actionId: actionLogEntry.id, dryRun, beforeValue, afterValue, apiRequest, apiResponse };
+    }
+
+    // pause
+    const beforeValue = { state: keyword.state };
+    const afterValue = { state: 'paused' };
+    const apiRequest = { keywordId: keyword.amazonKeywordId, updates: { state: 'paused' } };
+    let apiResponse: any;
+
+    if (!dryRun) {
+      apiResponse = await this.amazonClient.updateKeyword(
+        ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
+        keyword.amazonKeywordId, { state: 'paused' },
+      );
+      await this.db.update(keywords).set({ state: 'paused', updatedAt: new Date() })
+        .where(eq(keywords.id, keyword.id));
+    }
+
+    const actionLogEntry = await this.logAction({
+      workspaceId, entityType: 'keyword', entityKey,
+      amazonEntityId: keyword.amazonKeywordId,
+      actionType: 'pause', beforeValue, afterValue,
+      rationale: rationale || 'Direct pause from Action modal',
+      executedBy: 'user', status: dryRun ? 'simulated' : 'success',
+      apiRequest, apiResponse, isReversible: true, dryRun,
+    });
+
+    return { success: true, actionId: actionLogEntry.id, dryRun, beforeValue, afterValue, apiRequest, apiResponse };
+  }
+
+  private async executeDirectTargetAction(
+    workspaceId: string,
+    amazonTargetId: number,
+    entityKey: string,
+    actionType: 'adjust_bid' | 'pause',
+    newBid: number | undefined,
+    rationale: string | undefined,
+    dryRun: boolean,
+  ): Promise<ExecuteActionResult> {
+    const ctx = await this.getTargetContextByEntityKey(workspaceId, amazonTargetId);
+    if (!ctx) {
+      throw new NotFoundException(`Product target not found: ${entityKey}`);
+    }
+    const { target } = ctx;
+
+    if (actionType === 'adjust_bid') {
+      if (newBid == null) throw new BadRequestException('newBid is required for adjust_bid');
+
+      const currentBid = Number(target.bid) || 0;
+      const validation = validateBidChange(currentBid, newBid);
+      const finalBid = validation.adjustedValue;
+
+      const beforeValue = { bid: currentBid };
+      const afterValue = { bid: finalBid };
+      const apiRequest = { targetId: target.amazonTargetId, updates: { bid: finalBid } };
+      let apiResponse: any;
+
+      if (!dryRun) {
+        apiResponse = await this.amazonClient.updateProductTarget(
+          ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
+          target.amazonTargetId, { bid: finalBid },
+        );
+        await this.db.update(productTargets).set({ bid: String(finalBid), updatedAt: new Date() })
+          .where(eq(productTargets.id, target.id));
+      }
+
+      const actionLogEntry = await this.logAction({
+        workspaceId, entityType: 'target', entityKey,
+        amazonEntityId: target.amazonTargetId,
+        actionType: 'adjust_bid', beforeValue, afterValue,
+        rationale: rationale || `Direct bid change from ${currentBid} to ${finalBid}`,
+        executedBy: 'user', status: dryRun ? 'simulated' : 'success',
+        apiRequest, apiResponse, isReversible: true, dryRun,
+      });
+
+      return { success: true, actionId: actionLogEntry.id, dryRun, beforeValue, afterValue, apiRequest, apiResponse };
+    }
+
+    // pause
+    const beforeValue = { state: target.state };
+    const afterValue = { state: 'paused' };
+    const apiRequest = { targetId: target.amazonTargetId, updates: { state: 'paused' } };
+    let apiResponse: any;
+
+    if (!dryRun) {
+      apiResponse = await this.amazonClient.updateProductTarget(
+        ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
+        target.amazonTargetId, { state: 'paused' },
+      );
+      await this.db.update(productTargets).set({ state: 'paused', updatedAt: new Date() })
+        .where(eq(productTargets.id, target.id));
+    }
+
+    const actionLogEntry = await this.logAction({
+      workspaceId, entityType: 'target', entityKey,
+      amazonEntityId: target.amazonTargetId,
+      actionType: 'pause', beforeValue, afterValue,
+      rationale: rationale || 'Direct pause from Action modal',
+      executedBy: 'user', status: dryRun ? 'simulated' : 'success',
+      apiRequest, apiResponse, isReversible: true, dryRun,
+    });
+
+    return { success: true, actionId: actionLogEntry.id, dryRun, beforeValue, afterValue, apiRequest, apiResponse };
   }
 }

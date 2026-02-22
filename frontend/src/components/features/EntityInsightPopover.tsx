@@ -8,16 +8,28 @@ import {
   ENTITY_DIAGNOSIS_COLORS,
   EXECUTION_COLORS,
 } from '@/lib/transforms/insights';
+import { ActionModal } from './ActionModal';
 
 interface EntityInsightPopoverProps {
   insight: EntityInsight;
   entityName: string;
+  workspaceId?: string;
+  acosTarget?: number;
+  lifecyclePhase?: string;
 }
 
-export function EntityInsightPopover({ insight, entityName }: EntityInsightPopoverProps) {
+export function EntityInsightPopover({
+  insight,
+  entityName,
+  workspaceId,
+  acosTarget,
+  lifecyclePhase,
+}: EntityInsightPopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [actionModalOpen, setActionModalOpen] = useState(false);
 
   const rendered = renderEntityInsight(insight);
+  const hasAdsActions = rendered.actions.some((a) => a.execution === 'ads');
   const diagColors = ENTITY_DIAGNOSIS_COLORS[insight.diagnosisCode] || {
     bg: 'bg-slate-50',
     text: 'text-slate-600',
@@ -136,6 +148,21 @@ export function EntityInsightPopover({ insight, entityName }: EntityInsightPopov
               </div>
             )}
 
+            {/* Action button */}
+            {hasAdsActions && workspaceId && acosTarget != null && (
+              <div className="mt-3 border-t border-slate-100 pt-3">
+                <button
+                  onClick={() => {
+                    setIsOpen(false);
+                    setActionModalOpen(true);
+                  }}
+                  className="w-full rounded-lg bg-brand-600 px-3 py-2 text-xs font-medium text-white hover:bg-brand-700 transition-colors"
+                >
+                  {t('actionModal.actionButton')}
+                </button>
+              </div>
+            )}
+
             {/* Linked recommendation */}
             {insight.linkedRecommendation && (
               <div className="mt-3 border-t border-slate-100 pt-3">
@@ -147,6 +174,20 @@ export function EntityInsightPopover({ insight, entityName }: EntityInsightPopov
             )}
           </div>
         </div>
+      )}
+
+      {/* Action Modal */}
+      {workspaceId && acosTarget != null && (
+        <ActionModal
+          open={actionModalOpen}
+          onClose={() => setActionModalOpen(false)}
+          entityKey={insight.entityKey}
+          entityType={insight.entityType as 'keyword' | 'target'}
+          entityName={entityName}
+          workspaceId={workspaceId}
+          acosTarget={acosTarget}
+          lifecyclePhase={lifecyclePhase}
+        />
       )}
     </>
   );
