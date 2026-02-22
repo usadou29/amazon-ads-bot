@@ -55,6 +55,8 @@ const REPORT_TYPE_TO_ENTITY: Record<string, EntityType> = {
   keywords: 'keyword',
   targets: 'target',
   search_terms: 'search_term',
+  keywords_impression_share: 'keyword',
+  targets_impression_share: 'target',
 };
 
 // ── Mapping reportType → champ ID Amazon dans les rows ─────
@@ -64,10 +66,15 @@ const REPORT_TYPE_ID_FIELD: Record<string, string> = {
   ad_groups: 'adGroupId',
   keywords: 'keywordId',
   targets: 'keywordId',  // spTargeting utilise keywordId pour TOUS les types de ciblage (keywords + product targets)
+  keywords_impression_share: 'keywordId',
+  targets_impression_share: 'keywordId',
   // search_terms est traité à part (adGroupId + query)
 };
 
-const ALL_REPORT_TYPES: ReportType[] = ['campaigns', 'ad_groups', 'keywords', 'targets', 'search_terms'];
+// Types de rapport impression share (SUMMARY) — séparés car ingestion différente
+const IMPRESSION_SHARE_REPORT_TYPES: ReportType[] = ['keywords_impression_share', 'targets_impression_share'];
+
+const ALL_REPORT_TYPES: ReportType[] = ['campaigns', 'ad_groups', 'keywords', 'targets', 'search_terms', ...IMPRESSION_SHARE_REPORT_TYPES];
 
 const BATCH_SIZE = 500;
 const POLL_INTERVAL_MS = 5_000;    // 5 secondes (réduit de 15s)
@@ -518,6 +525,8 @@ export class ReportsService {
 
     if (job.reportType === 'search_terms') {
       recordsProcessed = await this.ingestSearchTermsReport(rows, profile, job.workspaceId);
+    } else if (job.reportType === 'keywords_impression_share' || job.reportType === 'targets_impression_share') {
+      recordsProcessed = await this.ingestImpressionShareReport(rows, job.reportType, profile, job.dateFrom, job.dateTo);
     } else {
       recordsProcessed = await this.ingestStandardReport(rows, job.reportType, profile, job.workspaceId);
     }
@@ -779,6 +788,62 @@ export class ReportsService {
    * Note: query_norm et query_hash sont des colonnes GENERATED dans PostgreSQL.
    * On doit les fournir manuellement car Drizzle ne peut pas les écrire via ORM.
    */
+  /**
+   * Ingère un rapport SUMMARY d'impression share.
+   * Ce rapport n'a pas de date par ligne (c'est un agrégé sur la période).
+   * On met à jour la colonne impression_share sur toutes les lignes daily_metrics
+   * correspondantes pour la période.
+   */
+  private async ingestImpressionShareReport(
+    rows: any[],
+    reportType: string,
+    profile: any,
+    dateFrom: string,
+    dateTo: string,
+  ): Promise<number> {
+    const entityType = REPORT_TYPE_TO_ENTITY[reportType];
+    const idField = REPORT_TYPE_ID_FIELD[reportType];
+
+    if (!entityType || !idField) {
+      throw new Error(`Unknown impression share report type: ${reportType}`);
+    }
+
+    this.logger.log(
+      `[INGEST-IS] reportType=${reportType}, entityType=${entityType}, rows=${rows.length}`,
+    );
+
+    let updated = 0;
+
+    for (const row of rows) {
+      const amazonId = row[idField];
+      if (!amazonId) continue;
+
+      const rawShare = row.topOfSearchImpressionShare != null
+        ? parseFloat(row.topOfSearchImpressionShare)
+        : null;
+
+      if (rawShare == null || isNaN(rawShare)) continue;
+
+      const entityKey = makeEntityKey(entityType, amazonId);
+
+      // Mettre à jour impression_share sur toutes les lignes daily_metrics
+      // de cette entité pour la période du rapport
+      const result = await this.db.execute(sql`
+        UPDATE daily_metrics
+        SET impression_share = ${String(rawShare)}
+        WHERE entity_type = ${entityType}
+          AND entity_key = ${entityKey}
+          AND date >= ${dateFrom}
+          AND date <= ${dateTo}
+      `);
+
+      updated++;
+    }
+
+    this.logger.log(`[INGEST-IS] Updated impression_share for ${updated} entities (${dateFrom} → ${dateTo})`);
+    return updated;
+  }
+
   /**
    * Active les profils marketplace qui ont au moins un livre,
    * désactive ceux qui n'en ont aucun.

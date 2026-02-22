@@ -138,10 +138,17 @@ function ImpressionShareBadge({ share }: { share: number | null }) {
     color = 'bg-red-400'; // Absent
     label = 'Nul';
   }
+  // Couleurs de texte correspondantes pour le label
+  const textColor = share >= 20 ? 'text-emerald-700 bg-emerald-50'
+    : share >= 10 ? 'text-emerald-600 bg-emerald-50'
+    : share >= 5 ? 'text-amber-600 bg-amber-50'
+    : share > 0 ? 'text-orange-600 bg-orange-50'
+    : 'text-red-600 bg-red-50';
+
   return (
     <div className="flex items-center gap-1.5 justify-center" title={`Part d'impressions : ${share.toFixed(1)}%`}>
       <span className={`inline-block h-2.5 w-2.5 rounded-full ${color}`} />
-      <span className="text-[10px] font-medium text-slate-600">{share.toFixed(1)}%</span>
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${textColor}`}>{label}</span>
     </div>
   );
 }
@@ -513,7 +520,7 @@ function KeywordTableWithRecos({
               <th className="text-left py-1.5 px-2 text-slate-400 font-medium">État</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Enchère</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Impr.</th>
-              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Position</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Visibilité</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Demande</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Clics</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Dépensé</th>
@@ -685,7 +692,7 @@ function ProductTargetTableWithRecos({
               <th className="text-left py-1.5 px-2 text-slate-400 font-medium">État</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Enchère</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Impr.</th>
-              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Position</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Visibilité</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Demande</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Clics</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Dépensé</th>
@@ -830,7 +837,7 @@ function OverviewCampaignCard({
   parentDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(campaign.state === 'enabled');
   const sc = stateConfig[campaign.state] || stateConfig.enabled;
   const typeLabel = typeLabels[campaign.campaignType] || campaign.campaignType;
 

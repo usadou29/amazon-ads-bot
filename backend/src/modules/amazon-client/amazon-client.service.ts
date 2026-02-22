@@ -423,7 +423,7 @@ export class AmazonClientService {
     //   - searchTerm (pas query)
     //   - groupBy en camelCase lowercase (pas UPPERCASE)
     //   - spAdGroups n'existe pas → utiliser spCampaigns avec groupBy: 'adGroup'
-    const REPORT_CONFIG: Record<string, { reportTypeId: string; groupBy: string; columns: string[] }> = {
+    const REPORT_CONFIG: Record<string, { reportTypeId: string; groupBy: string; columns: string[]; timeUnit?: string }> = {
       campaigns: {
         reportTypeId: 'spCampaigns',
         groupBy: 'campaign',
@@ -437,17 +437,30 @@ export class AmazonClientService {
       keywords: {
         reportTypeId: 'spKeywords',
         groupBy: 'adGroup',
-        columns: ['keywordId', 'date', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d', 'topOfSearchImpressionShare'],
+        columns: ['keywordId', 'date', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
       targets: {
         reportTypeId: 'spTargeting',
         groupBy: 'targeting',
-        columns: ['keywordId', 'targeting', 'date', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d', 'topOfSearchImpressionShare'],
+        columns: ['keywordId', 'targeting', 'date', 'impressions', 'clicks', 'cost', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
       },
       search_terms: {
         reportTypeId: 'spSearchTerm',
         groupBy: 'searchTerm',
         columns: ['searchTerm', 'adGroupId', 'campaignId', 'date', 'impressions', 'clicks', 'cost', 'spend', 'sales14d', 'purchases14d', 'unitsSoldClicks14d'],
+      },
+      // Rapports SUMMARY pour l'impression share (topOfSearchImpressionShare nécessite timeUnit=SUMMARY)
+      keywords_impression_share: {
+        reportTypeId: 'spKeywords',
+        groupBy: 'adGroup',
+        columns: ['keywordId', 'impressions', 'topOfSearchImpressionShare'],
+        timeUnit: 'SUMMARY',
+      },
+      targets_impression_share: {
+        reportTypeId: 'spTargeting',
+        groupBy: 'targeting',
+        columns: ['keywordId', 'impressions', 'topOfSearchImpressionShare'],
+        timeUnit: 'SUMMARY',
       },
     };
 
@@ -465,7 +478,7 @@ export class AmazonClientService {
         groupBy: [config.groupBy],
         columns: config.columns,
         reportTypeId: config.reportTypeId,
-        timeUnit: 'DAILY',
+        timeUnit: config.timeUnit || 'DAILY',
         format: 'GZIP_JSON',
       },
     };
