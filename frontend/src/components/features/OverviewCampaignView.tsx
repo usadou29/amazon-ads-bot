@@ -5,6 +5,7 @@ import { Modal } from '@/components/ui/Modal';
 import { RecommendationCard } from '@/components/features/RecommendationCard';
 import { CampaignInsightCard } from '@/components/features/CampaignInsightCard';
 import { EntityInsightPopover } from '@/components/features/EntityInsightPopover';
+import { ActionModal } from '@/components/features/ActionModal';
 import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transforms/recommendations';
 import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight } from '@/lib/transforms/insights';
 import { t } from '@/lib/i18n';
@@ -478,8 +479,18 @@ function RecoBadge({ count, onClick }: { count: number; onClick: () => void }) {
   );
 }
 
-function EntityActionBadge({ action }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string } }) {
+function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: () => void }) {
   const execColors = EXECUTION_COLORS[action.execution];
+  if (onClick) {
+    return (
+      <button
+        onClick={onClick}
+        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${execColors.bg} ${execColors.text}`}
+      >
+        {execColors.icon} {action.label}
+      </button>
+    );
+  }
   return (
     <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${execColors.bg} ${execColors.text}`}>
       {execColors.icon} {action.label}
@@ -515,6 +526,7 @@ function KeywordTableWithRecos({
 }) {
   const [modalKeyword, setModalKeyword] = useState<KeywordItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
+  const [actionKeyword, setActionKeyword] = useState<KeywordItem | null>(null);
 
   if (keywords.length === 0) return null;
 
@@ -598,14 +610,17 @@ function KeywordTableWithRecos({
                   </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {kw.insight ? (
-                      <EntityInsightPopover insight={kw.insight} entityName={kw.keywordText} workspaceId={workspaceId} acosTarget={acosTarget} lifecyclePhase={lifecyclePhase} />
+                      <EntityInsightPopover insight={kw.insight} entityName={kw.keywordText} />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
                     )}
                   </td>
-                  <td className="py-2 px-2 text-center">
+                  <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {kwTopAction ? (
-                      <EntityActionBadge action={kwTopAction} />
+                      <EntityActionBadge
+                        action={kwTopAction}
+                        onClick={kwTopAction.execution === 'ads' && workspaceId && acosTarget != null ? () => setActionKeyword(kw) : undefined}
+                      />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
                     )}
@@ -672,6 +687,21 @@ function KeywordTableWithRecos({
           lifecyclePhase={lifecyclePhase}
         />
       )}
+
+      {/* Action Modal for keyword bid adjustment */}
+      {actionKeyword && workspaceId && acosTarget != null && (
+        <ActionModal
+          open={!!actionKeyword}
+          onClose={() => setActionKeyword(null)}
+          entityKey={`keyword:${actionKeyword.amazonKeywordId}`}
+          entityType="keyword"
+          entityName={actionKeyword.keywordText}
+          workspaceId={workspaceId}
+          acosTarget={acosTarget}
+          lifecyclePhase={lifecyclePhase}
+          onActionExecuted={onActionExecuted}
+        />
+      )}
     </div>
   );
 }
@@ -704,6 +734,7 @@ function ProductTargetTableWithRecos({
 }) {
   const [modalTarget, setModalTarget] = useState<ProductTargetItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
+  const [actionTarget, setActionTarget] = useState<ProductTargetItem | null>(null);
 
   if (targets.length === 0) return null;
 
@@ -787,14 +818,17 @@ function ProductTargetTableWithRecos({
                   </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {tg.insight ? (
-                      <EntityInsightPopover insight={tg.insight} entityName={tg.expression} workspaceId={workspaceId} acosTarget={acosTarget} lifecyclePhase={lifecyclePhase} />
+                      <EntityInsightPopover insight={tg.insight} entityName={tg.expression} />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
                     )}
                   </td>
-                  <td className="py-2 px-2 text-center">
+                  <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {tgTopAction ? (
-                      <EntityActionBadge action={tgTopAction} />
+                      <EntityActionBadge
+                        action={tgTopAction}
+                        onClick={tgTopAction.execution === 'ads' && workspaceId && acosTarget != null ? () => setActionTarget(tg) : undefined}
+                      />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
                     )}
@@ -858,6 +892,21 @@ function ProductTargetTableWithRecos({
           safetyBlocked={safetyBlocked}
           safetyMessage={safetyMessage}
           lifecyclePhase={lifecyclePhase}
+        />
+      )}
+
+      {/* Action Modal for target bid adjustment */}
+      {actionTarget && workspaceId && acosTarget != null && (
+        <ActionModal
+          open={!!actionTarget}
+          onClose={() => setActionTarget(null)}
+          entityKey={`target:${actionTarget.amazonTargetId}`}
+          entityType="target"
+          entityName={actionTarget.expression}
+          workspaceId={workspaceId}
+          acosTarget={acosTarget}
+          lifecyclePhase={lifecyclePhase}
+          onActionExecuted={onActionExecuted}
         />
       )}
     </div>

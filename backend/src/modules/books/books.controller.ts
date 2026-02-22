@@ -34,6 +34,28 @@ export class BooksController {
   }
 
   /**
+   * POST /api/books/:id/refresh
+   * Rafraîchit toutes les données depuis Amazon API :
+   * - Enchères (bids) et états des keywords/targets
+   * - Métriques (impressions, clics, dépenses, ventes) via rapports Amazon
+   */
+  @Post(':id/refresh')
+  async refresh(@Param('id') id: string) {
+    if (!id) throw new BadRequestException('Book ID is required');
+    this.logger.log(`Refreshing all data for book ${id}`);
+    return this.booksService.refreshBookData(id);
+  }
+
+  /**
+   * GET /api/books/debug-bids/:id
+   * DEBUG LIVE: Appelle l'API Amazon en temps réel et compare avec la DB
+   */
+  @Get('debug-bids/:id')
+  async debugBids(@Param('id') id: string) {
+    return this.booksService.debugBidsLive(id);
+  }
+
+  /**
    * GET /api/books/available-campaigns
    * Recupere les campagnes disponibles pour mapping
    * IMPORTANT: Cette route statique doit etre AVANT :id

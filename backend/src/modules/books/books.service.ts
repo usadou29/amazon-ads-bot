@@ -19,6 +19,9 @@ import type { LifecyclePhase } from '@/db/schema/books';
 import { reportJobs } from '@/db/schema/report-jobs';
 import { StrategyEngine } from '../strategy/strategy-engine';
 import { InsightsService } from '../insights/insights.service';
+import { AmazonClientService } from '../amazon-client/amazon-client.service';
+import { ReportsService } from '../reports/reports.service';
+import type { Marketplace } from '@/db/schema/marketplace-profiles';
 import { GUARDS } from '@/config/guards';
 
 export interface CreateBookDto {
@@ -78,6 +81,8 @@ export class BooksService {
     @Inject(DATABASE_CONNECTION) private db: any,
     private readonly strategyEngine: StrategyEngine,
     private readonly insightsService: InsightsService,
+    private readonly amazonClient: AmazonClientService,
+    private readonly reportsService: ReportsService,
   ) {}
 
   /**
@@ -1795,5 +1800,350 @@ export class BooksService {
       startDate: start.toISOString().split('T')[0],
       endDate: end.toISOString().split('T')[0],
     };
+  }
+
+  /**
+   * Rafraîchit les enchères (bids) + états des keywords et product targets
+   * en re-fetching les données depuis l'API Amazon pour les campagnes liées à ce livre.
+   * Appelé au chargement de la page livre pour garantir la conformité avec Amazon.
+   */
+  async refreshBookData(bookId: string): Promise<{
+    keywordsUpdated: number;
+    targetsUpdated: number;
+    reportsRequested: number;
+    reportsProcessed: number;
+    errors: string[];
+  }> {
+    const errors: string[] = [];
+    let keywordsUpdated = 0;
+    let targetsUpdated = 0;
+    let reportsRequested = 0;
+    let reportsProcessed = 0;
+
+    // 1. Get campaigns → profiles → adAccounts for this book
+    const mappings = await this.db
+      .select({
+        campaignId: campaigns.id,
+        amazonCampaignId: campaigns.amazonCampaignId,
+        profileDbId: campaigns.profileId,
+      })
+      .from(campaignBookMapping)
+      .innerJoin(campaigns, eq(campaignBookMapping.campaignId, campaigns.id))
+      .where(eq(campaignBookMapping.bookId, bookId));
+
+    if (mappings.length === 0) return { keywordsUpdated: 0, targetsUpdated: 0, reportsRequested: 0, reportsProcessed: 0, errors: [] };
+
+    // 2. Get unique profiles with their adAccount info
+    const profileDbIdSet = new Set<string>();
+    for (const m of mappings) profileDbIdSet.add(String((m as any).profileDbId));
+    const profileDbIds = [...profileDbIdSet] as string[];
+    const profiles = await this.db
+      .select({
+        id: marketplaceProfiles.id,
+        profileId: marketplaceProfiles.profileId,
+        marketplace: marketplaceProfiles.marketplace,
+        adAccountId: marketplaceProfiles.adAccountId,
+      })
+      .from(marketplaceProfiles)
+      .where(inArray(marketplaceProfiles.id, profileDbIds));
+
+    // 3. For each profile, fetch keywords and targets from Amazon, then update DB
+    for (const profile of profiles) {
+      try {
+        // Get adAccount ID for API calls
+        const [adAccount] = await this.db
+          .select({ id: adAccounts.id })
+          .from(adAccounts)
+          .where(eq(adAccounts.id, profile.adAccountId))
+          .limit(1);
+
+        if (!adAccount) {
+          errors.push(`AdAccount not found for profile ${profile.id}`);
+          continue;
+        }
+
+        // Build campaign → adGroup maps for this profile
+        const profileCampaignIds = mappings
+          .filter((m: any) => m.profileDbId === profile.id)
+          .map((m: any) => m.campaignId);
+
+        const ags = await this.db
+          .select({
+            id: adGroups.id,
+            amazonAdGroupId: adGroups.amazonAdGroupId,
+            campaignId: adGroups.campaignId,
+            defaultBid: adGroups.defaultBid,
+          })
+          .from(adGroups)
+          .where(inArray(adGroups.campaignId, profileCampaignIds));
+
+        const agDbIds = ags.map((ag: any) => ag.id);
+
+        // ── Refresh Keywords ──
+        const amazonKeywords = await this.amazonClient.getKeywords(
+          adAccount.id,
+          profile.profileId,
+          profile.marketplace as Marketplace,
+        );
+
+        // Map amazonKeywordId → fresh Amazon data
+        // IMPORTANT: l'API Amazon retourne keywordId comme STRING, la DB stocke en NUMBER (bigint)
+        // On normalise en Number pour que le Map.get() fonctionne
+        const amazonKwMap = new Map<number, any>();
+        for (const kw of amazonKeywords) {
+          amazonKwMap.set(Number(kw.keywordId), kw);
+        }
+
+        // Get existing keywords in DB for these ad groups
+        if (agDbIds.length > 0) {
+          const existingKws = await this.db
+            .select({
+              id: keywords.id,
+              amazonKeywordId: keywords.amazonKeywordId,
+              bid: keywords.bid,
+              state: keywords.state,
+            })
+            .from(keywords)
+            .where(inArray(keywords.adGroupId, agDbIds));
+
+          for (const dbKw of existingKws) {
+            const fresh = amazonKwMap.get(dbKw.amazonKeywordId);
+            if (!fresh) continue;
+
+            const freshBid = fresh.bid ? String(fresh.bid) : null;
+            const freshState = fresh.state?.toLowerCase() || 'enabled';
+
+            if (dbKw.bid !== freshBid || dbKw.state !== freshState) {
+              await this.db.update(keywords).set({
+                bid: freshBid,
+                state: freshState,
+                rawData: fresh,
+                lastSyncedAt: new Date(),
+                updatedAt: new Date(),
+              }).where(eq(keywords.id, dbKw.id));
+              keywordsUpdated++;
+            }
+          }
+        }
+
+        // ── Refresh Product Targets ──
+        const amazonTargets = await this.amazonClient.getProductTargets(
+          adAccount.id,
+          profile.profileId,
+          profile.marketplace as Marketplace,
+        );
+
+        // IMPORTANT: même normalisation String → Number pour les targets
+        const amazonTgMap = new Map<number, any>();
+        for (const tg of amazonTargets) {
+          amazonTgMap.set(Number(tg.targetId), tg);
+        }
+
+        if (agDbIds.length > 0) {
+          const existingTgs = await this.db
+            .select({
+              id: productTargets.id,
+              amazonTargetId: productTargets.amazonTargetId,
+              bid: productTargets.bid,
+              state: productTargets.state,
+            })
+            .from(productTargets)
+            .where(inArray(productTargets.adGroupId, agDbIds));
+
+          for (const dbTg of existingTgs) {
+            const fresh = amazonTgMap.get(dbTg.amazonTargetId);
+            if (!fresh) continue;
+
+            const freshBid = fresh.bid ? String(fresh.bid) : null;
+            const freshState = fresh.state?.toLowerCase() || 'enabled';
+
+            if (dbTg.bid !== freshBid || dbTg.state !== freshState) {
+              await this.db.update(productTargets).set({
+                bid: freshBid,
+                state: freshState,
+                rawData: fresh,
+                lastSyncedAt: new Date(),
+                updatedAt: new Date(),
+              }).where(eq(productTargets.id, dbTg.id));
+              targetsUpdated++;
+            }
+          }
+        }
+      } catch (err: any) {
+        const msg = `Error refreshing profile ${profile.marketplace}: ${err.message || err}`;
+        this.logger.warn(msg);
+        errors.push(msg);
+      }
+    }
+
+    // ── 4. Request fresh reports (fire-and-forget, ne bloque pas la réponse HTTP) ──
+    const adAccountIdSet = new Set<string>();
+    for (const profile of profiles) {
+      adAccountIdSet.add(profile.adAccountId);
+    }
+    const uniqueAdAccountIds = [...adAccountIdSet];
+
+    // Lance les demandes de rapports en arrière-plan
+    // On n'attend PAS le traitement (polling peut prendre 30min)
+    for (const adAccountId of uniqueAdAccountIds) {
+      this.reportsService.requestReportsForAccount(adAccountId, {
+        daysBack: 7,
+        reportTypes: ['campaigns', 'keywords', 'targets'] as any[],
+      }).then((reportResult) => {
+        reportsRequested += reportResult.jobs.length;
+        this.logger.log(`[REFRESH-BG] Requested ${reportResult.jobs.length} reports for adAccount ${adAccountId}`);
+        // Après avoir demandé les rapports, tenter de traiter ceux déjà prêts
+        return this.reportsService.processAllPendingReports({ maxAgeMinutes: 30 });
+      }).then((processResult) => {
+        this.logger.log(`[REFRESH-BG] Processed ${processResult.completed} reports (${processResult.failed} failed)`);
+      }).catch((err: any) => {
+        this.logger.warn(`[REFRESH-BG] Error processing reports for adAccount ${adAccountId}: ${err.message || err}`);
+      });
+    }
+
+    this.logger.log(`[REFRESH] Book ${bookId}: ${keywordsUpdated} keywords updated, ${targetsUpdated} targets updated. Reports requested in background for ${uniqueAdAccountIds.length} ad accounts.`);
+    return { keywordsUpdated, targetsUpdated, reportsRequested: uniqueAdAccountIds.length, reportsProcessed: 0, errors };
+  }
+
+  /**
+   * DEBUG LIVE: Appelle l'API Amazon en temps réel et compare avec la DB
+   * Montre exactement ce qu'Amazon retourne vs ce qu'on a en DB
+   */
+  async debugBidsLive(bookId: string) {
+    // 1. Get campaigns → profiles
+    const mappings = await this.db
+      .select({
+        campaignId: campaigns.id,
+        amazonCampaignId: campaigns.amazonCampaignId,
+        profileDbId: campaigns.profileId,
+      })
+      .from(campaignBookMapping)
+      .innerJoin(campaigns, eq(campaignBookMapping.campaignId, campaigns.id))
+      .where(eq(campaignBookMapping.bookId, bookId));
+
+    if (mappings.length === 0) return { error: 'No campaigns mapped to this book' };
+
+    // 2. Get profiles
+    const profileDbIdSet = new Set<string>();
+    for (const m of mappings) profileDbIdSet.add(String((m as any).profileDbId));
+    const profileDbIds = [...profileDbIdSet] as string[];
+    const profiles = await this.db
+      .select({
+        id: marketplaceProfiles.id,
+        profileId: marketplaceProfiles.profileId,
+        marketplace: marketplaceProfiles.marketplace,
+        adAccountId: marketplaceProfiles.adAccountId,
+      })
+      .from(marketplaceProfiles)
+      .where(inArray(marketplaceProfiles.id, profileDbIds));
+
+    const results: any[] = [];
+
+    for (const profile of profiles) {
+      const [adAccount] = await this.db
+        .select({ id: adAccounts.id })
+        .from(adAccounts)
+        .where(eq(adAccounts.id, profile.adAccountId))
+        .limit(1);
+
+      if (!adAccount) continue;
+
+      // Get ad groups for this profile's campaigns
+      const profileCampaignIds = mappings
+        .filter((m: any) => m.profileDbId === profile.id)
+        .map((m: any) => m.campaignId);
+
+      const ags = await this.db
+        .select({
+          id: adGroups.id,
+          amazonAdGroupId: adGroups.amazonAdGroupId,
+          defaultBid: adGroups.defaultBid,
+          name: adGroups.name,
+        })
+        .from(adGroups)
+        .where(inArray(adGroups.campaignId, profileCampaignIds));
+
+      const agDbIds = ags.map((ag: any) => ag.id);
+      const agMap = new Map<string, any>(ags.map((ag: any) => [ag.id, ag]));
+
+      // ── LIVE: Fetch keywords from Amazon API ──
+      let amazonKeywords: any[] = [];
+      let amazonApiError: string | null = null;
+      try {
+        amazonKeywords = await this.amazonClient.getKeywords(
+          adAccount.id,
+          profile.profileId,
+          profile.marketplace as Marketplace,
+        );
+      } catch (err: any) {
+        amazonApiError = err.message || String(err);
+      }
+
+      const amazonKwMap = new Map<number, any>();
+      for (const kw of amazonKeywords) {
+        amazonKwMap.set(Number(kw.keywordId), kw);
+      }
+
+      // Get DB keywords
+      const dbKws = agDbIds.length > 0
+        ? await this.db
+            .select({
+              id: keywords.id,
+              amazonKeywordId: keywords.amazonKeywordId,
+              keywordText: keywords.keywordText,
+              matchType: keywords.matchType,
+              bid: keywords.bid,
+              state: keywords.state,
+              adGroupId: keywords.adGroupId,
+              lastSyncedAt: keywords.lastSyncedAt,
+            })
+            .from(keywords)
+            .where(inArray(keywords.adGroupId, agDbIds))
+        : [];
+
+      // Compare each DB keyword with Amazon live data
+      const keywordComparisons = dbKws.map((dbKw: any) => {
+        const ag = agMap.get(dbKw.adGroupId);
+        const amazonData = amazonKwMap.get(dbKw.amazonKeywordId);
+        return {
+          keywordText: dbKw.keywordText,
+          matchType: dbKw.matchType,
+          amazonKeywordId: dbKw.amazonKeywordId,
+          adGroupName: ag?.name,
+          adGroupDefaultBid: ag?.defaultBid,
+          db: {
+            bid: dbKw.bid,
+            state: dbKw.state,
+            lastSyncedAt: dbKw.lastSyncedAt,
+          },
+          amazonLive: amazonData ? {
+            bid: amazonData.bid,
+            state: amazonData.state,
+            bidType: typeof amazonData.bid,
+            allFields: Object.keys(amazonData),
+          } : 'NOT FOUND IN AMAZON RESPONSE',
+          match: amazonData
+            ? (String(amazonData.bid) === dbKw.bid && amazonData.state?.toLowerCase() === dbKw.state)
+            : false,
+        };
+      });
+
+      results.push({
+        profile: {
+          id: profile.id,
+          profileId: profile.profileId,
+          marketplace: profile.marketplace,
+          adAccountId: adAccount.id,
+        },
+        amazonApiError,
+        amazonKeywordsCount: amazonKeywords.length,
+        dbKeywordsCount: dbKws.length,
+        // Montre aussi les 3 premiers keywords bruts d'Amazon pour debug
+        amazonRawSample: amazonKeywords.slice(0, 3),
+        keywordComparisons,
+      });
+    }
+
+    return { bookId, profiles: results };
   }
 }

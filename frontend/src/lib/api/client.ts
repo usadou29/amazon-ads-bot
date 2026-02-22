@@ -21,6 +21,7 @@ export const fetchBookDashboard = (bookId: string, includeInactive = false) => {
 };
 export const fetchBookDailyMetrics = (bookId: string, days = 30) => api.get(`/books/${bookId}/metrics/daily?days=${days}`).then((r) => r.data);
 export const fetchBookCampaignDetails = (bookId: string, days = 30) => api.get(`/books/${bookId}/campaigns/detail?days=${days}`).then((r) => r.data);
+export const refreshBookData = (bookId: string) => api.post(`/books/${bookId}/refresh`, {}, { timeout: 120000 }).then((r) => r.data);
 export const fetchBooks = () => api.get(`/books?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
 export const deleteBook = (bookId: string) => api.delete(`/books/${bookId}`).then((r) => r.data);
 

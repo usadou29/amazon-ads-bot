@@ -18,6 +18,7 @@ import {
   executeAction,
   updateBook,
   getWorkspaceId,
+  refreshBookData,
 } from '@/lib/api/client';
 import { OverviewCampaignView } from '@/components/features/OverviewCampaignView';
 import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, interpretAdsDependency, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
@@ -78,6 +79,24 @@ export default function BookDetailPage() {
       .catch(() => setOverviewCampaignDetails(null))
       .finally(() => setOverviewLoading(false));
   }, [bookId, overviewDays, syncCompletedCount]);
+
+  // Refresh all data from Amazon API on page load (background)
+  // Ensures displayed bids, metrics (impressions, clicks, spend, sales) match current Amazon values
+  const dataRefreshedRef = useRef(false);
+  useEffect(() => {
+    if (!bookId || dataRefreshedRef.current) return;
+    dataRefreshedRef.current = true;
+    refreshBookData(bookId).then((result) => {
+      // Toujours recharger les données après refresh pour garantir la conformité avec Amazon
+      // Les enchères sont mises à jour de manière synchrone, les rapports en arrière-plan
+      fetchBookCampaignDetails(bookId, overviewDays)
+        .then(setOverviewCampaignDetails)
+        .catch(() => {});
+      fetchBookDashboard(bookId, includeInactive)
+        .then(setDashboard)
+        .catch(() => {});
+    }).catch(() => {});
+  }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSaveRoyalty = async () => {
     setSavingRoyalty(true);
