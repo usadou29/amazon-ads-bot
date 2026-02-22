@@ -9,6 +9,7 @@ import {
   campaigns,
   adGroups,
   adAccounts,
+  books,
 } from '@/db/schema';
 import type { ReportJob, ReportType } from '@/db/schema/report-jobs';
 import type { NewDailyMetric } from '@/db/schema/daily-metrics';
@@ -99,6 +100,22 @@ export class ReportsService {
     const startDate = formatDateForAmazon(daysAgo(daysBack));
     const endDate = formatDateForAmazon(new Date());
 
+    // Lookup workspace_id (requis par report_jobs NOT NULL constraint)
+    const [account] = await this.db
+      .select({ workspaceId: adAccounts.workspaceId })
+      .from(adAccounts)
+      .where(eq(adAccounts.id, adAccountId))
+      .limit(1);
+
+    if (!account?.workspaceId) {
+      throw new Error(`Ad account ${adAccountId} has no workspace_id`);
+    }
+
+    const workspaceId = account.workspaceId;
+
+    // Auto-activer/désactiver les profils selon les marketplaces des livres
+    await this.autoActivateProfiles(adAccountId, workspaceId);
+
     // Récupérer les profils actifs
     const profiles = await this.db
       .select()
@@ -114,19 +131,6 @@ export class ReportsService {
       this.logger.warn(`No active profiles for ad account ${adAccountId}`);
       return { jobs: [], skipped: [] };
     }
-
-    // Lookup workspace_id (requis par report_jobs NOT NULL constraint)
-    const [account] = await this.db
-      .select({ workspaceId: adAccounts.workspaceId })
-      .from(adAccounts)
-      .where(eq(adAccounts.id, adAccountId))
-      .limit(1);
-
-    if (!account?.workspaceId) {
-      throw new Error(`Ad account ${adAccountId} has no workspace_id`);
-    }
-
-    const workspaceId = account.workspaceId;
 
     this.logger.log(
       `Requesting reports for ${profiles.length} profiles × ${reportTypes.length} types ` +
@@ -775,6 +779,45 @@ export class ReportsService {
    * Note: query_norm et query_hash sont des colonnes GENERATED dans PostgreSQL.
    * On doit les fournir manuellement car Drizzle ne peut pas les écrire via ORM.
    */
+  /**
+   * Active les profils marketplace qui ont au moins un livre,
+   * désactive ceux qui n'en ont aucun.
+   */
+  private async autoActivateProfiles(adAccountId: string, workspaceId: string): Promise<void> {
+    const bookMarketplaces = await this.db
+      .selectDistinct({ marketplace: books.marketplace })
+      .from(books)
+      .where(eq(books.workspaceId, workspaceId));
+
+    const activeMarketplaces = new Set(bookMarketplaces.map((b: { marketplace: string }) => b.marketplace));
+
+    const allProfiles = await this.db
+      .select({ id: marketplaceProfiles.id, marketplace: marketplaceProfiles.marketplace, isActive: marketplaceProfiles.isActive })
+      .from(marketplaceProfiles)
+      .where(eq(marketplaceProfiles.adAccountId, adAccountId));
+
+    const toActivate: string[] = [];
+    const toDeactivate: string[] = [];
+
+    for (const profile of allProfiles) {
+      const shouldBeActive = activeMarketplaces.has(profile.marketplace);
+      if (shouldBeActive && !profile.isActive) {
+        toActivate.push(profile.id);
+      } else if (!shouldBeActive && profile.isActive) {
+        toDeactivate.push(profile.id);
+      }
+    }
+
+    if (toActivate.length > 0) {
+      await this.db.update(marketplaceProfiles).set({ isActive: true }).where(inArray(marketplaceProfiles.id, toActivate));
+      this.logger.log(`[AUTO-ACTIVATE] Activated ${toActivate.length} profile(s) matching book marketplaces`);
+    }
+    if (toDeactivate.length > 0) {
+      await this.db.update(marketplaceProfiles).set({ isActive: false }).where(inArray(marketplaceProfiles.id, toDeactivate));
+      this.logger.log(`[AUTO-ACTIVATE] Deactivated ${toDeactivate.length} profile(s) with no books`);
+    }
+  }
+
   private async batchUpsertSearchTerms(
     rows: Array<{
       amazonAdGroupId: number;
