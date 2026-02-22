@@ -14,8 +14,9 @@ export enum CampaignDiagnosisCode {
 
 export enum EntityDiagnosisCode {
   NO_IMPRESSIONS = 'no_impressions',
-  LOW_CTR = 'low_ctr',
-  TOO_EARLY = 'too_early',
+  ZERO_CLICKS = 'zero_clicks',
+  VERY_LOW_CLICKS = 'very_low_clicks',
+  LOW_CLICKS = 'low_clicks',
   CLICKS_NO_SALES = 'clicks_no_sales',
   EXPENSIVE_BUT_VALID = 'expensive_but_valid',
   WINNER = 'winner',
@@ -57,6 +58,7 @@ export interface EntityInsight {
   entityKey: string;
   entityType: 'keyword' | 'target' | 'search_term' | 'ad_group';
   diagnosisCode: EntityDiagnosisCode;
+  eligibility: boolean;
   summaryFacts: SummaryFacts;
   suggestedActions: InsightAction[];
   linkedRecommendation?: {
@@ -74,6 +76,7 @@ export interface RenderedInsight {
   title: string;
   explanation: string;
   summaryText: string;
+  nextStepText?: string;
   actions: Array<{
     label: string;
     execution: ActionExecution;
@@ -90,6 +93,7 @@ interface InsightTemplate {
   titleKey: string;
   explanationKey: string;
   summaryKey: string;
+  nextStepKey?: string;
 }
 
 const CAMPAIGN_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
@@ -135,36 +139,49 @@ const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
     titleKey: 'insights.entity.no_impressions.title',
     explanationKey: 'insights.entity.no_impressions.explanation',
     summaryKey: 'insights.entity.no_impressions.summary',
+    nextStepKey: 'insights.entity.no_impressions.nextStep',
   },
-  [EntityDiagnosisCode.LOW_CTR]: {
-    titleKey: 'insights.entity.low_ctr.title',
-    explanationKey: 'insights.entity.low_ctr.explanation',
-    summaryKey: 'insights.entity.low_ctr.summary',
+  [EntityDiagnosisCode.ZERO_CLICKS]: {
+    titleKey: 'insights.entity.zero_clicks.title',
+    explanationKey: 'insights.entity.zero_clicks.explanation',
+    summaryKey: 'insights.entity.zero_clicks.summary',
+    nextStepKey: 'insights.entity.zero_clicks.nextStep',
   },
-  [EntityDiagnosisCode.TOO_EARLY]: {
-    titleKey: 'insights.entity.too_early.title',
-    explanationKey: 'insights.entity.too_early.explanation',
-    summaryKey: 'insights.entity.too_early.summary',
+  [EntityDiagnosisCode.VERY_LOW_CLICKS]: {
+    titleKey: 'insights.entity.very_low_clicks.title',
+    explanationKey: 'insights.entity.very_low_clicks.explanation',
+    summaryKey: 'insights.entity.very_low_clicks.summary',
+    nextStepKey: 'insights.entity.very_low_clicks.nextStep',
+  },
+  [EntityDiagnosisCode.LOW_CLICKS]: {
+    titleKey: 'insights.entity.low_clicks.title',
+    explanationKey: 'insights.entity.low_clicks.explanation',
+    summaryKey: 'insights.entity.low_clicks.summary',
+    nextStepKey: 'insights.entity.low_clicks.nextStep',
   },
   [EntityDiagnosisCode.CLICKS_NO_SALES]: {
     titleKey: 'insights.entity.clicks_no_sales.title',
     explanationKey: 'insights.entity.clicks_no_sales.explanation',
     summaryKey: 'insights.entity.clicks_no_sales.summary',
+    nextStepKey: 'insights.entity.clicks_no_sales.nextStep',
   },
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: {
     titleKey: 'insights.entity.expensive_but_valid.title',
     explanationKey: 'insights.entity.expensive_but_valid.explanation',
     summaryKey: 'insights.entity.expensive_but_valid.summary',
+    nextStepKey: 'insights.entity.expensive_but_valid.nextStep',
   },
   [EntityDiagnosisCode.WINNER]: {
     titleKey: 'insights.entity.winner.title',
     explanationKey: 'insights.entity.winner.explanation',
     summaryKey: 'insights.entity.winner.summary',
+    nextStepKey: 'insights.entity.winner.nextStep',
   },
   [EntityDiagnosisCode.BOOST_CANDIDATE]: {
     titleKey: 'insights.entity.boost_candidate.title',
     explanationKey: 'insights.entity.boost_candidate.explanation',
     summaryKey: 'insights.entity.boost_candidate.summary',
+    nextStepKey: 'insights.entity.boost_candidate.nextStep',
   },
 };
 
@@ -182,8 +199,9 @@ export const CAMPAIGN_DIAGNOSIS_COLORS: Record<string, { bg: string; text: strin
 
 export const ENTITY_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   [EntityDiagnosisCode.NO_IMPRESSIONS]: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
-  [EntityDiagnosisCode.LOW_CTR]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
-  [EntityDiagnosisCode.TOO_EARLY]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
+  [EntityDiagnosisCode.ZERO_CLICKS]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
+  [EntityDiagnosisCode.VERY_LOW_CLICKS]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
+  [EntityDiagnosisCode.LOW_CLICKS]: { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200' },
   [EntityDiagnosisCode.CLICKS_NO_SALES]: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-300' },
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
   [EntityDiagnosisCode.WINNER]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300' },
@@ -207,6 +225,7 @@ function getConfidenceInfo(score: number): { label: string; level: 'high' | 'med
 }
 
 function buildParams(facts: SummaryFacts): Record<string, string | number> {
+  const remaining = Math.max(0, 15 - facts.clicks);
   return {
     impressions: facts.impressions.toLocaleString('fr-FR'),
     clicks: facts.clicks.toLocaleString('fr-FR'),
@@ -218,6 +237,7 @@ function buildParams(facts: SummaryFacts): Record<string, string | number> {
     acos: facts.acos !== null ? facts.acos.toFixed(1) : '—',
     periodDays: facts.periodDays.toString(),
     minClicks: '15',
+    remainingClicks: remaining.toString(),
     breakEven: '35',
   };
 }
@@ -273,6 +293,7 @@ export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
     title: t(template.titleKey, params),
     explanation: t(template.explanationKey, params),
     summaryText: t(template.summaryKey, params),
+    nextStepText: template.nextStepKey ? t(template.nextStepKey, params) : undefined,
     actions: insight.suggestedActions.map(a => ({
       label: t(a.i18nKey),
       execution: a.execution,

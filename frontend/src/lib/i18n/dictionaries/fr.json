@@ -145,39 +145,52 @@
     },
     "entity": {
       "no_impressions": {
-        "title": "Jamais affiché",
+        "title": "Pas diffusé",
         "summary": "0 impression sur {periodDays} jours",
-        "explanation": "Ce mot-clé n'a généré aucune impression. L'enchère est probablement trop basse."
+        "explanation": "Ce mot-clé n'a généré aucune impression. L'enchère est probablement trop basse pour apparaître dans les résultats.",
+        "nextStep": "Augmente l'enchère ou vérifie que le mot-clé est bien actif."
       },
-      "low_ctr": {
-        "title": "Peu de clics",
-        "summary": "{clicks} clic(s) pour {impressions} impressions (CTR {ctr}%)",
-        "explanation": "Ton annonce apparaît mais n'attire pas les clics. Le problème vient souvent de la couverture ou du titre."
+      "zero_clicks": {
+        "title": "Vu mais ignoré",
+        "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
+        "explanation": "Ton annonce s'affiche mais personne ne clique. Le problème vient souvent de la couverture ou du titre qui n'attire pas l'attention.",
+        "nextStep": "Vérifie ta couverture et ton titre. Si le mot-clé est pertinent, patiente encore un peu."
       },
-      "too_early": {
-        "title": "Données insuffisantes",
-        "summary": "{clicks} clics (il en faut au moins {minClicks}) sur {periodDays} jours",
-        "explanation": "Pas assez de données pour décider. Patiente encore un peu."
+      "very_low_clicks": {
+        "title": "Très peu de clics",
+        "summary": "{clicks} clic(s) pour {impressions} impressions sur {periodDays} jours",
+        "explanation": "Seulement {clicks} clic(s) pour le moment. C'est trop tôt pour tirer des conclusions fiables.",
+        "nextStep": "Patiente. Il faut au moins {minClicks} clics pour avoir un signal exploitable."
+      },
+      "low_clicks": {
+        "title": "Début de signal",
+        "summary": "{clicks} clics pour {impressions} impressions (CTR {ctr}%) sur {periodDays} jours",
+        "explanation": "On commence à voir une tendance avec {clicks} clics. Encore un peu de patience avant de pouvoir recommander une action.",
+        "nextStep": "Surveille. Plus que {remainingClicks} clics avant d'avoir assez de données pour décider."
       },
       "clicks_no_sales": {
         "title": "Clics sans ventes",
         "summary": "{clicks} clics, {spend}€ dépensés, 0 vente sur {periodDays} jours",
-        "explanation": "Les gens cliquent mais n'achètent pas. Le problème vient de ta fiche livre, pas du mot-clé."
+        "explanation": "Les gens cliquent mais n'achètent pas. Le problème vient de ta fiche livre, pas du mot-clé.",
+        "nextStep": "Améliore ta fiche livre (description, avis) ou bloque ce terme si le budget file."
       },
       "expensive_but_valid": {
         "title": "Rentable... tout juste",
         "summary": "{orders} vente(s), ACoS {acos}% (cible ≤{breakEven}%) sur {periodDays} jours",
-        "explanation": "Tu fais des ventes mais à un coût élevé. Baisse l'enchère pour améliorer la rentabilité."
+        "explanation": "Tu fais des ventes mais à un coût élevé. Baisse l'enchère pour améliorer la rentabilité.",
+        "nextStep": "Baisse l'enchère progressivement pour réduire l'ACoS."
       },
       "winner": {
         "title": "Gagnant",
         "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays} jours",
-        "explanation": "Excellente performance. Ce mot-clé convertit bien et reste rentable."
+        "explanation": "Excellente performance. Ce mot-clé convertit bien et reste rentable.",
+        "nextStep": "Augmente l'enchère pour capter encore plus de trafic rentable."
       },
       "boost_candidate": {
         "title": "Potentiel de croissance",
         "summary": "{orders} vente(s), CTR {ctr}% (au-dessus de la moyenne) sur {periodDays} jours",
-        "explanation": "Ce mot-clé a un CTR supérieur à la moyenne et convertit bien. Augmente l'enchère pour capter plus de trafic."
+        "explanation": "Ce mot-clé a un CTR supérieur à la moyenne et convertit bien. Augmente l'enchère pour capter plus de trafic.",
+        "nextStep": "Monte l'enchère pour maximiser le volume sur ce mot-clé performant."
       }
     },
     "actions": {

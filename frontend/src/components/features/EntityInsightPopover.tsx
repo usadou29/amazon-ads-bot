@@ -88,9 +88,19 @@ export function EntityInsightPopover({ insight, entityName }: EntityInsightPopov
             </p>
 
             {/* Explanation */}
-            <p className="mb-3 text-xs leading-relaxed text-slate-700">
+            <p className="mb-2 text-xs leading-relaxed text-slate-700">
               {rendered.explanation}
             </p>
+
+            {/* Next step */}
+            {rendered.nextStepText && (
+              <div className="mb-3 flex items-start gap-1.5 rounded-lg bg-slate-50 px-3 py-2">
+                <span className="text-xs">👉</span>
+                <p className="text-xs font-medium text-slate-700">
+                  {rendered.nextStepText}
+                </p>
+              </div>
+            )}
 
             {/* Mini metrics row */}
             <div className="mb-3 grid grid-cols-4 gap-2 border-t border-slate-100 pt-3">

@@ -65,6 +65,7 @@ export class InsightsService {
   ): EntityInsight {
     const facts = this.buildSummaryFacts(metrics, periodDays);
     const diagnosisCode = this.diagnoseEntity(metrics, breakEvenAcos, avgCampaignCTR);
+    const eligibility = metrics.clicks >= MIN_CLICKS;
     const suggestedActions = this.buildEntityActions(
       diagnosisCode,
       metrics,
@@ -76,6 +77,7 @@ export class InsightsService {
       entityKey: entity.key,
       entityType: entity.type,
       diagnosisCode,
+      eligibility,
       summaryFacts: facts,
       suggestedActions,
       linkedRecommendation: linkedReco ?? undefined,
@@ -147,29 +149,38 @@ export class InsightsService {
 
   /**
    * Entity diagnosis decision tree.
+   *
+   * Chaque entité reçoit TOUJOURS un diagnostic humain lisible.
+   * Les cas pré-eligibility (clicks < 15) ont des diagnostics précis :
+   *   NO_IMPRESSIONS → ZERO_CLICKS → VERY_LOW_CLICKS → LOW_CLICKS
+   * Les cas post-eligibility (clicks >= 15) ont des diagnostics actionnables :
+   *   CLICKS_NO_SALES → EXPENSIVE_BUT_VALID → WINNER / BOOST_CANDIDATE
    */
   diagnoseEntity(
     metrics: InsightMetrics,
     breakEvenAcos: number,
     avgCampaignCTR?: number,
   ): EntityDiagnosisCode {
+    // ── Pré-eligibility : pas assez de données pour une action ──
     if (metrics.impressions === 0) {
       return EntityDiagnosisCode.NO_IMPRESSIONS;
     }
 
-    const ctr = metrics.impressions > 0
-      ? (metrics.clicks / metrics.impressions) * 100
-      : 0;
+    if (metrics.clicks === 0) {
+      return EntityDiagnosisCode.ZERO_CLICKS;
+    }
 
-    if (metrics.clicks < 5 || ctr < 0.3) {
-      return EntityDiagnosisCode.LOW_CTR;
+    if (metrics.clicks < 5) {
+      return EntityDiagnosisCode.VERY_LOW_CLICKS;
     }
 
     if (metrics.clicks < MIN_CLICKS) {
-      return EntityDiagnosisCode.TOO_EARLY;
+      return EntityDiagnosisCode.LOW_CLICKS;
     }
 
-    // Enough clicks to decide
+    // ── Post-eligibility : assez de données pour décider ──
+    const ctr = (metrics.clicks / metrics.impressions) * 100;
+
     if (metrics.orders === 0) {
       return EntityDiagnosisCode.CLICKS_NO_SALES;
     }
@@ -263,12 +274,17 @@ export class InsightsService {
       [EntityDiagnosisCode.NO_IMPRESSIONS]: [
         this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
       ],
-      [EntityDiagnosisCode.LOW_CTR]: [
+      [EntityDiagnosisCode.ZERO_CLICKS]: [
         this.action('improve_cover', 'book', 'insights.actions.improve_cover', 1),
         this.action('monitor', 'none', 'insights.actions.monitor', 2),
       ],
-      [EntityDiagnosisCode.TOO_EARLY]: [
+      [EntityDiagnosisCode.VERY_LOW_CLICKS]: [
+        this.action('patience', 'none', 'insights.actions.patience', 1),
+        this.action('monitor', 'none', 'insights.actions.monitor', 2),
+      ],
+      [EntityDiagnosisCode.LOW_CLICKS]: [
         this.action('monitor', 'none', 'insights.actions.monitor', 1),
+        this.action('patience', 'none', 'insights.actions.patience', 2),
       ],
       [EntityDiagnosisCode.CLICKS_NO_SALES]: [
         this.action('improve_listing', 'book', 'insights.actions.improve_listing', 1),

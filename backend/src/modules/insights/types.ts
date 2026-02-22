@@ -12,11 +12,14 @@ export enum CampaignDiagnosisCode {
 }
 
 // ── Entity Diagnosis Codes ──────────────────────────────────
+// Chaque entité reçoit TOUJOURS un diagnostic humain lisible.
+// L'eligibility (assez de data pour une action exécutable) est séparée.
 export enum EntityDiagnosisCode {
-  NO_IMPRESSIONS = 'no_impressions',
-  LOW_CTR = 'low_ctr',
-  TOO_EARLY = 'too_early',
-  CLICKS_NO_SALES = 'clicks_no_sales',
+  NO_IMPRESSIONS = 'no_impressions',     // impressions === 0
+  ZERO_CLICKS = 'zero_clicks',           // impressions > 0, clicks === 0
+  VERY_LOW_CLICKS = 'very_low_clicks',   // 1-4 clicks
+  LOW_CLICKS = 'low_clicks',             // 5-14 clicks
+  CLICKS_NO_SALES = 'clicks_no_sales',   // clicks >= 15, orders === 0 (ou ACoS trop haut)
   EXPENSIVE_BUT_VALID = 'expensive_but_valid',
   WINNER = 'winner',
   BOOST_CANDIDATE = 'boost_candidate',
@@ -59,6 +62,7 @@ export interface EntityInsight {
   entityKey: string;
   entityType: 'keyword' | 'target' | 'search_term' | 'ad_group';
   diagnosisCode: EntityDiagnosisCode;
+  eligibility: boolean; // true = assez de data pour recommander une action exécutable (clicks >= 15)
   summaryFacts: SummaryFacts;
   suggestedActions: InsightAction[];
   linkedRecommendation?: {

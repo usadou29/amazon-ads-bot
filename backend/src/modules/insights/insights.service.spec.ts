@@ -12,11 +12,12 @@ import {
  *
  * Couvre :
  * - 7 Campaign Diagnosis Codes
- * - 7 Entity Diagnosis Codes
+ * - 8 Entity Diagnosis Codes (NO_IMPRESSIONS, ZERO_CLICKS, VERY_LOW_CLICKS, LOW_CLICKS, CLICKS_NO_SALES, EXPENSIVE_BUT_VALID, WINNER, BOOST_CANDIDATE)
+ * - Eligibility (séparation diagnostic vs action)
  * - 3 Break-Even Guards
  * - 3 Lifecycle Variations
  * - 5 Edge Cases
- * - 3 Confidence Scoring
+ * - 4 Confidence Scoring
  */
 describe('InsightsService', () => {
   let service: InsightsService;
@@ -141,11 +142,13 @@ describe('InsightsService', () => {
   });
 
   // ══════════════════════════════════════════════════════════
-  // ENTITY DIAGNOSIS CODES (7 tests)
+  // ENTITY DIAGNOSIS CODES — 5 cas pré-eligibility + 3 post
   // ══════════════════════════════════════════════════════════
 
   describe('Entity Diagnosis Codes', () => {
-    it('should detect NO_IMPRESSIONS when impressions === 0', () => {
+    // ── Pré-eligibility (eligibility = false) ──
+
+    it('NO_IMPRESSIONS: impressions === 0 → "Pas diffusé"', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 0 }),
@@ -154,9 +157,22 @@ describe('InsightsService', () => {
         PERIOD_DAYS,
       );
       expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.NO_IMPRESSIONS);
+      expect(insight.eligibility).toBe(false);
     });
 
-    it('should detect LOW_CTR when clicks < 5', () => {
+    it('ZERO_CLICKS: impressions > 0, clicks === 0 → "Vu mais ignoré"', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 500, clicks: 0, spend: 0, sales: 0, orders: 0 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.ZERO_CLICKS);
+      expect(insight.eligibility).toBe(false);
+    });
+
+    it('VERY_LOW_CLICKS: 1-4 clicks → "Très peu de clics"', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 500, clicks: 3, spend: 1, sales: 0, orders: 0 }),
@@ -164,34 +180,73 @@ describe('InsightsService', () => {
         BREAK_EVEN,
         PERIOD_DAYS,
       );
-      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.LOW_CTR);
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.VERY_LOW_CLICKS);
+      expect(insight.eligibility).toBe(false);
     });
 
-    it('should detect LOW_CTR when CTR < 0.3% even with 5+ clicks', () => {
+    it('VERY_LOW_CLICKS: boundary — 1 click', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
-        makeMetrics({ impressions: 5000, clicks: 10, spend: 5, sales: 0, orders: 0 }),
+        makeMetrics({ impressions: 200, clicks: 1, spend: 0.5, sales: 0, orders: 0 }),
         'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
-        // CTR = 10/5000*100 = 0.2% < 0.3%
       );
-      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.LOW_CTR);
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.VERY_LOW_CLICKS);
+      expect(insight.eligibility).toBe(false);
     });
 
-    it('should detect TOO_EARLY when clicks >= 5 and CTR >= 0.3% but clicks < 15', () => {
+    it('VERY_LOW_CLICKS: boundary — 4 clicks', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 200, clicks: 4, spend: 2, sales: 0, orders: 0 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.VERY_LOW_CLICKS);
+      expect(insight.eligibility).toBe(false);
+    });
+
+    it('LOW_CLICKS: 5-14 clicks → "Début de signal"', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 300, clicks: 10, spend: 5, sales: 0, orders: 0 }),
         'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
-        // CTR = 10/300*100 = 3.3% ≥ 0.3%, clicks ≥ 5 but < 15
       );
-      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.TOO_EARLY);
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.LOW_CLICKS);
+      expect(insight.eligibility).toBe(false);
     });
 
-    it('should detect CLICKS_NO_SALES when clicks >= 15 and orders === 0', () => {
+    it('LOW_CLICKS: boundary — exactly 5 clicks', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 200, clicks: 5, spend: 2.5, sales: 0, orders: 0 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.LOW_CLICKS);
+      expect(insight.eligibility).toBe(false);
+    });
+
+    it('LOW_CLICKS: boundary — 14 clicks', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 300, clicks: 14, spend: 7, sales: 0, orders: 0 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.LOW_CLICKS);
+      expect(insight.eligibility).toBe(false);
+    });
+
+    // ── Post-eligibility (eligibility = true) ──
+
+    it('CLICKS_NO_SALES: clicks >= 15, orders === 0 → eligibility = true', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 500, clicks: 25, spend: 15, sales: 0, orders: 0 }),
@@ -200,9 +255,22 @@ describe('InsightsService', () => {
         PERIOD_DAYS,
       );
       expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.CLICKS_NO_SALES);
+      expect(insight.eligibility).toBe(true);
     });
 
-    it('should detect WINNER when orders > 0 and ACoS <= breakEven', () => {
+    it('CLICKS_NO_SALES: boundary — exactly 15 clicks', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 500, clicks: 15, spend: 7.5, sales: 0, orders: 0 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.CLICKS_NO_SALES);
+      expect(insight.eligibility).toBe(true);
+    });
+
+    it('WINNER: orders > 0, ACoS <= breakEven → eligibility = true', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 500, clicks: 50, spend: 30, sales: 150, orders: 5 }),
@@ -211,9 +279,10 @@ describe('InsightsService', () => {
         PERIOD_DAYS,
       );
       expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.WINNER);
+      expect(insight.eligibility).toBe(true);
     });
 
-    it('should detect BOOST_CANDIDATE when WINNER + CTR > avgCampaignCTR', () => {
+    it('BOOST_CANDIDATE: WINNER + CTR > avgCampaignCTR → eligibility = true', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 200, clicks: 20, spend: 15, sales: 100, orders: 4 }),
@@ -223,9 +292,10 @@ describe('InsightsService', () => {
         5.0, // avgCampaignCTR = 5%, entity CTR = 20/200*100 = 10% > 5%
       );
       expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.BOOST_CANDIDATE);
+      expect(insight.eligibility).toBe(true);
     });
 
-    it('should detect EXPENSIVE_BUT_VALID when orders > 0 and breakEven < ACoS <= breakEven * 1.3', () => {
+    it('EXPENSIVE_BUT_VALID: orders > 0, breakEven < ACoS <= breakEven * 1.3 → eligibility = true', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 500, clicks: 30, spend: 50, sales: 120, orders: 3 }),
@@ -234,6 +304,71 @@ describe('InsightsService', () => {
         PERIOD_DAYS,
       );
       expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.EXPENSIVE_BUT_VALID);
+      expect(insight.eligibility).toBe(true);
+    });
+
+    it('CLICKS_NO_SALES via high ACoS: orders > 0 but ACoS > breakEven * 1.3', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 500, clicks: 30, spend: 100, sales: 80, orders: 2 }),
+        'scale',
+        BREAK_EVEN, // ACoS = 125% > 35*1.3=45.5%
+        PERIOD_DAYS,
+      );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.CLICKS_NO_SALES);
+      expect(insight.eligibility).toBe(true);
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // ELIGIBILITY SEPARATION (explicit tests)
+  // ══════════════════════════════════════════════════════════
+
+  describe('Eligibility', () => {
+    it('should be false for all pre-15-clicks diagnoses', () => {
+      const cases = [
+        makeMetrics({ impressions: 0, clicks: 0 }),              // NO_IMPRESSIONS
+        makeMetrics({ impressions: 100, clicks: 0 }),             // ZERO_CLICKS
+        makeMetrics({ impressions: 100, clicks: 3 }),             // VERY_LOW_CLICKS
+        makeMetrics({ impressions: 300, clicks: 10 }),            // LOW_CLICKS
+      ];
+      for (const m of cases) {
+        const insight = service.computeEntityInsight(
+          makeEntity(), m, 'scale', BREAK_EVEN, PERIOD_DAYS,
+        );
+        expect(insight.eligibility).toBe(false);
+      }
+    });
+
+    it('should be true for all 15+ clicks diagnoses', () => {
+      const cases = [
+        makeMetrics({ impressions: 500, clicks: 15, spend: 10, sales: 0, orders: 0 }),    // CLICKS_NO_SALES
+        makeMetrics({ impressions: 500, clicks: 50, spend: 30, sales: 150, orders: 5 }),   // WINNER
+        makeMetrics({ impressions: 500, clicks: 30, spend: 50, sales: 120, orders: 3 }),   // EXPENSIVE_BUT_VALID
+      ];
+      for (const m of cases) {
+        const insight = service.computeEntityInsight(
+          makeEntity(), m, 'scale', BREAK_EVEN, PERIOD_DAYS,
+        );
+        expect(insight.eligibility).toBe(true);
+      }
+    });
+
+    it('every diagnosis should have a non-empty suggestedActions list (even pre-eligibility)', () => {
+      const cases = [
+        makeMetrics({ impressions: 0 }),                         // NO_IMPRESSIONS
+        makeMetrics({ impressions: 100, clicks: 0 }),             // ZERO_CLICKS
+        makeMetrics({ impressions: 200, clicks: 3 }),             // VERY_LOW_CLICKS
+        makeMetrics({ impressions: 300, clicks: 10 }),            // LOW_CLICKS
+        makeMetrics({ impressions: 500, clicks: 25, spend: 15, sales: 0, orders: 0 }), // CLICKS_NO_SALES
+        makeMetrics({ impressions: 500, clicks: 50, spend: 30, sales: 150, orders: 5 }), // WINNER
+      ];
+      for (const m of cases) {
+        const insight = service.computeEntityInsight(
+          makeEntity(), m, 'scale', BREAK_EVEN, PERIOD_DAYS,
+        );
+        expect(insight.suggestedActions.length).toBeGreaterThanOrEqual(1);
+      }
     });
   });
 
@@ -263,7 +398,6 @@ describe('InsightsService', () => {
         PERIOD_DAYS,
       );
       // CLICKS_NO_SALES → actions include improve_listing, add_negative
-      // These are the alternatives to "pause"
       expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.CLICKS_NO_SALES);
       expect(insight.suggestedActions.length).toBeGreaterThan(0);
     });
@@ -350,20 +484,21 @@ describe('InsightsService', () => {
         BREAK_EVEN,
         PERIOD_DAYS,
       );
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.ZERO_CLICKS);
       expect(insight.summaryFacts.ctr).toBe(0);
       expect(insight.summaryFacts.cvr).toBeNull();
     });
 
-    it('should handle very low CTR (< 0.1%)', () => {
+    it('should handle very low CTR (< 0.1%) — still VERY_LOW_CLICKS if clicks < 5', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
-        makeMetrics({ impressions: 10000, clicks: 5, spend: 2, sales: 0, orders: 0 }),
+        makeMetrics({ impressions: 10000, clicks: 4, spend: 2, sales: 0, orders: 0 }),
         'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
       );
-      // CTR = 0.05% < 0.3%
-      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.LOW_CTR);
+      // CTR = 0.04% — but now diagnosis is based on click count, not CTR
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.VERY_LOW_CLICKS);
     });
 
     it('should handle extremely high ACoS (> 200%)', () => {
@@ -390,7 +525,7 @@ describe('InsightsService', () => {
   });
 
   // ══════════════════════════════════════════════════════════
-  // CONFIDENCE SCORE (3 tests)
+  // CONFIDENCE SCORE (4 tests)
   // ══════════════════════════════════════════════════════════
 
   describe('Confidence Score', () => {
@@ -421,16 +556,19 @@ describe('InsightsService', () => {
   // ══════════════════════════════════════════════════════════
 
   describe('Insight Structure', () => {
-    it('should always produce 1-3 suggested actions', () => {
-      const codes = Object.values(CampaignDiagnosisCode);
-      for (const code of codes) {
-        // Test with metrics that trigger each code
-        const insight = service.computeCampaignInsight(
-          makeCampaign(),
-          makeMetrics({ impressions: 0 }), // INVISIBLE (minimal test)
-          'scale',
-          BREAK_EVEN,
-          PERIOD_DAYS,
+    it('should always produce 1-3 suggested actions for all entity codes', () => {
+      const testCases = [
+        makeMetrics({ impressions: 0 }),                                                   // NO_IMPRESSIONS
+        makeMetrics({ impressions: 100, clicks: 0 }),                                       // ZERO_CLICKS
+        makeMetrics({ impressions: 200, clicks: 3 }),                                       // VERY_LOW_CLICKS
+        makeMetrics({ impressions: 300, clicks: 10 }),                                      // LOW_CLICKS
+        makeMetrics({ impressions: 500, clicks: 25, spend: 15, sales: 0, orders: 0 }),      // CLICKS_NO_SALES
+        makeMetrics({ impressions: 500, clicks: 50, spend: 30, sales: 150, orders: 5 }),    // WINNER
+        makeMetrics({ impressions: 500, clicks: 30, spend: 50, sales: 120, orders: 3 }),    // EXPENSIVE_BUT_VALID
+      ];
+      for (const m of testCases) {
+        const insight = service.computeEntityInsight(
+          makeEntity(), m, 'scale', BREAK_EVEN, PERIOD_DAYS,
         );
         expect(insight.suggestedActions.length).toBeGreaterThanOrEqual(1);
         expect(insight.suggestedActions.length).toBeLessThanOrEqual(3);
@@ -475,6 +613,17 @@ describe('InsightsService', () => {
       expect(insight.linkedRecommendation).toBeDefined();
       expect(insight.linkedRecommendation!.id).toBe('reco-1');
       expect(insight.linkedRecommendation!.strategyScore).toBe(95);
+    });
+
+    it('should include eligibility field in all entity insights', () => {
+      const insight = service.computeEntityInsight(
+        makeEntity(),
+        makeMetrics({ impressions: 100, clicks: 3 }),
+        'scale',
+        BREAK_EVEN,
+        PERIOD_DAYS,
+      );
+      expect(typeof insight.eligibility).toBe('boolean');
     });
   });
 });
