@@ -4,11 +4,13 @@ import type { LifecyclePhase } from '@/db/schema/books';
 import {
   CampaignDiagnosisCode,
   EntityDiagnosisCode,
+  MacroStrategyCode,
   type ActionExecution,
   type InsightAction,
   type InsightMetrics,
   type SummaryFacts,
   type CampaignInsight,
+  type CampaignMacroStrategy,
   type EntityInsight,
   type InsightCampaignInput,
   type InsightEntityInput,
@@ -27,30 +29,102 @@ export class InsightsService {
   computeCampaignInsight(
     campaign: InsightCampaignInput,
     metrics: InsightMetrics,
-    lifecyclePhase: LifecyclePhase,
     breakEvenAcos: number,
     periodDays: number,
+    entityInsights: EntityInsight[],
+    dailyBudget?: number,
   ): CampaignInsight {
     const facts = this.buildSummaryFacts(metrics, periodDays);
     const diagnosisCode = this.diagnoseCampaign(
       metrics,
       breakEvenAcos,
-      campaign.dailyBudget ?? undefined,
+      dailyBudget,
       periodDays,
     );
-    const suggestedActions = this.buildCampaignActions(
-      diagnosisCode,
-      metrics,
-      lifecyclePhase,
-      breakEvenAcos,
-    );
+    const macroStrategy = this.getCampaignMacroStrategy(entityInsights);
 
     return {
       campaignId: campaign.id,
       diagnosisCode,
       summaryFacts: facts,
-      suggestedActions,
+      macroStrategy,
       confidenceScore: this.computeConfidence(metrics.clicks),
+    };
+  }
+
+  /**
+   * Compute campaign macro strategy by aggregating entity insights bottom-up.
+   *
+   * Decision tree:
+   * - winnersCount + boostCandidatesCount > 0 → SCALE_WINNERS
+   * - losersCount > eligibleCount / 2 → CUT_LOSERS
+   * - losersCount > 0 && winnersCount === 0 → FIX_LISTING
+   * - testingCount > 0 || ignoredCount > 0 → CONTINUE_TESTING
+   * - fallback → NO_SIGNAL_YET
+   */
+  getCampaignMacroStrategy(entityInsights: EntityInsight[]): CampaignMacroStrategy {
+    let winnersCount = 0;
+    let boostCandidatesCount = 0;
+    let testingCount = 0;
+    let ignoredCount = 0;
+    let losersCount = 0;
+    let expensiveCount = 0;
+    let eligibleCount = 0;
+
+    for (const ei of entityInsights) {
+      if (ei.eligibility) eligibleCount++;
+
+      switch (ei.diagnosisCode) {
+        case EntityDiagnosisCode.WINNER:
+          winnersCount++;
+          break;
+        case EntityDiagnosisCode.BOOST_CANDIDATE:
+          boostCandidatesCount++;
+          break;
+        case EntityDiagnosisCode.VERY_LOW_CLICKS:
+        case EntityDiagnosisCode.LOW_CLICKS:
+          testingCount++;
+          break;
+        case EntityDiagnosisCode.NO_IMPRESSIONS:
+        case EntityDiagnosisCode.ZERO_CLICKS:
+          ignoredCount++;
+          break;
+        case EntityDiagnosisCode.CLICKS_NO_SALES:
+          losersCount++;
+          break;
+        case EntityDiagnosisCode.EXPENSIVE_BUT_VALID:
+          expensiveCount++;
+          break;
+      }
+    }
+
+    const totalEntities = entityInsights.length;
+    let macroStrategyCode: MacroStrategyCode;
+
+    if (winnersCount + boostCandidatesCount > 0) {
+      macroStrategyCode = MacroStrategyCode.SCALE_WINNERS;
+    } else if (eligibleCount >= 2 && losersCount > eligibleCount / 2) {
+      // Majority of eligible entities are losing → aggressive cleanup needed
+      macroStrategyCode = MacroStrategyCode.CUT_LOSERS;
+    } else if (losersCount > 0 && winnersCount === 0) {
+      // Some losers but not a clear majority → listing problem likely
+      macroStrategyCode = MacroStrategyCode.FIX_LISTING;
+    } else if (testingCount > 0 || ignoredCount > 0) {
+      macroStrategyCode = MacroStrategyCode.CONTINUE_TESTING;
+    } else {
+      macroStrategyCode = MacroStrategyCode.NO_SIGNAL_YET;
+    }
+
+    return {
+      macroStrategyCode,
+      winnersCount,
+      boostCandidatesCount,
+      testingCount,
+      ignoredCount,
+      losersCount,
+      expensiveCount,
+      totalEntities,
+      eligibleCount,
     };
   }
 
@@ -210,16 +284,6 @@ export class InsightsService {
   // ACTION BUILDERS
   // ══════════════════════════════════════════════════════════
 
-  private buildCampaignActions(
-    code: CampaignDiagnosisCode,
-    metrics: InsightMetrics,
-    lifecycle: LifecyclePhase,
-    breakEvenAcos: number,
-  ): InsightAction[] {
-    const actions = this.getCampaignBaseActions(code);
-    return this.applyLifecycleModifiers(actions, lifecycle, metrics, breakEvenAcos);
-  }
-
   private buildEntityActions(
     code: EntityDiagnosisCode,
     metrics: InsightMetrics,
@@ -228,42 +292,6 @@ export class InsightsService {
   ): InsightAction[] {
     const actions = this.getEntityBaseActions(code);
     return this.applyLifecycleModifiers(actions, lifecycle, metrics, breakEvenAcos);
-  }
-
-  /**
-   * Base actions per campaign diagnosis code.
-   */
-  private getCampaignBaseActions(code: CampaignDiagnosisCode): InsightAction[] {
-    const actionMap: Record<CampaignDiagnosisCode, InsightAction[]> = {
-      [CampaignDiagnosisCode.INVISIBLE]: [
-        this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
-        this.action('improve_listing', 'book', 'insights.actions.improve_listing', 2),
-        this.action('monitor', 'none', 'insights.actions.monitor', 3),
-      ],
-      [CampaignDiagnosisCode.IGNORED]: [
-        this.action('improve_cover', 'book', 'insights.actions.improve_cover', 1),
-        this.action('bid_up', 'ads', 'insights.actions.bid_up', 2),
-      ],
-      [CampaignDiagnosisCode.TOO_EARLY]: [
-        this.action('monitor', 'none', 'insights.actions.monitor', 1),
-      ],
-      [CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING]: [
-        this.action('improve_listing', 'book', 'insights.actions.improve_listing', 1),
-        this.action('bid_down', 'ads', 'insights.actions.bid_down', 2),
-      ],
-      [CampaignDiagnosisCode.PROMISING_BUT_EXPENSIVE]: [
-        this.action('bid_down', 'ads', 'insights.actions.bid_down', 1),
-        this.action('improve_listing', 'book', 'insights.actions.improve_listing', 2),
-      ],
-      [CampaignDiagnosisCode.PROFITABLE]: [
-        this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
-        this.action('harvest', 'ads', 'insights.actions.harvest', 2),
-      ],
-      [CampaignDiagnosisCode.LIMITED_BY_BUDGET]: [
-        this.action('budget_increase', 'ads', 'insights.actions.budget_increase', 1),
-      ],
-    };
-    return actionMap[code] || [];
   }
 
   /**

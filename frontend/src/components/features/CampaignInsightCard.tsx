@@ -5,7 +5,7 @@ import {
   type CampaignInsight,
   renderCampaignInsight,
   CAMPAIGN_DIAGNOSIS_COLORS,
-  EXECUTION_COLORS,
+  MACRO_STRATEGY_COLORS,
 } from '@/lib/transforms/insights';
 
 interface CampaignInsightCardProps {
@@ -14,6 +14,13 @@ interface CampaignInsightCardProps {
 
 export function CampaignInsightCard({ insight }: CampaignInsightCardProps) {
   const rendered = renderCampaignInsight(insight);
+  const ms = insight.macroStrategy;
+  const stratColors = MACRO_STRATEGY_COLORS[ms.macroStrategyCode] || {
+    bg: 'bg-slate-50',
+    text: 'text-slate-600',
+    border: 'border-slate-200',
+    icon: '🔍',
+  };
   const diagColors = CAMPAIGN_DIAGNOSIS_COLORS[insight.diagnosisCode] || {
     bg: 'bg-slate-50',
     text: 'text-slate-600',
@@ -27,12 +34,15 @@ export function CampaignInsightCard({ insight }: CampaignInsightCardProps) {
   };
 
   return (
-    <div className={`mt-3 rounded-lg border ${diagColors.border} ${diagColors.bg} p-3`}>
-      {/* Header */}
+    <div className={`mt-3 rounded-lg border ${stratColors.border} ${stratColors.bg} p-3`}>
+      {/* Strategy header */}
       <div className="mb-2 flex items-center justify-between">
-        <h4 className={`text-sm font-semibold ${diagColors.text}`}>
-          {rendered.title}
-        </h4>
+        <div className="flex items-center gap-2">
+          <span className="text-base">{stratColors.icon}</span>
+          <h4 className={`text-sm font-semibold ${stratColors.text}`}>
+            {rendered.strategyTitle}
+          </h4>
+        </div>
         <span
           className={`text-[10px] font-medium ${confidenceColors[rendered.confidenceLevel]}`}
           title={`Score de confiance : ${insight.confidenceScore}%`}
@@ -41,32 +51,51 @@ export function CampaignInsightCard({ insight }: CampaignInsightCardProps) {
         </span>
       </div>
 
-      {/* Summary facts */}
-      <p className="mb-2 text-xs text-slate-500">
+      {/* Strategy summary */}
+      <p className="mb-2 text-xs leading-relaxed text-slate-700">
+        {rendered.strategySummary}
+      </p>
+
+      {/* Campaign diagnosis context */}
+      <div className={`mb-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${diagColors.bg} ${diagColors.text} ${diagColors.border}`}>
         {rendered.summaryText}
-      </p>
+      </div>
 
-      {/* Explanation */}
-      <p className="mb-3 text-xs leading-relaxed text-slate-700">
-        {rendered.explanation}
-      </p>
-
-      {/* Actions */}
-      {rendered.actions.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {rendered.actions.map((action, i) => {
-            const execColors = EXECUTION_COLORS[action.execution];
-            return (
-              <span
-                key={`${action.type}-${i}`}
-                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium ${execColors.bg} ${execColors.text}`}
-              >
-                <span>{execColors.icon}</span>
-                <span>{action.label}</span>
-                <span className="opacity-60">· {action.executionLabel}</span>
+      {/* Entity distribution mini-bar */}
+      {ms.totalEntities > 0 && (
+        <div className="mt-2 border-t border-slate-100 pt-2">
+          <div className="flex items-center gap-1.5 text-[10px] text-slate-500 flex-wrap">
+            {ms.winnersCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">
+                ✅ {ms.winnersCount} gagnant{ms.winnersCount > 1 ? 's' : ''}
               </span>
-            );
-          })}
+            )}
+            {ms.boostCandidatesCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 rounded bg-blue-100 px-1.5 py-0.5 text-blue-700">
+                🚀 {ms.boostCandidatesCount} à potentiel
+              </span>
+            )}
+            {ms.expensiveCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">
+                ⚠️ {ms.expensiveCount} cher{ms.expensiveCount > 1 ? 's' : ''}
+              </span>
+            )}
+            {ms.losersCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 rounded bg-red-100 px-1.5 py-0.5 text-red-700">
+                ❌ {ms.losersCount} sans vente{ms.losersCount > 1 ? 's' : ''}
+              </span>
+            )}
+            {ms.testingCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">
+                ⏳ {ms.testingCount} en test
+              </span>
+            )}
+            {ms.ignoredCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 rounded bg-slate-100 px-1.5 py-0.5 text-slate-400">
+                👁 {ms.ignoredCount} sans signal
+              </span>
+            )}
+          </div>
         </div>
       )}
     </div>

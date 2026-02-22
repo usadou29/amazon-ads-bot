@@ -25,6 +25,14 @@ export enum EntityDiagnosisCode {
 
 export type ActionExecution = 'ads' | 'book' | 'none';
 
+export enum MacroStrategyCode {
+  SCALE_WINNERS = 'scale_winners',
+  CONTINUE_TESTING = 'continue_testing',
+  FIX_LISTING = 'fix_listing',
+  CUT_LOSERS = 'cut_losers',
+  NO_SIGNAL_YET = 'no_signal_yet',
+}
+
 // ── Interfaces (mirror backend) ─────────────────────────────
 
 export interface InsightAction {
@@ -46,11 +54,23 @@ export interface SummaryFacts {
   periodDays: number;
 }
 
+export interface CampaignMacroStrategy {
+  macroStrategyCode: MacroStrategyCode;
+  winnersCount: number;
+  boostCandidatesCount: number;
+  testingCount: number;
+  ignoredCount: number;
+  losersCount: number;
+  expensiveCount: number;
+  totalEntities: number;
+  eligibleCount: number;
+}
+
 export interface CampaignInsight {
   campaignId: string;
   diagnosisCode: CampaignDiagnosisCode;
   summaryFacts: SummaryFacts;
-  suggestedActions: InsightAction[];
+  macroStrategy: CampaignMacroStrategy;
   confidenceScore: number;
 }
 
@@ -74,6 +94,7 @@ export interface EntityInsight {
 
 export interface RenderedInsight {
   title: string;
+  badgeText: string;
   explanation: string;
   summaryText: string;
   nextStepText?: string;
@@ -87,10 +108,20 @@ export interface RenderedInsight {
   confidenceLevel: 'high' | 'medium' | 'low';
 }
 
+export interface RenderedCampaignStrategy {
+  strategyTitle: string;
+  strategySummary: string;
+  explanation: string;
+  summaryText: string;
+  confidenceLabel: string;
+  confidenceLevel: 'high' | 'medium' | 'low';
+}
+
 // ── Templates ───────────────────────────────────────────────
 
 interface InsightTemplate {
   titleKey: string;
+  badgeKey?: string;
   explanationKey: string;
   summaryKey: string;
   nextStepKey?: string;
@@ -137,48 +168,56 @@ const CAMPAIGN_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
 const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
   [EntityDiagnosisCode.NO_IMPRESSIONS]: {
     titleKey: 'insights.entity.no_impressions.title',
+
     explanationKey: 'insights.entity.no_impressions.explanation',
     summaryKey: 'insights.entity.no_impressions.summary',
     nextStepKey: 'insights.entity.no_impressions.nextStep',
   },
   [EntityDiagnosisCode.ZERO_CLICKS]: {
     titleKey: 'insights.entity.zero_clicks.title',
+
     explanationKey: 'insights.entity.zero_clicks.explanation',
     summaryKey: 'insights.entity.zero_clicks.summary',
     nextStepKey: 'insights.entity.zero_clicks.nextStep',
   },
   [EntityDiagnosisCode.VERY_LOW_CLICKS]: {
     titleKey: 'insights.entity.very_low_clicks.title',
+
     explanationKey: 'insights.entity.very_low_clicks.explanation',
     summaryKey: 'insights.entity.very_low_clicks.summary',
     nextStepKey: 'insights.entity.very_low_clicks.nextStep',
   },
   [EntityDiagnosisCode.LOW_CLICKS]: {
     titleKey: 'insights.entity.low_clicks.title',
+
     explanationKey: 'insights.entity.low_clicks.explanation',
     summaryKey: 'insights.entity.low_clicks.summary',
     nextStepKey: 'insights.entity.low_clicks.nextStep',
   },
   [EntityDiagnosisCode.CLICKS_NO_SALES]: {
     titleKey: 'insights.entity.clicks_no_sales.title',
+
     explanationKey: 'insights.entity.clicks_no_sales.explanation',
     summaryKey: 'insights.entity.clicks_no_sales.summary',
     nextStepKey: 'insights.entity.clicks_no_sales.nextStep',
   },
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: {
     titleKey: 'insights.entity.expensive_but_valid.title',
+
     explanationKey: 'insights.entity.expensive_but_valid.explanation',
     summaryKey: 'insights.entity.expensive_but_valid.summary',
     nextStepKey: 'insights.entity.expensive_but_valid.nextStep',
   },
   [EntityDiagnosisCode.WINNER]: {
     titleKey: 'insights.entity.winner.title',
+
     explanationKey: 'insights.entity.winner.explanation',
     summaryKey: 'insights.entity.winner.summary',
     nextStepKey: 'insights.entity.winner.nextStep',
   },
   [EntityDiagnosisCode.BOOST_CANDIDATE]: {
     titleKey: 'insights.entity.boost_candidate.title',
+
     explanationKey: 'insights.entity.boost_candidate.explanation',
     summaryKey: 'insights.entity.boost_candidate.summary',
     nextStepKey: 'insights.entity.boost_candidate.nextStep',
@@ -206,6 +245,16 @@ export const ENTITY_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string;
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
   [EntityDiagnosisCode.WINNER]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300' },
   [EntityDiagnosisCode.BOOST_CANDIDATE]: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-300' },
+};
+
+// ── Macro strategy colors ───────────────────────────────────
+
+export const MACRO_STRATEGY_COLORS: Record<string, { bg: string; text: string; border: string; icon: string }> = {
+  [MacroStrategyCode.SCALE_WINNERS]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300', icon: '🚀' },
+  [MacroStrategyCode.CONTINUE_TESTING]: { bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200', icon: '⏳' },
+  [MacroStrategyCode.FIX_LISTING]: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-300', icon: '📖' },
+  [MacroStrategyCode.CUT_LOSERS]: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-300', icon: '✂️' },
+  [MacroStrategyCode.NO_SIGNAL_YET]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200', icon: '🔍' },
 };
 
 // ── Execution type colors ───────────────────────────────────
@@ -242,32 +291,30 @@ function buildParams(facts: SummaryFacts): Record<string, string | number> {
   };
 }
 
-export function renderCampaignInsight(insight: CampaignInsight): RenderedInsight {
+export function renderCampaignInsight(insight: CampaignInsight): RenderedCampaignStrategy {
   const template = CAMPAIGN_INSIGHT_TEMPLATES[insight.diagnosisCode];
-  if (!template) {
-    return {
-      title: insight.diagnosisCode,
-      explanation: '',
-      summaryText: '',
-      actions: [],
-      confidenceLabel: '',
-      confidenceLevel: 'low',
-    };
-  }
-
   const params = buildParams(insight.summaryFacts);
   const conf = getConfidenceInfo(insight.confidenceScore);
+  const ms = insight.macroStrategy;
+
+  // Build strategy-specific params
+  const strategyParams: Record<string, string | number> = {
+    ...params,
+    winnersCount: ms.winnersCount.toString(),
+    boostCandidatesCount: ms.boostCandidatesCount.toString(),
+    testingCount: ms.testingCount.toString(),
+    ignoredCount: ms.ignoredCount.toString(),
+    losersCount: ms.losersCount.toString(),
+    expensiveCount: ms.expensiveCount.toString(),
+    totalEntities: ms.totalEntities.toString(),
+    eligibleCount: ms.eligibleCount.toString(),
+  };
 
   return {
-    title: t(template.titleKey, params),
-    explanation: t(template.explanationKey, params),
-    summaryText: t(template.summaryKey, params),
-    actions: insight.suggestedActions.map(a => ({
-      label: t(a.i18nKey),
-      execution: a.execution,
-      executionLabel: t(`insights.execution.${a.execution}`),
-      type: a.type,
-    })),
+    strategyTitle: t(`insights.strategy.${ms.macroStrategyCode}.title`, strategyParams),
+    strategySummary: t(`insights.strategy.${ms.macroStrategyCode}.summary`, strategyParams),
+    explanation: template ? t(template.explanationKey, params) : '',
+    summaryText: template ? t(template.summaryKey, params) : '',
     confidenceLabel: conf.label,
     confidenceLevel: conf.level,
   };
@@ -278,6 +325,7 @@ export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
   if (!template) {
     return {
       title: insight.diagnosisCode,
+      badgeText: insight.diagnosisCode,
       explanation: '',
       summaryText: '',
       actions: [],
@@ -291,6 +339,7 @@ export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
 
   return {
     title: t(template.titleKey, params),
+    badgeText: template.badgeKey ? t(template.badgeKey, params) : t(template.titleKey, params),
     explanation: t(template.explanationKey, params),
     summaryText: t(template.summaryKey, params),
     nextStepText: template.nextStepKey ? t(template.nextStepKey, params) : undefined,

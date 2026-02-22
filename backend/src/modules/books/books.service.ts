@@ -1576,21 +1576,13 @@ export class BooksService {
       : GUARDS.DEFAULT_ROYALTY_RATE;
 
     for (const camp of campaignDetails as any[]) {
-      // Campaign insight
-      camp.insight = this.insightsService.computeCampaignInsight(
-        { id: camp.id, name: camp.name, dailyBudget: camp.dailyBudget },
-        camp.metrics,
-        lifecyclePhase,
-        breakEvenAcos,
-        days,
-      );
-
       // Calculate avgCampaignCTR for BOOST_CANDIDATE detection
       const avgCampaignCTR = camp.metrics.impressions > 0
         ? (camp.metrics.clicks / camp.metrics.impressions) * 100
         : 0;
 
-      // Entity insights — keywords
+      // Entity insights FIRST (bottom-up) — keywords
+      const entityInsights: any[] = [];
       for (const kw of camp.keywords) {
         kw.insight = this.insightsService.computeEntityInsight(
           { key: `keyword:${kw.amazonKeywordId}`, type: 'keyword', name: kw.keywordText, campaignId: camp.id, campaignName: camp.name },
@@ -1600,6 +1592,7 @@ export class BooksService {
           days,
           avgCampaignCTR,
         );
+        entityInsights.push(kw.insight);
       }
 
       // Entity insights — product targets
@@ -1612,7 +1605,18 @@ export class BooksService {
           days,
           avgCampaignCTR,
         );
+        entityInsights.push(tg.insight);
       }
+
+      // Campaign insight — aggregates entity insights bottom-up
+      camp.insight = this.insightsService.computeCampaignInsight(
+        { id: camp.id, name: camp.name, dailyBudget: camp.dailyBudget },
+        camp.metrics,
+        breakEvenAcos,
+        days,
+        entityInsights,
+        camp.dailyBudget ?? undefined,
+      );
     }
 
     // Trier : campagnes actives d'abord, puis par dépenses

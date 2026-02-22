@@ -6,7 +6,8 @@ import { RecommendationCard } from '@/components/features/RecommendationCard';
 import { CampaignInsightCard } from '@/components/features/CampaignInsightCard';
 import { EntityInsightPopover } from '@/components/features/EntityInsightPopover';
 import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transforms/recommendations';
-import { type CampaignInsight, type EntityInsight } from '@/lib/transforms/insights';
+import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight } from '@/lib/transforms/insights';
+import { t } from '@/lib/i18n';
 import { fetchBookCampaignDetails } from '@/lib/api/client';
 
 // ── Types ──
@@ -474,6 +475,15 @@ function RecoBadge({ count, onClick }: { count: number; onClick: () => void }) {
   );
 }
 
+function EntityActionBadge({ action }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string } }) {
+  const execColors = EXECUTION_COLORS[action.execution];
+  return (
+    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${execColors.bg} ${execColors.text}`}>
+      {execColors.icon} {action.label}
+    </span>
+  );
+}
+
 // ── Keyword Table with Recommendations ──
 function KeywordTableWithRecos({
   keywords,
@@ -524,10 +534,11 @@ function KeywordTableWithRecos({
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Demande</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Clics</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Dépensé</th>
-              <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Ventes</th>
+              <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
-              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Pourquoi ?</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
             </tr>
           </thead>
@@ -536,6 +547,8 @@ function KeywordTableWithRecos({
               const kwState = stateConfig[kw.state] || stateConfig.enabled;
               const entityKey = `keyword:${kw.amazonKeywordId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
+              const kwRendered = kw.insight ? renderEntityInsight(kw.insight) : null;
+              const kwTopAction = kwRendered?.actions?.[0];
               return (
                 <tr
                   key={kw.id}
@@ -582,6 +595,13 @@ function KeywordTableWithRecos({
                     )}
                   </td>
                   <td className="py-2 px-2 text-center">
+                    {kwTopAction ? (
+                      <EntityActionBadge action={kwTopAction} />
+                    ) : (
+                      <span className="text-[10px] text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="py-2 px-2 text-center">
                     <RecoBadge count={recoCount} onClick={() => openModal(kw)} />
                   </td>
                 </tr>
@@ -616,6 +636,7 @@ function KeywordTableWithRecos({
                     return totalSales > 0 ? formatPct((totalSpend / totalSales) * 100) : '—';
                   })()}
                 </td>
+                <td className="py-2 px-2"></td>
                 <td className="py-2 px-2"></td>
                 <td className="py-2 px-2"></td>
               </tr>
@@ -696,10 +717,11 @@ function ProductTargetTableWithRecos({
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Demande</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Clics</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Dépensé</th>
-              <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Ventes</th>
+              <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
-              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Pourquoi ?</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
             </tr>
           </thead>
@@ -708,6 +730,8 @@ function ProductTargetTableWithRecos({
               const tgState = stateConfig[tg.state] || stateConfig.enabled;
               const entityKey = `target:${tg.amazonTargetId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
+              const tgRendered = tg.insight ? renderEntityInsight(tg.insight) : null;
+              const tgTopAction = tgRendered?.actions?.[0];
               return (
                 <tr
                   key={tg.id}
@@ -754,6 +778,13 @@ function ProductTargetTableWithRecos({
                     )}
                   </td>
                   <td className="py-2 px-2 text-center">
+                    {tgTopAction ? (
+                      <EntityActionBadge action={tgTopAction} />
+                    ) : (
+                      <span className="text-[10px] text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="py-2 px-2 text-center">
                     <RecoBadge count={recoCount} onClick={() => openModal(tg)} />
                   </td>
                 </tr>
@@ -788,6 +819,7 @@ function ProductTargetTableWithRecos({
                     return totalSales > 0 ? formatPct((totalSpend / totalSales) * 100) : '—';
                   })()}
                 </td>
+                <td className="py-2 px-2"></td>
                 <td className="py-2 px-2"></td>
                 <td className="py-2 px-2"></td>
               </tr>

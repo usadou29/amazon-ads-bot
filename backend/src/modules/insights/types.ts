@@ -53,7 +53,7 @@ export interface CampaignInsight {
   campaignId: string;
   diagnosisCode: CampaignDiagnosisCode;
   summaryFacts: SummaryFacts;
-  suggestedActions: InsightAction[];
+  macroStrategy: CampaignMacroStrategy;
   confidenceScore: number;
 }
 
@@ -72,6 +72,27 @@ export interface EntityInsight {
     strategyLabel: string;
   };
   confidenceScore: number;
+}
+
+// ── Macro Strategy (campaign-level, derived from entity insights) ─
+export enum MacroStrategyCode {
+  SCALE_WINNERS = 'scale_winners',
+  CONTINUE_TESTING = 'continue_testing',
+  FIX_LISTING = 'fix_listing',
+  CUT_LOSERS = 'cut_losers',
+  NO_SIGNAL_YET = 'no_signal_yet',
+}
+
+export interface CampaignMacroStrategy {
+  macroStrategyCode: MacroStrategyCode;
+  winnersCount: number;
+  boostCandidatesCount: number;
+  testingCount: number;        // VERY_LOW_CLICKS + LOW_CLICKS
+  ignoredCount: number;        // NO_IMPRESSIONS + ZERO_CLICKS
+  losersCount: number;         // CLICKS_NO_SALES
+  expensiveCount: number;      // EXPENSIVE_BUT_VALID
+  totalEntities: number;
+  eligibleCount: number;       // entities with clicks >= 15
 }
 
 // ── Metrics Input (compatible with existing CalculatedKPIs) ─

@@ -2,9 +2,12 @@ import { InsightsService } from './insights.service';
 import {
   CampaignDiagnosisCode,
   EntityDiagnosisCode,
+  MacroStrategyCode,
   type InsightMetrics,
   type InsightCampaignInput,
   type InsightEntityInput,
+  type EntityInsight,
+  type CampaignMacroStrategy,
 } from './types';
 
 /**
@@ -18,6 +21,7 @@ import {
  * - 3 Lifecycle Variations
  * - 5 Edge Cases
  * - 4 Confidence Scoring
+ * - 5 Macro Strategy Scenarios
  */
 describe('InsightsService', () => {
   let service: InsightsService;
@@ -55,6 +59,18 @@ describe('InsightsService', () => {
     };
   }
 
+  function makeEntityInsight(diagnosisCode: EntityDiagnosisCode, eligibility: boolean): EntityInsight {
+    return {
+      entityKey: `keyword:${Math.random().toString(36).slice(2)}`,
+      entityType: 'keyword',
+      diagnosisCode,
+      eligibility,
+      summaryFacts: { impressions: 0, clicks: 0, ctr: null, orders: 0, cvr: null, spend: 0, sales: 0, acos: null, periodDays: 14 },
+      suggestedActions: [],
+      confidenceScore: 10,
+    };
+  }
+
   const BREAK_EVEN = 35; // 35% royalty rate
   const PERIOD_DAYS = 14;
 
@@ -67,9 +83,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 0, clicks: 0 }),
-        'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
+        [],
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.INVISIBLE);
     });
@@ -78,9 +94,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 500, clicks: 0 }),
-        'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
+        [],
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.IGNORED);
     });
@@ -89,9 +105,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 200, clicks: 10, spend: 5, sales: 0, orders: 0 }),
-        'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
+        [],
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.TOO_EARLY);
     });
@@ -100,9 +116,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 1000, clicks: 50, spend: 25, sales: 0, orders: 0 }),
-        'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
+        [],
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING);
     });
@@ -111,9 +127,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 1000, clicks: 80, spend: 50, sales: 200, orders: 5 }),
-        'scale',
         BREAK_EVEN, // ACoS = 50/200*100 = 25% ≤ 35*1.5=52.5%
         PERIOD_DAYS,
+        [],
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.PROFITABLE);
     });
@@ -122,9 +138,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 500, clicks: 30, spend: 100, sales: 80, orders: 2 }),
-        'scale',
         BREAK_EVEN, // ACoS = 100/80*100 = 125% > 35*1.5=52.5%
         PERIOD_DAYS,
+        [],
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.PROMISING_BUT_EXPENSIVE);
     });
@@ -133,9 +149,10 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign({ dailyBudget: 10 }),
         makeMetrics({ impressions: 1000, clicks: 80, spend: 135, sales: 400, orders: 10 }),
-        'scale',
         BREAK_EVEN,
         PERIOD_DAYS, // dailyBudget * days * 0.95 = 10 * 14 * 0.95 = 133
+        [],
+        10,
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.LIMITED_BY_BUDGET);
     });
@@ -354,7 +371,7 @@ describe('InsightsService', () => {
       }
     });
 
-    it('every diagnosis should have a non-empty suggestedActions list (even pre-eligibility)', () => {
+    it('every diagnosis should have a non-empty suggestedActions list (even pre-eligibility) for entity insights', () => {
       const cases = [
         makeMetrics({ impressions: 0 }),                         // NO_IMPRESSIONS
         makeMetrics({ impressions: 100, clicks: 0 }),             // ZERO_CLICKS
@@ -468,9 +485,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 500, clicks: 30, spend: 20, sales: 0, orders: 0 }),
-        'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
+        [],
       );
       expect(insight.summaryFacts.acos).toBeNull();
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING);
@@ -505,9 +522,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 500, clicks: 30, spend: 100, sales: 30, orders: 1 }),
-        'scale',
         BREAK_EVEN, // ACoS = 100/30*100 = 333% > 52.5%
         PERIOD_DAYS,
+        [],
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.PROMISING_BUT_EXPENSIVE);
     });
@@ -516,9 +533,10 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign({ dailyBudget: 10 }),
         makeMetrics({ impressions: 1000, clicks: 80, spend: 133, sales: 400, orders: 10 }),
-        'scale',
         BREAK_EVEN,
         PERIOD_DAYS, // threshold = 10 * 14 * 0.95 = 133
+        [],
+        10,
       );
       expect(insight.diagnosisCode).toBe(CampaignDiagnosisCode.LIMITED_BY_BUDGET);
     });
@@ -552,7 +570,7 @@ describe('InsightsService', () => {
   });
 
   // ══════════════════════════════════════════════════════════
-  // INSIGHT STRUCTURE INTEGRITY (3 tests)
+  // INSIGHT STRUCTURE INTEGRITY (4 tests)
   // ══════════════════════════════════════════════════════════
 
   describe('Insight Structure', () => {
@@ -579,9 +597,9 @@ describe('InsightsService', () => {
       const insight = service.computeCampaignInsight(
         makeCampaign(),
         makeMetrics({ impressions: 1000, clicks: 100, spend: 50, sales: 200, orders: 5, units: 5 }),
-        'scale',
         BREAK_EVEN,
         PERIOD_DAYS,
+        [],
       );
       expect(insight.summaryFacts.impressions).toBe(1000);
       expect(insight.summaryFacts.clicks).toBe(100);
@@ -594,7 +612,7 @@ describe('InsightsService', () => {
       expect(insight.summaryFacts.periodDays).toBe(PERIOD_DAYS);
     });
 
-    it('should include linkedRecommendation when provided', () => {
+    it('should include linkedRecommendation when provided (entity insights only)', () => {
       const linkedReco = {
         id: 'reco-1',
         actionType: 'bid_up_high_performer',
@@ -624,6 +642,98 @@ describe('InsightsService', () => {
         PERIOD_DAYS,
       );
       expect(typeof insight.eligibility).toBe('boolean');
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // MACRO STRATEGY (5 scenarios)
+  // ══════════════════════════════════════════════════════════
+
+  describe('Macro Strategy', () => {
+    it('Scenario 1: SCALE_WINNERS — 2 winners + 3 testing', () => {
+      const entityInsights: EntityInsight[] = [
+        // 2 winners
+        makeEntityInsight(EntityDiagnosisCode.WINNER, true),
+        makeEntityInsight(EntityDiagnosisCode.WINNER, true),
+        // 3 testing
+        makeEntityInsight(EntityDiagnosisCode.LOW_CLICKS, false),
+        makeEntityInsight(EntityDiagnosisCode.VERY_LOW_CLICKS, false),
+        makeEntityInsight(EntityDiagnosisCode.LOW_CLICKS, false),
+      ];
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 1000, clicks: 80, spend: 50, sales: 200, orders: 5 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        entityInsights,
+      );
+      expect(insight.macroStrategy.macroStrategyCode).toBe(MacroStrategyCode.SCALE_WINNERS);
+      expect(insight.macroStrategy.winnersCount).toBe(2);
+      expect(insight.macroStrategy.testingCount).toBe(3);
+    });
+
+    it('Scenario 2: CONTINUE_TESTING — 0 winners + 5 testing', () => {
+      const entityInsights: EntityInsight[] = [
+        makeEntityInsight(EntityDiagnosisCode.LOW_CLICKS, false),
+        makeEntityInsight(EntityDiagnosisCode.VERY_LOW_CLICKS, false),
+        makeEntityInsight(EntityDiagnosisCode.LOW_CLICKS, false),
+        makeEntityInsight(EntityDiagnosisCode.ZERO_CLICKS, false),
+        makeEntityInsight(EntityDiagnosisCode.NO_IMPRESSIONS, false),
+      ];
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 500, clicks: 30, spend: 20, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        entityInsights,
+      );
+      expect(insight.macroStrategy.macroStrategyCode).toBe(MacroStrategyCode.CONTINUE_TESTING);
+    });
+
+    it('Scenario 3: CUT_LOSERS — 0 winners + 3 losers out of 4 eligible', () => {
+      const entityInsights: EntityInsight[] = [
+        makeEntityInsight(EntityDiagnosisCode.CLICKS_NO_SALES, true),
+        makeEntityInsight(EntityDiagnosisCode.CLICKS_NO_SALES, true),
+        makeEntityInsight(EntityDiagnosisCode.CLICKS_NO_SALES, true),
+        makeEntityInsight(EntityDiagnosisCode.EXPENSIVE_BUT_VALID, true),
+      ];
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 500, clicks: 30, spend: 20, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        entityInsights,
+      );
+      expect(insight.macroStrategy.macroStrategyCode).toBe(MacroStrategyCode.CUT_LOSERS);
+      expect(insight.macroStrategy.losersCount).toBe(3);
+    });
+
+    it('Scenario 4: FIX_LISTING — 1 loser, 0 winners, not majority', () => {
+      const entityInsights: EntityInsight[] = [
+        makeEntityInsight(EntityDiagnosisCode.CLICKS_NO_SALES, true),
+        makeEntityInsight(EntityDiagnosisCode.LOW_CLICKS, false),
+        makeEntityInsight(EntityDiagnosisCode.VERY_LOW_CLICKS, false),
+      ];
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 300, clicks: 20, spend: 15, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        entityInsights,
+      );
+      expect(insight.macroStrategy.macroStrategyCode).toBe(MacroStrategyCode.FIX_LISTING);
+    });
+
+    it('Scenario 5: NO_SIGNAL_YET — empty array', () => {
+      const entityInsights: EntityInsight[] = [];
+      const insight = service.computeCampaignInsight(
+        makeCampaign(),
+        makeMetrics({ impressions: 200, clicks: 10, spend: 5, sales: 0, orders: 0 }),
+        BREAK_EVEN,
+        PERIOD_DAYS,
+        entityInsights,
+      );
+      expect(insight.macroStrategy.macroStrategyCode).toBe(MacroStrategyCode.NO_SIGNAL_YET);
     });
   });
 });

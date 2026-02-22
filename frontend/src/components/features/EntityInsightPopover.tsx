@@ -36,13 +36,13 @@ export function EntityInsightPopover({ insight, entityName }: EntityInsightPopov
 
   return (
     <>
-      {/* Badge — clickable */}
+      {/* Badge — clickable, short label for table display */}
       <button
         onClick={() => setIsOpen(true)}
-        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80 ${diagColors.bg} ${diagColors.text} ${diagColors.border}`}
+        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium whitespace-nowrap transition-colors hover:opacity-80 ${diagColors.bg} ${diagColors.text} ${diagColors.border}`}
         title={rendered.title}
       >
-        {rendered.title}
+        {rendered.badgeText}
       </button>
 
       {/* Modal overlay */}
