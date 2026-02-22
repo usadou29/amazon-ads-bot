@@ -21,6 +21,7 @@ interface TargetMetrics {
   ctr: number;
   cvr: number;
   cpc: number;
+  impressionShare: number | null;
 }
 
 interface KeywordItem {
@@ -110,6 +111,72 @@ function formatPct(v: number): string {
 
 function formatInt(v: number): string {
   return v.toLocaleString('fr-FR');
+}
+
+// ── Impression Share Indicator ──
+// Voyant coloré pour la part d'impressions (topOfSearchImpressionShare)
+function ImpressionShareBadge({ share }: { share: number | null }) {
+  if (share == null) {
+    return <span className="text-[10px] text-slate-300">—</span>;
+  }
+  // share est un % (0-100)
+  let color: string;
+  let label: string;
+  if (share >= 20) {
+    color = 'bg-emerald-500'; // Très bien placé
+    label = 'Top';
+  } else if (share >= 10) {
+    color = 'bg-emerald-300'; // Bien placé
+    label = 'Bon';
+  } else if (share >= 5) {
+    color = 'bg-amber-400'; // Moyen
+    label = 'Moyen';
+  } else if (share > 0) {
+    color = 'bg-orange-400'; // Faible
+    label = 'Faible';
+  } else {
+    color = 'bg-red-400'; // Absent
+    label = 'Nul';
+  }
+  return (
+    <div className="flex items-center gap-1.5 justify-center" title={`Part d'impressions : ${share.toFixed(1)}%`}>
+      <span className={`inline-block h-2.5 w-2.5 rounded-full ${color}`} />
+      <span className="text-[10px] font-medium text-slate-600">{share.toFixed(1)}%</span>
+    </div>
+  );
+}
+
+// ── Demand Level Badge ──
+// Indicateur de demande basé sur le nombre d'impressions sur la période
+function DemandBadge({ impressions, periodDays }: { impressions: number; periodDays: number }) {
+  // Normaliser les impressions par jour pour comparer
+  const dailyImpr = periodDays > 0 ? impressions / periodDays : impressions;
+  let color: string;
+  let label: string;
+  if (dailyImpr >= 500) {
+    color = 'text-emerald-600 bg-emerald-50';
+    label = 'Forte';
+  } else if (dailyImpr >= 100) {
+    color = 'text-blue-600 bg-blue-50';
+    label = 'Bonne';
+  } else if (dailyImpr >= 20) {
+    color = 'text-amber-600 bg-amber-50';
+    label = 'Modérée';
+  } else if (dailyImpr > 0) {
+    color = 'text-orange-600 bg-orange-50';
+    label = 'Faible';
+  } else {
+    color = 'text-slate-400 bg-slate-50';
+    label = 'Nulle';
+  }
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${color}`}
+      title={`${formatInt(impressions)} impr. sur ${periodDays}j (${Math.round(dailyImpr)}/jour)`}
+    >
+      {label}
+    </span>
+  );
 }
 
 // ── Reco Group Card (extracted from page.tsx) ──
@@ -446,6 +513,8 @@ function KeywordTableWithRecos({
               <th className="text-left py-1.5 px-2 text-slate-400 font-medium">État</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Enchère</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Impr.</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Position</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Demande</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Clics</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Dépensé</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Ventes</th>
@@ -483,6 +552,12 @@ function KeywordTableWithRecos({
                     {kw.bid !== null ? `${kw.bid.toFixed(2)} €` : '—'}
                   </td>
                   <td className="py-2 px-2 text-right text-slate-600">{formatInt(kw.metrics.impressions)}</td>
+                  <td className="py-2 px-2 text-center">
+                    <ImpressionShareBadge share={kw.metrics.impressionShare} />
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    <DemandBadge impressions={kw.metrics.impressions} periodDays={parentDays} />
+                  </td>
                   <td className="py-2 px-2 text-right text-slate-600">{formatInt(kw.metrics.clicks)}</td>
                   <td className="py-2 px-2 text-right text-slate-700 font-medium">{formatEur(kw.metrics.spend)}</td>
                   <td className="py-2 px-2 text-right text-slate-700 font-medium">{formatEur(kw.metrics.sales)}</td>
@@ -513,6 +588,8 @@ function KeywordTableWithRecos({
                 <td className="py-2 px-2 text-right font-semibold text-slate-700">
                   {formatInt(keywords.reduce((s, k) => s + k.metrics.impressions, 0))}
                 </td>
+                <td className="py-2 px-2"></td>
+                <td className="py-2 px-2"></td>
                 <td className="py-2 px-2 text-right font-semibold text-slate-700">
                   {formatInt(keywords.reduce((s, k) => s + k.metrics.clicks, 0))}
                 </td>
@@ -608,6 +685,8 @@ function ProductTargetTableWithRecos({
               <th className="text-left py-1.5 px-2 text-slate-400 font-medium">État</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Enchère</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Impr.</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Position</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Demande</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Clics</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Dépensé</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Ventes</th>
@@ -645,6 +724,12 @@ function ProductTargetTableWithRecos({
                     {tg.bid !== null ? `${tg.bid.toFixed(2)} €` : '—'}
                   </td>
                   <td className="py-2 px-2 text-right text-slate-600">{formatInt(tg.metrics.impressions)}</td>
+                  <td className="py-2 px-2 text-center">
+                    <ImpressionShareBadge share={tg.metrics.impressionShare} />
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    <DemandBadge impressions={tg.metrics.impressions} periodDays={parentDays} />
+                  </td>
                   <td className="py-2 px-2 text-right text-slate-600">{formatInt(tg.metrics.clicks)}</td>
                   <td className="py-2 px-2 text-right text-slate-700 font-medium">{formatEur(tg.metrics.spend)}</td>
                   <td className="py-2 px-2 text-right text-slate-700 font-medium">{formatEur(tg.metrics.sales)}</td>
@@ -675,6 +760,8 @@ function ProductTargetTableWithRecos({
                 <td className="py-2 px-2 text-right font-semibold text-slate-700">
                   {formatInt(targets.reduce((s, t) => s + t.metrics.impressions, 0))}
                 </td>
+                <td className="py-2 px-2"></td>
+                <td className="py-2 px-2"></td>
                 <td className="py-2 px-2 text-right font-semibold text-slate-700">
                   {formatInt(targets.reduce((s, t) => s + t.metrics.clicks, 0))}
                 </td>

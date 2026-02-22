@@ -575,6 +575,11 @@ export class ReportsService {
       // correspond au targetId de l'API structurelle pour les product targets.
       const resolvedEntityType = entityType;
 
+      // topOfSearchImpressionShare est un pourcentage (ex: 12.5) fourni par Amazon pour keywords et targets
+      const rawImprShare = row.topOfSearchImpressionShare != null
+        ? parseFloat(row.topOfSearchImpressionShare)
+        : null;
+
       metrics.push({
         workspaceId,
         entityType: resolvedEntityType,
@@ -589,6 +594,7 @@ export class ReportsService {
         sales: String(parseFloat(row.sales14d) || 0),
         orders: parseInt(row.purchases14d, 10) || 0,
         units: parseInt(row.unitsSoldClicks14d, 10) || 0,
+        impressionShare: rawImprShare != null && !isNaN(rawImprShare) ? String(rawImprShare) : null,
         attributionWindow: '14d',
       });
     }
@@ -694,6 +700,17 @@ export class ReportsService {
         existing.sales = String(parseFloat(existing.sales ?? '0') + parseFloat(m.sales ?? '0'));
         existing.orders = (existing.orders ?? 0) + (m.orders ?? 0);
         existing.units = (existing.units ?? 0) + (m.units ?? 0);
+        // Pour impression share, on prend la moyenne pondérée par impressions
+        if (m.impressionShare != null) {
+          const existImpr = (existing.impressions ?? 0) - (m.impressions ?? 0);
+          const existShare = existing.impressionShare != null ? parseFloat(existing.impressionShare) : 0;
+          const newImpr = m.impressions ?? 0;
+          const newShare = parseFloat(m.impressionShare);
+          const totalImpr = existImpr + newImpr;
+          existing.impressionShare = totalImpr > 0
+            ? String((existShare * existImpr + newShare * newImpr) / totalImpr)
+            : m.impressionShare;
+        }
       } else {
         dedupMap.set(key, { ...m });
       }
@@ -722,6 +739,7 @@ export class ReportsService {
           ${m.sales ?? '0'},
           ${m.orders ?? 0},
           ${m.units ?? 0},
+          ${m.impressionShare != null ? m.impressionShare : null},
           ${m.attributionWindow ?? '14d'},
           NOW(),
           NOW()
@@ -731,7 +749,7 @@ export class ReportsService {
       await this.db.execute(sql`
         INSERT INTO daily_metrics (
           id, workspace_id, entity_type, entity_key, profile_id, date, marketplace, currency,
-          impressions, clicks, spend, sales, orders, units,
+          impressions, clicks, spend, sales, orders, units, impression_share,
           attribution_window, synced_at, created_at
         )
         VALUES ${sql.join(values, sql`, `)}
@@ -742,6 +760,7 @@ export class ReportsService {
           sales = EXCLUDED.sales,
           orders = EXCLUDED.orders,
           units = EXCLUDED.units,
+          impression_share = EXCLUDED.impression_share,
           synced_at = NOW()
       `);
 
