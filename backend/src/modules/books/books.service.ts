@@ -16,6 +16,7 @@ import {
 import { eq, and, inArray, sql, gte, lte, desc } from 'drizzle-orm';
 import type { Book, NewBook, CampaignBookMapping } from '@/db/schema';
 import type { LifecyclePhase } from '@/db/schema/books';
+import { reportJobs } from '@/db/schema/report-jobs';
 import { StrategyEngine } from '../strategy/strategy-engine';
 import { GUARDS } from '@/config/guards';
 
@@ -1387,6 +1388,13 @@ export class BooksService {
         for (const row of kwMetrics) {
           keywordMetricsMap[row.entityKey] = row;
         }
+        this.logger.log(
+          `[CAMPAIGN-DETAIL] Keywords: ${keywordEntityKeys.length} entity keys queried, ` +
+          `${kwMetrics.length} rows returned from daily_metrics (${startDate} → ${endDate}). ` +
+          `Sample keys: ${keywordEntityKeys.slice(0, 3).join(', ')}`,
+        );
+      } else {
+        this.logger.log(`[CAMPAIGN-DETAIL] No keyword entity keys to query`);
       }
 
       // Batch : métriques targets
@@ -1416,6 +1424,44 @@ export class BooksService {
         for (const row of tgMetrics) {
           targetMetricsMap[row.entityKey] = row;
         }
+        this.logger.log(
+          `[CAMPAIGN-DETAIL] Targets: ${targetEntityKeys.length} entity keys queried, ` +
+          `${tgMetrics.length} rows returned from daily_metrics (${startDate} → ${endDate}). ` +
+          `Sample keys: ${targetEntityKeys.slice(0, 3).join(', ')}`,
+        );
+
+        // Diagnostic : vérifier s'il existe N'IMPORTE QUELLE donnée target dans daily_metrics
+        if (tgMetrics.length === 0) {
+          const [anyTargetData] = await this.db
+            .select({
+              cnt: sql<number>`COUNT(*)`,
+              sampleKey: sql<string>`MIN(${dailyMetrics.entityKey})`,
+            })
+            .from(dailyMetrics)
+            .where(eq(dailyMetrics.entityType, 'target'));
+
+          // Vérifier aussi les report_jobs pour targets
+          const recentTargetJobs = await this.db
+            .select({
+              status: reportJobs.status,
+              recordsProcessed: reportJobs.recordsProcessed,
+              errorMessage: reportJobs.errorMessage,
+              requestedAt: reportJobs.requestedAt,
+            })
+            .from(reportJobs)
+            .where(eq(reportJobs.reportType, 'targets'))
+            .orderBy(desc(reportJobs.requestedAt))
+            .limit(3);
+
+          this.logger.warn(
+            `[CAMPAIGN-DETAIL] DIAGNOSTIC: Total rows in daily_metrics with entity_type='target': ${anyTargetData?.cnt || 0}. ` +
+            `Sample key: ${anyTargetData?.sampleKey || 'NONE'}. ` +
+            `Expected keys: ${targetEntityKeys.slice(0, 3).join(', ')}. ` +
+            `Recent 'targets' report jobs: ${JSON.stringify(recentTargetJobs.map((j: any) => ({ status: j.status, records: j.recordsProcessed, error: j.errorMessage?.slice(0, 100), at: j.requestedAt })))}`,
+          );
+        }
+      } else {
+        this.logger.log(`[CAMPAIGN-DETAIL] No target entity keys to query`);
       }
 
       // Métriques campagne globale

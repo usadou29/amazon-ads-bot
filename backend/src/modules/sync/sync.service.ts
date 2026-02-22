@@ -585,8 +585,24 @@ export class SyncService {
       };
 
       if (!existingId) {
-        await this.db.insert(campaigns).values({ ...campaignData, createdAt: new Date() });
-        created++;
+        try {
+          await this.db.insert(campaigns).values({ ...campaignData, createdAt: new Date() });
+          created++;
+        } catch (insertErr: any) {
+          // Duplicate key → la campagne a été insérée entre le pré-chargement et maintenant
+          if (insertErr?.code === '23505' || insertErr?.message?.includes('duplicate key')) {
+            this.logger.debug(`Campaign ${campaign.campaignId} already exists for profile ${profile.id}, updating instead`);
+            await this.db.update(campaigns).set(campaignData).where(
+              and(
+                eq(campaigns.profileId, profile.id),
+                eq(campaigns.amazonCampaignId, campaign.campaignId),
+              ),
+            );
+            updated++;
+          } else {
+            throw insertErr;
+          }
+        }
       } else {
         await this.db.update(campaigns).set(campaignData).where(eq(campaigns.id, existingId));
         updated++;

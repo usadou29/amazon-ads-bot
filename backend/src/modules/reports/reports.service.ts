@@ -62,7 +62,7 @@ const REPORT_TYPE_ID_FIELD: Record<string, string> = {
   campaigns: 'campaignId',
   ad_groups: 'adGroupId',
   keywords: 'keywordId',
-  targets: 'targetId',
+  targets: 'keywordId',  // spTargeting utilise keywordId pour TOUS les types de ciblage (keywords + product targets)
   // search_terms est traité à part (adGroupId + query)
 };
 
@@ -499,6 +499,10 @@ export class ReportsService {
     }
 
     if (rows.length === 0) {
+      this.logger.warn(
+        `Report ${job.id} (${job.reportType}): EMPTY report — 0 rows returned by Amazon. ` +
+        `This means Amazon returned no data for this report type.`,
+      );
       await this.db
         .update(reportJobs)
         .set({ status: 'ingested', ingestedAt: new Date(), recordsProcessed: 0 })
@@ -526,6 +530,12 @@ export class ReportsService {
 
   /**
    * Ingère un rapport standard (campaigns, ad_groups, keywords, targets).
+   *
+   * Le rapport `targets` (spTargeting) utilise `keywordId` comme identifiant
+   * pour TOUS les types de ciblage (keywords ET product targets).
+   * Dans l'API structurelle, ce même ID est appelé `targetId` pour les product targets.
+   * On ingère toutes les lignes spTargeting comme entity_type='target'.
+   * Les métriques keywords sont déjà couvertes par le rapport `keywords` (spKeywords).
    */
   private async ingestStandardReport(
     rows: any[],
@@ -540,22 +550,15 @@ export class ReportsService {
       throw new Error(`Unknown report type for ingestion: ${reportType}`);
     }
 
-    // ── DIAGNOSTIC LOGGING ──
     this.logger.log(
       `[INGEST] reportType=${reportType}, entityType=${entityType}, idField=${idField}, totalRows=${rows.length}`,
     );
     if (rows.length > 0) {
       const sampleRow = rows[0];
-      const sampleKeys = Object.keys(sampleRow);
-      this.logger.log(`[INGEST] Sample row keys: ${sampleKeys.join(', ')}`);
+      this.logger.log(`[INGEST] Sample row keys: ${Object.keys(sampleRow).join(', ')}`);
       this.logger.log(`[INGEST] Sample row[${idField}] = ${JSON.stringify(sampleRow[idField])}`);
-      this.logger.log(`[INGEST] Sample row.date = ${JSON.stringify(sampleRow.date)}`);
-      this.logger.log(`[INGEST] Sample row.impressions = ${JSON.stringify(sampleRow.impressions)}`);
-      this.logger.log(`[INGEST] Sample row.clicks = ${JSON.stringify(sampleRow.clicks)}`);
-      this.logger.log(`[INGEST] Sample row.cost = ${JSON.stringify(sampleRow.cost)}, row.spend = ${JSON.stringify(sampleRow.spend)}`);
-      this.logger.log(`[INGEST] Sample row.sales14d = ${JSON.stringify(sampleRow.sales14d)}`);
+      this.logger.log(`[INGEST] Sample: date=${sampleRow.date}, impressions=${sampleRow.impressions}, clicks=${sampleRow.clicks}`);
     }
-    // ── END DIAGNOSTIC ──
 
     const metrics: NewDailyMetric[] = [];
     let skippedNoId = 0;
@@ -567,10 +570,15 @@ export class ReportsService {
         continue;
       }
 
+      // Pour le rapport targets (spTargeting), toutes les lignes utilisent keywordId
+      // et sont ingérées comme entity_type='target'. Le keywordId du rapport
+      // correspond au targetId de l'API structurelle pour les product targets.
+      const resolvedEntityType = entityType;
+
       metrics.push({
         workspaceId,
-        entityType,
-        entityKey: makeEntityKey(entityType, amazonId),
+        entityType: resolvedEntityType,
+        entityKey: makeEntityKey(resolvedEntityType, amazonId),
         profileId: profile.id,
         date: row.date,
         marketplace: profile.marketplace,
@@ -586,7 +594,7 @@ export class ReportsService {
     }
 
     this.logger.log(
-      `[INGEST] ${reportType}: ${metrics.length} metrics built, ${skippedNoId} rows skipped (no ${idField})`,
+      `[INGEST] ${reportType}: ${metrics.length} metrics built, ${skippedNoId} rows skipped (no ID)`,
     );
 
     if (metrics.length === 0) {
