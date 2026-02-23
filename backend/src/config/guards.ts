@@ -30,6 +30,35 @@ export const GUARDS = {
 
   // Royalty rate par défaut (break-even ACoS)
   DEFAULT_ROYALTY_RATE: 35,
+
+  // Période stratégique par phase de cycle de vie (en jours)
+  // Les décisions d'insights utilisent UNIQUEMENT cette période, jamais le filtre UI
+  STRATEGIC_PERIOD_BY_PHASE: {
+    launch: 7,
+    scale: 14,
+    evergreen: 30,
+    relaunch: 14,
+  } as Record<string, number>,
+
+  // Seuil minimum d'impressions pour avoir un signal fiable (campagne)
+  MIN_IMPRESSIONS_FOR_SIGNAL: 300,
+
+  // Seuil minimum d'impressions pour juger le CTR d'une entité (mot-clé/produit)
+  // En dessous, on ne peut pas conclure si le problème vient de la couverture ou du manque de diffusion
+  MIN_IMPRESSIONS_FOR_CTR_SIGNAL: 300,
+
+  // Période de tendance court terme (en jours)
+  TREND_PERIOD_DAYS: 7,
+
+  // Seuils de clics par phase pour la Decision Window
+  // hard = minimum de clics pour une décision confiante
+  // soft = minimum de clics pour une décision tentative (observe mode)
+  DECISION_CLICK_THRESHOLDS: {
+    launch:    { hard: 15, soft: 8 },
+    scale:     { hard: 15, soft: 10 },
+    evergreen: { hard: 20, soft: 12 },
+    relaunch:  { hard: 15, soft: 8 },
+  } as Record<string, { hard: number; soft: number }>,
 } as const;
 
 // Types pour les constantes

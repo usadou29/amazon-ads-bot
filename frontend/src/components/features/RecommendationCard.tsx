@@ -255,7 +255,7 @@ export function RecommendationCard({
               {reco.entityName && (
                 <div className="ml-7">
                   <p className="text-xs text-slate-400 truncate">
-                    {reco.entityType === 'keyword' ? 'Mot-clé' : reco.entityType === 'search_term' ? 'Terme de recherche' : 'Campagne'} : {reco.entityName}
+                    {reco.entityType === 'keyword' ? 'Mot-clé' : reco.entityType === 'target' ? 'Produit ciblé' : reco.entityType === 'search_term' ? 'Terme de recherche' : 'Campagne'} : {reco.entityName}
                   </p>
                   {reco.campaignName && (
                     <p className="text-xs text-slate-300 truncate">

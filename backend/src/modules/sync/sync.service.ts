@@ -641,15 +641,17 @@ export class SyncService {
     const stats: EntitySyncStats = { fetched: amazonAdGroups.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
     const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
-    // Batch: pré-charger toutes les campagnes pour ce profil → Map(amazonCampaignId → dbId)
+    // Batch: pré-charger uniquement les campagnes ENABLED pour ce profil → Map(amazonCampaignId → dbId)
     const profileCampaigns = await this.db
       .select({ id: campaigns.id, amazonCampaignId: campaigns.amazonCampaignId })
       .from(campaigns)
-      .where(eq(campaigns.profileId, profile.id));
+      .where(and(eq(campaigns.profileId, profile.id), eq(campaigns.state, 'enabled')));
     const campaignMap = new Map<number, string>();
     for (const c of profileCampaigns) {
       campaignMap.set(c.amazonCampaignId, c.id);
     }
+
+    this.logger.debug(`Ad groups sync: ${campaignMap.size} enabled campaigns for profile ${profile.marketplace}`);
 
     // Batch: pré-charger tous les ad groups existants pour ces campagnes
     const campaignDbIds = Array.from(campaignMap.values());
@@ -668,7 +670,7 @@ export class SyncService {
       try {
         const campaignDbId = campaignMap.get(adGroup.campaignId);
         if (!campaignDbId) {
-          addSkip('missing_campaign');
+          addSkip('inactive_campaign');
           continue;
         }
 
@@ -726,17 +728,19 @@ export class SyncService {
     const stats: EntitySyncStats = { fetched: amazonKeywords.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
     const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
-    // Batch: pré-charger campagnes → Map(amazonCampaignId → dbId)
+    // Batch: pré-charger uniquement les campagnes ENABLED → Map(amazonCampaignId → dbId)
     const profileCampaigns = await this.db
       .select({ id: campaigns.id, amazonCampaignId: campaigns.amazonCampaignId })
       .from(campaigns)
-      .where(eq(campaigns.profileId, profile.id));
+      .where(and(eq(campaigns.profileId, profile.id), eq(campaigns.state, 'enabled')));
     const campaignMap = new Map<number, string>();
     for (const c of profileCampaigns) {
       campaignMap.set(c.amazonCampaignId, c.id);
     }
 
-    // Batch: pré-charger ad groups → Map("campaignId:amazonAdGroupId" → dbId)
+    this.logger.debug(`Keywords sync: ${campaignMap.size} enabled campaigns for profile ${profile.marketplace}`);
+
+    // Batch: pré-charger ad groups des campagnes enabled → Map("campaignId:amazonAdGroupId" → dbId)
     const campaignDbIds = Array.from(campaignMap.values());
     const adGroupMap = new Map<string, string>();
     if (campaignDbIds.length > 0) {
@@ -766,7 +770,7 @@ export class SyncService {
       try {
         const campaignDbId = campaignMap.get(keyword.campaignId);
         if (!campaignDbId) {
-          addSkip('missing_campaign');
+          addSkip('inactive_campaign');
           continue;
         }
 
@@ -829,17 +833,19 @@ export class SyncService {
     const stats: EntitySyncStats = { fetched: amazonTargets.length, created: 0, updated: 0, skipped: 0, failed: 0, skipReasons: {} };
     const addSkip = (reason: string) => { stats.skipped++; stats.skipReasons![reason] = (stats.skipReasons![reason] || 0) + 1; };
 
-    // Batch: pré-charger campagnes → Map(amazonCampaignId → dbId)
+    // Batch: pré-charger uniquement les campagnes ENABLED → Map(amazonCampaignId → dbId)
     const profileCampaigns = await this.db
       .select({ id: campaigns.id, amazonCampaignId: campaigns.amazonCampaignId })
       .from(campaigns)
-      .where(eq(campaigns.profileId, profile.id));
+      .where(and(eq(campaigns.profileId, profile.id), eq(campaigns.state, 'enabled')));
     const campaignMap = new Map<number, string>();
     for (const c of profileCampaigns) {
       campaignMap.set(c.amazonCampaignId, c.id);
     }
 
-    // Batch: pré-charger ad groups → Map("campaignId:amazonAdGroupId" → dbId)
+    this.logger.debug(`Product targets sync: ${campaignMap.size} enabled campaigns for profile ${profile.marketplace}`);
+
+    // Batch: pré-charger ad groups des campagnes enabled → Map("campaignId:amazonAdGroupId" → dbId)
     const campaignDbIds = Array.from(campaignMap.values());
     const adGroupMap = new Map<string, string>();
     if (campaignDbIds.length > 0) {
@@ -869,7 +875,7 @@ export class SyncService {
       try {
         const campaignDbId = campaignMap.get(target.campaignId);
         if (!campaignDbId) {
-          addSkip('missing_campaign');
+          addSkip('inactive_campaign');
           continue;
         }
 

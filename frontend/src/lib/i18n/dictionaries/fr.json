@@ -36,7 +36,7 @@
     "tab_details": "Détails",
     "tab_advanced": "Avancé",
     "efficiency_title": "Efficacité de tes pubs",
-    "efficiency_desc": "Plus c'est bas, mieux c'est. En dessous de {target}%, tes pubs sont rentables.",
+    "efficiency_desc": "Plus c'est haut, mieux c'est. Au-dessus de {target}%, tes pubs sont rentables.",
     "advice_title": "Mes conseils pour toi"
   },
   "metrics": {
@@ -112,6 +112,11 @@
         "summary": "0 impression sur {periodDays} jours",
         "explanation": "Personne ne voit ta campagne. Augmente les enchères ou vérifie que ta campagne est bien active."
       },
+      "low_signal": {
+        "title": "Signal faible",
+        "summary": "{impressions} impr. sur {periodDays}j — signal insuffisant",
+        "explanation": "Seulement {impressions} impressions sur {periodDays} jours. Il faut au moins 300 impressions pour tirer des conclusions fiables. Vérifie que tes enchères sont compétitives."
+      },
       "ignored": {
         "title": "Visible mais ignorée",
         "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
@@ -145,39 +150,67 @@
     },
     "entity": {
       "no_impressions": {
-        "title": "Jamais affiché",
+        "title": "Pas diffusé",
+
         "summary": "0 impression sur {periodDays} jours",
-        "explanation": "Ce mot-clé n'a généré aucune impression. L'enchère est probablement trop basse."
+        "explanation": "Ce {entityLabel} n'a généré aucune impression. L'enchère est probablement trop basse pour apparaître dans les résultats.",
+        "nextStep": "Augmente l'enchère ou vérifie que ce {entityLabel} est bien actif."
       },
-      "low_ctr": {
-        "title": "Peu de clics",
-        "summary": "{clicks} clic(s) pour {impressions} impressions (CTR {ctr}%)",
-        "explanation": "Ton annonce apparaît mais n'attire pas les clics. Le problème vient souvent de la couverture ou du titre."
+      "zero_clicks_low_volume": {
+        "title": "Peu de visibilité",
+
+        "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
+        "explanation": "Trop peu de visibilité pour juger si ta couverture ou ton titre posent problème. Avec seulement {impressions} impressions, on est encore dans le bruit statistique.",
+        "nextStep": "Augmente légèrement l'enchère ou élargis le ciblage pour accumuler des données. Il faut au moins 300 impressions pour avoir un signal fiable."
       },
-      "too_early": {
-        "title": "Données insuffisantes",
-        "summary": "{clicks} clics (il en faut au moins {minClicks}) sur {periodDays} jours",
-        "explanation": "Pas assez de données pour décider. Patiente encore un peu."
+      "zero_clicks": {
+        "title": "Vu mais ignoré",
+
+        "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
+        "explanation": "Ton annonce a été affichée {impressions} fois et personne n'a cliqué. Le problème vient probablement de la couverture ou du titre qui n'attirent pas l'attention.",
+        "nextStep": "Vérifie ta couverture et ton titre. Si ce {entityLabel} est pertinent, améliore ta fiche produit."
+      },
+      "very_low_clicks": {
+        "title": "Très peu de clics",
+
+        "summary": "{clicks} clic(s) pour {impressions} impressions sur {periodDays} jours",
+        "explanation": "Seulement {clicks} clic(s) pour le moment. C'est trop tôt pour tirer des conclusions fiables.",
+        "nextStep": "Patiente. Il faut au moins {minClicks} clics pour avoir un signal exploitable."
+      },
+      "low_clicks": {
+        "title": "Début de signal",
+
+        "summary": "{clicks} clics pour {impressions} impressions (CTR {ctr}%) sur {periodDays} jours",
+        "explanation": "On commence à voir une tendance avec {clicks} clics. Encore un peu de patience avant de pouvoir recommander une action.",
+        "nextStep": "Surveille. Plus que {remainingClicks} clics avant d'avoir assez de données pour décider."
       },
       "clicks_no_sales": {
         "title": "Clics sans ventes",
+
         "summary": "{clicks} clics, {spend}€ dépensés, 0 vente sur {periodDays} jours",
-        "explanation": "Les gens cliquent mais n'achètent pas. Le problème vient de ta fiche livre, pas du mot-clé."
+        "explanation": "Les gens cliquent mais n'achètent pas. Le problème vient de ta fiche livre, pas de ce {entityLabel}.",
+        "nextStep": "Améliore ta fiche livre (description, avis) ou bloque ce terme si le budget file."
       },
       "expensive_but_valid": {
         "title": "Rentable... tout juste",
+
         "summary": "{orders} vente(s), ACoS {acos}% (cible ≤{breakEven}%) sur {periodDays} jours",
-        "explanation": "Tu fais des ventes mais à un coût élevé. Baisse l'enchère pour améliorer la rentabilité."
+        "explanation": "Tu fais des ventes mais à un coût élevé. Baisse l'enchère pour améliorer la rentabilité.",
+        "nextStep": "Baisse l'enchère progressivement pour réduire l'ACoS."
       },
       "winner": {
         "title": "Gagnant",
+
         "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays} jours",
-        "explanation": "Excellente performance. Ce mot-clé convertit bien et reste rentable."
+        "explanation": "Excellente performance. Ce {entityLabel} convertit bien et reste rentable.",
+        "nextStep": "Augmente l'enchère pour capter encore plus de trafic rentable."
       },
       "boost_candidate": {
         "title": "Potentiel de croissance",
+
         "summary": "{orders} vente(s), CTR {ctr}% (au-dessus de la moyenne) sur {periodDays} jours",
-        "explanation": "Ce mot-clé a un CTR supérieur à la moyenne et convertit bien. Augmente l'enchère pour capter plus de trafic."
+        "explanation": "Ce {entityLabel} a un CTR supérieur à la moyenne et convertit bien. Augmente l'enchère pour capter plus de trafic.",
+        "nextStep": "Monte l'enchère pour maximiser le volume sur ce {entityLabel} performant."
       }
     },
     "actions": {
@@ -202,7 +235,68 @@
       "medium": "Modérée",
       "low": "Exploratoire"
     },
+    "strategy": {
+      "scale_winners": {
+        "title": "Accélérer les gagnants",
+        "summary": "{winnersCount} gagnant(s) et {boostCandidatesCount} à potentiel sur {totalEntities} {entityLabelPlural}. Augmente les enchères sur les performants."
+      },
+      "continue_testing": {
+        "title": "En phase de test",
+        "summary": "{testingCount} {entityLabel}(s) en cours de test, {ignoredCount} sans signal. Laisse tourner pour accumuler des données."
+      },
+      "fix_listing": {
+        "title": "Améliorer ta fiche livre",
+        "summary": "{losersCount} {entityLabel}(s) avec des clics mais 0 vente. Le trafic arrive mais ta fiche ne convertit pas."
+      },
+      "cut_losers": {
+        "title": "Couper les pertes",
+        "summary": "{losersCount} {entityLabel}(s) non rentable(s) sur {eligibleCount} éligibles. Réduis les enchères ou bloque les moins performants."
+      },
+      "no_signal_yet": {
+        "title": "Pas encore de signal",
+        "summary": "Aucun {entityLabel} n'a encore accumulé assez de données. Patiente quelques jours."
+      }
+    },
+    "trend": {
+      "up": "En amélioration",
+      "stable": "Stable",
+      "down": "En baisse"
+    },
+    "period": {
+      "label": "Sur {days}j"
+    },
     "why_column": "Pourquoi ?",
     "campaign_summary": "Résumé campagne"
+  },
+  "actionModal": {
+    "title": "Action — « {entityName} »",
+    "diagnostic": "Diagnostic",
+    "confidence": "Confiance",
+    "metrics": "Métriques",
+    "currentBid": "Enchère actuelle",
+    "recommendedBid": "Enchère recommandée (Endromède)",
+    "amazonBid": "Enchère suggérée Amazon",
+    "amazonRange": "{min} – {max}",
+    "sliderLabel": "Ajuster l'enchère",
+    "simulate": "Simuler",
+    "apply": "Appliquer",
+    "pause": "Mettre en pause",
+    "cancel": "Annuler",
+    "guards": "Garde-fous : +{maxIncrease}% max / {minBid}–{maxBid}€",
+    "eligibility": {
+      "insufficient_data": "Pas assez de données ({clicks} clics). Il faut au minimum 5 clics pour agir.",
+      "observe_only": "Phase d'observation. {clicks} clics, 0 vente — patience recommandée.",
+      "small_tweak_max": "Ajustement limité à ±10%. Données encore insuffisantes pour un calcul complet.",
+      "full_calculation": "Calcul complet basé sur {clicks} clics et {orders} vente(s)."
+    },
+    "confirmApply": "Confirmer le changement d'enchère de {currentBid}€ → {newBid}€ ?",
+    "confirmPause": "Confirmer la mise en pause de « {entityName} » ?",
+    "success": "Action exécutée avec succès",
+    "error": "Erreur lors de l'exécution",
+    "loading": "Chargement de la suggestion...",
+    "retry": "Réessayer",
+    "dryRunResult": "Simulation : {currentBid}€ → {newBid}€",
+    "actionButton": "Agir",
+    "noAction": "Aucune action disponible"
   }
 }

@@ -5,8 +5,10 @@ import { Modal } from '@/components/ui/Modal';
 import { RecommendationCard } from '@/components/features/RecommendationCard';
 import { CampaignInsightCard } from '@/components/features/CampaignInsightCard';
 import { EntityInsightPopover } from '@/components/features/EntityInsightPopover';
+import { ActionModal } from '@/components/features/ActionModal';
 import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transforms/recommendations';
-import { type CampaignInsight, type EntityInsight } from '@/lib/transforms/insights';
+import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight } from '@/lib/transforms/insights';
+import { t } from '@/lib/i18n';
 import { fetchBookCampaignDetails } from '@/lib/api/client';
 
 // ── Types ──
@@ -86,6 +88,9 @@ interface OverviewCampaignViewProps {
   onDaysChange: (days: number) => void;
   loading: boolean;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  workspaceId?: string;
+  acosTarget?: number;
+  onActionExecuted?: () => void;
 }
 
 // ── Helpers ──
@@ -474,6 +479,25 @@ function RecoBadge({ count, onClick }: { count: number; onClick: () => void }) {
   );
 }
 
+function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: () => void }) {
+  const execColors = EXECUTION_COLORS[action.execution];
+  if (onClick) {
+    return (
+      <button
+        onClick={onClick}
+        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${execColors.bg} ${execColors.text}`}
+      >
+        {execColors.icon} {action.label}
+      </button>
+    );
+  }
+  return (
+    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${execColors.bg} ${execColors.text}`}>
+      {execColors.icon} {action.label}
+    </span>
+  );
+}
+
 // ── Keyword Table with Recommendations ──
 function KeywordTableWithRecos({
   keywords,
@@ -484,6 +508,9 @@ function KeywordTableWithRecos({
   bookId,
   parentDays,
   lifecyclePhase,
+  workspaceId,
+  acosTarget,
+  onActionExecuted,
 }: {
   keywords: KeywordItem[];
   recommendationMap: Map<string, RecommendationGroup[]>;
@@ -493,9 +520,13 @@ function KeywordTableWithRecos({
   bookId: string;
   parentDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  workspaceId?: string;
+  acosTarget?: number;
+  onActionExecuted?: () => void;
 }) {
   const [modalKeyword, setModalKeyword] = useState<KeywordItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
+  const [actionKeyword, setActionKeyword] = useState<KeywordItem | null>(null);
 
   if (keywords.length === 0) return null;
 
@@ -524,10 +555,11 @@ function KeywordTableWithRecos({
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Demande</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Clics</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Dépensé</th>
-              <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Ventes</th>
+              <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
-              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Pourquoi ?</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
             </tr>
           </thead>
@@ -536,6 +568,8 @@ function KeywordTableWithRecos({
               const kwState = stateConfig[kw.state] || stateConfig.enabled;
               const entityKey = `keyword:${kw.amazonKeywordId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
+              const kwRendered = kw.insight ? renderEntityInsight(kw.insight) : null;
+              const kwTopAction = kwRendered?.actions?.[0];
               return (
                 <tr
                   key={kw.id}
@@ -581,6 +615,16 @@ function KeywordTableWithRecos({
                       <span className="text-[10px] text-slate-300">—</span>
                     )}
                   </td>
+                  <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                    {kwTopAction ? (
+                      <EntityActionBadge
+                        action={kwTopAction}
+                        onClick={kwTopAction.execution === 'ads' && workspaceId && acosTarget != null ? () => setActionKeyword(kw) : undefined}
+                      />
+                    ) : (
+                      <span className="text-[10px] text-slate-300">—</span>
+                    )}
+                  </td>
                   <td className="py-2 px-2 text-center">
                     <RecoBadge count={recoCount} onClick={() => openModal(kw)} />
                   </td>
@@ -618,6 +662,7 @@ function KeywordTableWithRecos({
                 </td>
                 <td className="py-2 px-2"></td>
                 <td className="py-2 px-2"></td>
+                <td className="py-2 px-2"></td>
               </tr>
             </tfoot>
           )}
@@ -642,6 +687,21 @@ function KeywordTableWithRecos({
           lifecyclePhase={lifecyclePhase}
         />
       )}
+
+      {/* Action Modal for keyword bid adjustment */}
+      {actionKeyword && workspaceId && acosTarget != null && (
+        <ActionModal
+          open={!!actionKeyword}
+          onClose={() => setActionKeyword(null)}
+          entityKey={`keyword:${actionKeyword.amazonKeywordId}`}
+          entityType="keyword"
+          entityName={actionKeyword.keywordText}
+          workspaceId={workspaceId}
+          acosTarget={acosTarget}
+          lifecyclePhase={lifecyclePhase}
+          onActionExecuted={onActionExecuted}
+        />
+      )}
     </div>
   );
 }
@@ -656,6 +716,9 @@ function ProductTargetTableWithRecos({
   bookId,
   parentDays,
   lifecyclePhase,
+  workspaceId,
+  acosTarget,
+  onActionExecuted,
 }: {
   targets: ProductTargetItem[];
   recommendationMap: Map<string, RecommendationGroup[]>;
@@ -665,9 +728,13 @@ function ProductTargetTableWithRecos({
   bookId: string;
   parentDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  workspaceId?: string;
+  acosTarget?: number;
+  onActionExecuted?: () => void;
 }) {
   const [modalTarget, setModalTarget] = useState<ProductTargetItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
+  const [actionTarget, setActionTarget] = useState<ProductTargetItem | null>(null);
 
   if (targets.length === 0) return null;
 
@@ -696,10 +763,11 @@ function ProductTargetTableWithRecos({
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Demande</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Clics</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Dépensé</th>
-              <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Ventes</th>
+              <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
-              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Pourquoi ?</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
             </tr>
           </thead>
@@ -708,6 +776,8 @@ function ProductTargetTableWithRecos({
               const tgState = stateConfig[tg.state] || stateConfig.enabled;
               const entityKey = `target:${tg.amazonTargetId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
+              const tgRendered = tg.insight ? renderEntityInsight(tg.insight) : null;
+              const tgTopAction = tgRendered?.actions?.[0];
               return (
                 <tr
                   key={tg.id}
@@ -753,6 +823,16 @@ function ProductTargetTableWithRecos({
                       <span className="text-[10px] text-slate-300">—</span>
                     )}
                   </td>
+                  <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                    {tgTopAction ? (
+                      <EntityActionBadge
+                        action={tgTopAction}
+                        onClick={tgTopAction.execution === 'ads' && workspaceId && acosTarget != null ? () => setActionTarget(tg) : undefined}
+                      />
+                    ) : (
+                      <span className="text-[10px] text-slate-300">—</span>
+                    )}
+                  </td>
                   <td className="py-2 px-2 text-center">
                     <RecoBadge count={recoCount} onClick={() => openModal(tg)} />
                   </td>
@@ -790,6 +870,7 @@ function ProductTargetTableWithRecos({
                 </td>
                 <td className="py-2 px-2"></td>
                 <td className="py-2 px-2"></td>
+                <td className="py-2 px-2"></td>
               </tr>
             </tfoot>
           )}
@@ -813,6 +894,21 @@ function ProductTargetTableWithRecos({
           lifecyclePhase={lifecyclePhase}
         />
       )}
+
+      {/* Action Modal for target bid adjustment */}
+      {actionTarget && workspaceId && acosTarget != null && (
+        <ActionModal
+          open={!!actionTarget}
+          onClose={() => setActionTarget(null)}
+          entityKey={`target:${actionTarget.amazonTargetId}`}
+          entityType="target"
+          entityName={actionTarget.expression}
+          workspaceId={workspaceId}
+          acosTarget={acosTarget}
+          lifecyclePhase={lifecyclePhase}
+          onActionExecuted={onActionExecuted}
+        />
+      )}
     </div>
   );
 }
@@ -827,6 +923,9 @@ function OverviewCampaignCard({
   bookId,
   parentDays,
   lifecyclePhase,
+  workspaceId,
+  acosTarget,
+  onActionExecuted,
 }: {
   campaign: CampaignDetail;
   recommendationMap: Map<string, RecommendationGroup[]>;
@@ -836,6 +935,9 @@ function OverviewCampaignCard({
   bookId: string;
   parentDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
+  workspaceId?: string;
+  acosTarget?: number;
+  onActionExecuted?: () => void;
 }) {
   const [expanded, setExpanded] = useState(campaign.state === 'enabled');
   const sc = stateConfig[campaign.state] || stateConfig.enabled;
@@ -931,6 +1033,9 @@ function OverviewCampaignCard({
                 bookId={bookId}
                 parentDays={parentDays}
                 lifecyclePhase={lifecyclePhase}
+                workspaceId={workspaceId}
+                acosTarget={acosTarget}
+                onActionExecuted={onActionExecuted}
               />
             )}
             {hasTargets && (
@@ -943,6 +1048,9 @@ function OverviewCampaignCard({
                 bookId={bookId}
                 parentDays={parentDays}
                 lifecyclePhase={lifecyclePhase}
+                workspaceId={workspaceId}
+                acosTarget={acosTarget}
+                onActionExecuted={onActionExecuted}
               />
             )}
           </div>
@@ -974,6 +1082,9 @@ export function OverviewCampaignView({
   onDaysChange,
   loading,
   lifecyclePhase,
+  workspaceId,
+  acosTarget,
+  onActionExecuted,
 }: OverviewCampaignViewProps) {
 
   if (loading) {
@@ -1052,6 +1163,9 @@ export function OverviewCampaignView({
           bookId={bookId}
           parentDays={days}
           lifecyclePhase={lifecyclePhase}
+          workspaceId={workspaceId}
+          acosTarget={acosTarget}
+          onActionExecuted={onActionExecuted}
         />
       ))}
     </div>

@@ -83,6 +83,8 @@ interface TemplateContext {
   entityName: string;
   /** Label lisible du type d'entité ("Cette campagne", "Ce mot-clé", etc.) */
   entityLabel: string;
+  /** Type d'entité brut ('keyword' | 'target' | 'search_term' | ...) */
+  entityType: string;
   metrics: HumanRecommendation['metrics'];
   suggestedAction: Record<string, any>;
   /** Phase de cycle de vie du livre (si disponible) */
@@ -103,8 +105,17 @@ function getEntityLabel(entityType: string): string {
     case 'keyword': return 'Ce mot-clé';
     case 'search_term': return 'Ce terme de recherche';
     case 'ad_group': return 'Ce groupe d\'annonces';
-    case 'target': return 'Ce ciblage';
+    case 'target': return 'Ce produit ciblé';
     default: return 'Cette campagne';
+  }
+}
+
+/** Label pluriel pour les textes de contexte lifecycle */
+function getEntityLabelPlural(entityType: string): string {
+  switch (entityType) {
+    case 'keyword': return 'mots-clés';
+    case 'target': return 'produits ciblés';
+    default: return 'cibles';
   }
 }
 
@@ -122,85 +133,91 @@ type LifecyclePhase = 'launch' | 'scale' | 'evergreen' | 'relaunch';
 /**
  * Contexte lifecycle pour "mettre en pause" ou "couper"
  */
-function lifecycleWhyPause(phase?: LifecyclePhase): string {
+function lifecycleWhyPause(phase?: LifecyclePhase, entityType?: string): string {
   if (!phase) return '';
+  const entities = getEntityLabelPlural(entityType || 'keyword');
   switch (phase) {
     case 'launch':
-      return '\n\n📍 En phase de lancement, on teste beaucoup de mots-clés pour trouver ceux qui marchent. Ceux qui ne performent pas après suffisamment de données doivent être coupés pour concentrer le budget limité sur les pistes prometteuses.';
+      return `\n\n📍 En phase de lancement, on teste beaucoup de ${entities} pour trouver ceux qui marchent. Ceux qui ne performent pas après suffisamment de données doivent être coupés pour concentrer le budget limité sur les pistes prometteuses.`;
     case 'scale':
-      return '\n\n📍 En phase de croissance, chaque euro doit aller vers ce qui convertit. Les mots-clés non rentables freinent ta montée en puissance — il faut les couper pour accélérer.';
+      return `\n\n📍 En phase de croissance, chaque euro doit aller vers ce qui convertit. Les ${entities} non rentables freinent ta montée en puissance — il faut les couper pour accélérer.`;
     case 'evergreen':
-      return '\n\n📍 En phase de croisière, l\'objectif est la rentabilité maximale. Un mot-clé qui ne vend pas est du budget gaspillé qui pourrait aller vers tes mots-clés rentables.';
+      return `\n\n📍 En phase de croisière, l'objectif est la rentabilité maximale. Un ${entities === 'mots-clés' ? 'mot-clé' : entities.replace(/s$/, '')} qui ne vend pas est du budget gaspillé qui pourrait aller vers tes ${entities} rentables.`;
     case 'relaunch':
-      return '\n\n📍 En phase de relance, on repart sur des bases saines. Les mots-clés qui ne fonctionnaient pas avant doivent être nettoyés pour laisser place aux nouvelles opportunités.';
+      return `\n\n📍 En phase de relance, on repart sur des bases saines. Les ${entities} qui ne fonctionnaient pas avant doivent être nettoyés pour laisser place aux nouvelles opportunités.`;
   }
 }
 
 /**
  * Contexte lifecycle pour "baisser l'enchère"
  */
-function lifecycleWhyBidDown(phase?: LifecyclePhase): string {
+function lifecycleWhyBidDown(phase?: LifecyclePhase, entityType?: string): string {
   if (!phase) return '';
+  const entities = getEntityLabelPlural(entityType || 'keyword');
   switch (phase) {
     case 'launch':
-      return '\n\n📍 En lancement, on limite les pertes sur les mots-clés qui ne convertissent pas encore. Baisser l\'enchère permet de rester visible tout en réduisant le coût de l\'apprentissage.';
+      return `\n\n📍 En lancement, on limite les pertes sur les ${entities} qui ne convertissent pas encore. Baisser l'enchère permet de rester visible tout en réduisant le coût de l'apprentissage.`;
     case 'scale':
-      return '\n\n📍 En croissance, on optimise agressivement. Baisser l\'enchère ici libère du budget pour investir davantage sur les mots-clés gagnants.';
+      return `\n\n📍 En croissance, on optimise agressivement. Baisser l'enchère ici libère du budget pour investir davantage sur les ${entities} gagnants.`;
     case 'evergreen':
-      return '\n\n📍 En croisière, des ajustements réguliers maintiennent la rentabilité. Baisser légèrement permet de garder un ACoS optimal sur la durée.';
+      return `\n\n📍 En croisière, des ajustements réguliers maintiennent la rentabilité. Baisser légèrement permet de garder un ACoS optimal sur la durée.`;
     case 'relaunch':
-      return '\n\n📍 En relance, on recalibre toutes les enchères. Baisser celles qui sous-performent aide à retrouver rapidement un équilibre rentable.';
+      return `\n\n📍 En relance, on recalibre toutes les enchères. Baisser celles qui sous-performent aide à retrouver rapidement un équilibre rentable.`;
   }
 }
 
 /**
  * Contexte lifecycle pour "augmenter l'enchère / booster"
  */
-function lifecycleWhyBidUp(phase?: LifecyclePhase): string {
+function lifecycleWhyBidUp(phase?: LifecyclePhase, entityType?: string): string {
   if (!phase) return '';
+  const entities = getEntityLabelPlural(entityType || 'keyword');
+  const entity = entities === 'mots-clés' ? 'mot-clé' : entities.replace(/s$/, '');
   switch (phase) {
     case 'launch':
-      return '\n\n📍 En lancement, investir plus sur ce qui montre des signaux positifs accélère la collecte de données et aide Amazon à mieux positionner ton livre.';
+      return `\n\n📍 En lancement, investir plus sur ce qui montre des signaux positifs accélère la collecte de données et aide Amazon à mieux positionner ton livre.`;
     case 'scale':
-      return '\n\n📍 En croissance, c\'est le moment de doubler la mise sur les gagnants. Plus de visibilité sur un mot-clé rentable = croissance directe des ventes.';
+      return `\n\n📍 En croissance, c'est le moment de doubler la mise sur les gagnants. Plus de visibilité sur un ${entity} rentable = croissance directe des ventes.`;
     case 'evergreen':
-      return '\n\n📍 En croisière, booster un mot-clé performant permet de maximiser les ventes sur un canal prouvé tout en maintenant la rentabilité.';
+      return `\n\n📍 En croisière, booster un ${entity} performant permet de maximiser les ventes sur un canal prouvé tout en maintenant la rentabilité.`;
     case 'relaunch':
-      return '\n\n📍 En relance, investir sur les mots-clés qui marchent aide à recréer rapidement la dynamique de ventes.';
+      return `\n\n📍 En relance, investir sur les ${entities} qui marchent aide à recréer rapidement la dynamique de ventes.`;
   }
 }
 
 /**
  * Contexte lifecycle pour "ajouter en négatif"
  */
-function lifecycleWhyNegative(phase?: LifecyclePhase): string {
+function lifecycleWhyNegative(phase?: LifecyclePhase, entityType?: string): string {
   if (!phase) return '';
+  const entities = getEntityLabelPlural(entityType || 'keyword');
   switch (phase) {
     case 'launch':
-      return '\n\n📍 En lancement, chaque euro compte pour tester les bons mots-clés. Bloquer les termes inutiles dès maintenant évite de gaspiller ton budget d\'apprentissage.';
+      return `\n\n📍 En lancement, chaque euro compte pour tester les bons ${entities}. Bloquer les termes inutiles dès maintenant évite de gaspiller ton budget d'apprentissage.`;
     case 'scale':
-      return '\n\n📍 En croissance, nettoyer les termes non rentables est essentiel pour réinvestir chaque euro vers ce qui convertit.';
+      return `\n\n📍 En croissance, nettoyer les termes non rentables est essentiel pour réinvestir chaque euro vers ce qui convertit.`;
     case 'evergreen':
-      return '\n\n📍 En croisière, un nettoyage régulier des termes non performants maintient la rentabilité sur la durée.';
+      return `\n\n📍 En croisière, un nettoyage régulier des termes non performants maintient la rentabilité sur la durée.`;
     case 'relaunch':
-      return '\n\n📍 En relance, on repart propre. Bloquer les termes qui n\'ont jamais marché évite de refaire les mêmes erreurs.';
+      return `\n\n📍 En relance, on repart propre. Bloquer les termes qui n'ont jamais marché évite de refaire les mêmes erreurs.`;
   }
 }
 
 /**
  * Contexte lifecycle pour "harvester / exploiter un terme"
  */
-function lifecycleWhyHarvest(phase?: LifecyclePhase): string {
+function lifecycleWhyHarvest(phase?: LifecyclePhase, entityType?: string): string {
   if (!phase) return '';
+  const entities = getEntityLabelPlural(entityType || 'keyword');
   switch (phase) {
     case 'launch':
-      return '\n\n📍 En lancement, découvrir et isoler les termes qui convertissent est la priorité #1. Créer un mot-clé dédié permet de mieux contrôler l\'enchère sur cette pépite.';
+      return `\n\n📍 En lancement, découvrir et isoler les termes qui convertissent est la priorité #1. Créer une cible dédiée permet de mieux contrôler l'enchère sur cette pépite.`;
     case 'scale':
-      return '\n\n📍 En croissance, transformer chaque terme profitable en mot-clé exact est la clé pour scaler. Tu gagnes en contrôle et en rentabilité.';
+      return `\n\n📍 En croissance, transformer chaque terme profitable en cible exacte est la clé pour scaler. Tu gagnes en contrôle et en rentabilité.`;
     case 'evergreen':
-      return '\n\n📍 En croisière, ajouter de nouveaux mots-clés rentables diversifie tes sources de ventes et réduit le risque de dépendance.';
+      return `\n\n📍 En croisière, ajouter de nouveaux ${entities} rentables diversifie tes sources de ventes et réduit le risque de dépendance.`;
     case 'relaunch':
-      return '\n\n📍 En relance, les termes qui convertissent déjà sont ton meilleur atout. Les isoler en mots-clés dédiés accélère la reprise.';
+      return `\n\n📍 En relance, les termes qui convertissent déjà sont ton meilleur atout. Les isoler en cibles dédiées accélère la reprise.`;
   }
 }
 
@@ -289,7 +306,7 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       } else {
         base = `${label} a dépensé ${formatCurrency(spend)}${period} pour ${formatCurrency(sales)} de ventes (ACoS ${acos ? acos.toFixed(1) + '%' : 'N/A'}). Le ratio dépenses/résultats n'est pas optimal.`;
       }
-      return base + lifecycleWhyPause(ctx.phase);
+      return base + lifecycleWhyPause(ctx.phase, ctx.entityType);
     },
     impact: (ctx) => {
       const spend = ctx.metrics.spend ?? 0;
@@ -313,7 +330,7 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       } else {
         base = `${period ? `Sur les ${ctx.periodDays} derniers jours, l` : 'L'}es résultats ne justifient pas l'enchère actuelle. ${clicks} clics pour seulement ${orders} commande${orders > 1 ? 's' : ''}.`;
       }
-      return base + lifecycleWhyBidDown(ctx.phase);
+      return base + lifecycleWhyBidDown(ctx.phase, ctx.entityType);
     },
     impact: (ctx) => {
       const adjustment = ctx.suggestedAction?.adjustment_value;
@@ -344,7 +361,7 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       } else {
         base = `${label} génère de bons résultats${period} : ${orders} commande${orders > 1 ? 's' : ''}, ${formatCurrency(sales)} de ventes. Plus de visibilité = plus de ventes.`;
       }
-      return base + lifecycleWhyBidUp(ctx.phase);
+      return base + lifecycleWhyBidUp(ctx.phase, ctx.entityType);
     },
     impact: (ctx) => {
       const adjustment = ctx.suggestedAction?.adjustment_value;
@@ -368,7 +385,7 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       const clicks = ctx.metrics.clicks ?? 0;
       const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
       const base = `Ce terme de recherche a généré ${clicks} clics (${formatCurrency(spend)} dépensés)${period} mais aucune vente. Les gens qui cherchent ça ne sont pas intéressés par ton livre.`;
-      return base + lifecycleWhyNegative(ctx.phase);
+      return base + lifecycleWhyNegative(ctx.phase, ctx.entityType);
     },
     impact: (ctx) => {
       const spend = ctx.metrics.spend ?? 0;
@@ -386,7 +403,7 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
       const orders = ctx.metrics.orders ?? 0;
       const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : '';
       const base = `Ce terme de recherche a généré ${orders} commande${orders > 1 ? 's' : ''}${period} (${formatCurrency(sales)} de ventes). En créant un mot-clé dédié, tu pourras mieux contrôler l'enchère et maximiser ce qui marche.`;
-      return base + lifecycleWhyHarvest(ctx.phase);
+      return base + lifecycleWhyHarvest(ctx.phase, ctx.entityType);
     },
     impact: () => 'Meilleur contrôle des enchères sur un terme qui convertit. Plus de ventes potentielles.',
     risk: 'Possible doublon temporaire avant que l\'ancien terme soit exclu.',
@@ -417,7 +434,8 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     why: (ctx) => {
       const impressions = ctx.metrics.impressions ?? 0;
       const period = ctx.periodDays ? ` ${periodLabel(ctx.periodDays)}` : ' sur la période';
-      const base = `Seulement ${impressions} impressions${period}. Ton livre est très peu affiché — l'enchère est probablement trop basse ou les mots-clés trop concurrentiels.`;
+      const entities = getEntityLabelPlural(ctx.entityType);
+      const base = `Seulement ${impressions} impressions${period}. Ton livre est très peu affiché — l'enchère est probablement trop basse ou les ${entities} trop concurrentiels.`;
       return base + lifecycleWhyLowImpressions(ctx.phase);
     },
     impact: () => 'Plus d\'impressions = plus de chances de ventes. Sans visibilité, pas de résultats possibles.',
@@ -441,7 +459,7 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     impact: () => 'Agir maintenant évite de creuser les pertes. Une pause ou baisse d\'enchère peut stopper l\'hémorragie.',
     risk: 'Perte de position si on réduit trop les enchères.',
     riskLevel: 'medium',
-    actionDesc: () => 'Baisser les enchères ou mettre en pause les mots-clés en baisse',
+    actionDesc: (ctx) => `Baisser les enchères ou mettre en pause les ${getEntityLabelPlural(ctx.entityType)} en baisse`,
   },
 
   acos_above_royalty: {
@@ -638,12 +656,15 @@ const RULE_TEMPLATES: Record<string, RuleTemplate> = {
 
   evergreen_concentration_risk: {
     title: (ctx) => `Risque de concentration — « ${ctx.entityName} »`,
-    why: () => 'La majorité de tes ventes viennent d\'un très petit nombre de mots-clés. Si l\'un d\'eux perd en performance (concurrence, saisonnalité), tes ventes chuteront brutalement. En croisière, il faut diversifier.',
-    impact: () => 'Réduire la dépendance aux top keywords protège tes revenus à long terme.',
-    risk: 'Les nouveaux mots-clés auront un ACoS temporairement plus élevé.',
+    why: (ctx) => {
+      const entities = getEntityLabelPlural(ctx.entityType);
+      return `La majorité de tes ventes viennent d'un très petit nombre de ${entities}. Si l'un d'eux perd en performance (concurrence, saisonnalité), tes ventes chuteront brutalement. En croisière, il faut diversifier.`;
+    },
+    impact: (ctx) => `Réduire la dépendance aux top ${getEntityLabelPlural(ctx.entityType)} protège tes revenus à long terme.`,
+    risk: 'Les nouvelles cibles auront un ACoS temporairement plus élevé.',
     riskLevel: 'medium',
-    actionDesc: () => 'Diversifier les mots-clés pour réduire la concentration',
-    bookAdvice: () => 'Profite de cette phase stable pour tester de nouvelles catégories ou de nouveaux mots-clés liés à des thèmes connexes de ton livre.',
+    actionDesc: (ctx) => `Diversifier les ${getEntityLabelPlural(ctx.entityType)} pour réduire la concentration`,
+    bookAdvice: (ctx) => `Profite de cette phase stable pour tester de nouvelles catégories ou de nouveaux ${getEntityLabelPlural(ctx.entityType)} liés à des thèmes connexes de ton livre.`,
   },
 
   // ═══════════════════════════════════════════════════════════
@@ -710,6 +731,7 @@ export function transformRecommendation(raw: any, safetyMode: boolean): HumanRec
   const ctx: TemplateContext = {
     entityName,
     entityLabel: getEntityLabel(entityType),
+    entityType,
     metrics,
     suggestedAction: raw.suggestedAction || {},
     phase,
@@ -833,6 +855,7 @@ export function refreshRecommendationTexts(
   const ctx: TemplateContext = {
     entityName: reco.entityName,
     entityLabel: getEntityLabel(reco.entityType),
+    entityType: reco.entityType,
     metrics: freshMetrics,
     suggestedAction: {},
     phase: lifecyclePhase,

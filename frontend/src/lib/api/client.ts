@@ -21,6 +21,7 @@ export const fetchBookDashboard = (bookId: string, includeInactive = false) => {
 };
 export const fetchBookDailyMetrics = (bookId: string, days = 30) => api.get(`/books/${bookId}/metrics/daily?days=${days}`).then((r) => r.data);
 export const fetchBookCampaignDetails = (bookId: string, days = 30) => api.get(`/books/${bookId}/campaigns/detail?days=${days}`).then((r) => r.data);
+export const refreshBookData = (bookId: string) => api.post(`/books/${bookId}/refresh`, {}, { timeout: 120000 }).then((r) => r.data);
 export const fetchBooks = () => api.get(`/books?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
 export const deleteBook = (bookId: string) => api.delete(`/books/${bookId}`).then((r) => r.data);
 
@@ -81,6 +82,28 @@ export const rejectRecommendation = (id: string, reason = '') => api.post(`/reco
 export const dryRunAction = (recommendationId: string) => api.post('/actions/dry-run', { recommendationId }).then((r) => r.data);
 export const executeAction = (recommendationId: string) => api.post('/actions/execute', { recommendationId, executedBy: 'user' }).then((r) => r.data);
 export const fetchKillSwitchStatus = () => api.get('/actions/kill-switch').then((r) => r.data);
+
+// ─── Direct Actions (Phase Action) ─────────────
+export interface ActionSuggestionRequest {
+  workspaceId: string;
+  entityKey: string;
+  entityType: 'keyword' | 'target';
+  acosTarget: number;
+  lifecyclePhase?: string;
+}
+export interface ExecuteDirectActionRequest {
+  workspaceId: string;
+  entityKey: string;
+  entityType: 'keyword' | 'target';
+  actionType: 'adjust_bid' | 'pause';
+  newBid?: number;
+  rationale?: string;
+  dryRun?: boolean;
+}
+export const fetchActionSuggestion = (dto: ActionSuggestionRequest) =>
+  api.post('/actions/suggestion', dto).then((r) => r.data);
+export const executeDirectAction = (dto: ExecuteDirectActionRequest) =>
+  api.post('/actions/execute-direct', dto).then((r) => r.data);
 
 // ─── System ────────────────────────────────────
 export const fetchFeatureFlag = (name: string) => api.get(`/system/features/${name}`).then((r) => r.data);

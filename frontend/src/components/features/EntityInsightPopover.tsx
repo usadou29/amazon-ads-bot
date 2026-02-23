@@ -14,7 +14,10 @@ interface EntityInsightPopoverProps {
   entityName: string;
 }
 
-export function EntityInsightPopover({ insight, entityName }: EntityInsightPopoverProps) {
+export function EntityInsightPopover({
+  insight,
+  entityName,
+}: EntityInsightPopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   const rendered = renderEntityInsight(insight);
@@ -36,13 +39,13 @@ export function EntityInsightPopover({ insight, entityName }: EntityInsightPopov
 
   return (
     <>
-      {/* Badge — clickable */}
+      {/* Badge — clickable, short label for table display */}
       <button
         onClick={() => setIsOpen(true)}
-        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80 ${diagColors.bg} ${diagColors.text} ${diagColors.border}`}
+        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium whitespace-nowrap transition-colors hover:opacity-80 ${diagColors.bg} ${diagColors.text} ${diagColors.border}`}
         title={rendered.title}
       >
-        {rendered.title}
+        {rendered.badgeText}
       </button>
 
       {/* Modal overlay */}
@@ -88,9 +91,40 @@ export function EntityInsightPopover({ insight, entityName }: EntityInsightPopov
             </p>
 
             {/* Explanation */}
-            <p className="mb-3 text-xs leading-relaxed text-slate-700">
+            <p className="mb-2 text-xs leading-relaxed text-slate-700">
               {rendered.explanation}
             </p>
+
+            {/* Next step */}
+            {rendered.nextStepText && (
+              <div className="mb-3 flex items-start gap-1.5 rounded-lg bg-slate-50 px-3 py-2">
+                <span className="text-xs">👉</span>
+                <p className="text-xs font-medium text-slate-700">
+                  {rendered.nextStepText}
+                </p>
+              </div>
+            )}
+
+            {/* Decision window transparency */}
+            {(insight.decisionPeriodDays || insight.validationApplied || insight.guardrailApplied) && (
+              <div className="mb-2 space-y-0.5">
+                {insight.decisionPeriodDays && (
+                  <p className="text-[10px] text-slate-400">
+                    Analyse sur {insight.decisionPeriodDays} jours
+                  </p>
+                )}
+                {insight.validationApplied && (
+                  <p className="text-[10px] text-amber-500 font-medium">
+                    Ajustement 30j appliqu&eacute;
+                  </p>
+                )}
+                {insight.guardrailApplied && insight.guardrailExplanation && (
+                  <p className="text-[10px] text-blue-500 font-medium">
+                    {insight.guardrailExplanation}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Mini metrics row */}
             <div className="mb-3 grid grid-cols-4 gap-2 border-t border-slate-100 pt-3">

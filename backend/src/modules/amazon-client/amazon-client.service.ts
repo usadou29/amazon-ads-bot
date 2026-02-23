@@ -404,6 +404,81 @@ export class AmazonClientService {
   }
 
   /**
+   * Met à jour un product target (bid, state)
+   */
+  async updateProductTarget(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    targetId: number,
+    updates: { bid?: number; state?: string },
+  ): Promise<any> {
+    const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+    const body = {
+      targetingClauses: [
+        {
+          targetId: targetId.toString(),
+          ...updates,
+        },
+      ],
+    };
+
+    const response = await retryWithBackoff(async () => {
+      return client.put('/sp/targets', body, {
+        headers: {
+          Accept: AMAZON_CONFIG.API_VERSION.TARGETS,
+          'Content-Type': AMAZON_CONFIG.API_VERSION.TARGETS,
+        },
+      });
+    });
+
+    return response.data;
+  }
+
+  /**
+   * Récupère les bid recommendations Amazon pour un keyword
+   * Retourne null si l'API échoue (le calcul fonctionne sans)
+   */
+  async getBidRecommendations(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    keywordId: number,
+  ): Promise<{ suggested: number; rangeMin: number; rangeMax: number } | null> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        keywordId: keywordId.toString(),
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.post('/sp/keywords/bidRecommendations', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
+          },
+        });
+      });
+
+      const data = response.data;
+      if (data?.recommendations?.length > 0) {
+        const rec = data.recommendations[0];
+        return {
+          suggested: rec.suggestedBid?.suggested ?? rec.suggestedBid ?? 0,
+          rangeMin: rec.suggestedBid?.rangeStart ?? rec.rangeStart ?? 0,
+          rangeMax: rec.suggestedBid?.rangeEnd ?? rec.rangeEnd ?? 0,
+        };
+      }
+      return null;
+    } catch (error) {
+      this.logger.warn(`getBidRecommendations failed for keyword ${keywordId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Demande un rapport async
    */
   async requestReport(

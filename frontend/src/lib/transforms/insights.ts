@@ -4,6 +4,7 @@ import { t } from '@/lib/i18n';
 
 export enum CampaignDiagnosisCode {
   INVISIBLE = 'invisible',
+  LOW_SIGNAL = 'low_signal',
   IGNORED = 'ignored',
   TOO_EARLY = 'too_early',
   ATTRACTIVE_NOT_CONVERTING = 'attractive_not_converting',
@@ -12,10 +13,18 @@ export enum CampaignDiagnosisCode {
   LIMITED_BY_BUDGET = 'limited_by_budget',
 }
 
+export enum TrendDirection {
+  UP = 'up',
+  STABLE = 'stable',
+  DOWN = 'down',
+}
+
 export enum EntityDiagnosisCode {
   NO_IMPRESSIONS = 'no_impressions',
-  LOW_CTR = 'low_ctr',
-  TOO_EARLY = 'too_early',
+  ZERO_CLICKS_LOW_VOLUME = 'zero_clicks_low_volume',
+  ZERO_CLICKS = 'zero_clicks',
+  VERY_LOW_CLICKS = 'very_low_clicks',
+  LOW_CLICKS = 'low_clicks',
   CLICKS_NO_SALES = 'clicks_no_sales',
   EXPENSIVE_BUT_VALID = 'expensive_but_valid',
   WINNER = 'winner',
@@ -23,6 +32,14 @@ export enum EntityDiagnosisCode {
 }
 
 export type ActionExecution = 'ads' | 'book' | 'none';
+
+export enum MacroStrategyCode {
+  SCALE_WINNERS = 'scale_winners',
+  CONTINUE_TESTING = 'continue_testing',
+  FIX_LISTING = 'fix_listing',
+  CUT_LOSERS = 'cut_losers',
+  NO_SIGNAL_YET = 'no_signal_yet',
+}
 
 // ── Interfaces (mirror backend) ─────────────────────────────
 
@@ -45,18 +62,42 @@ export interface SummaryFacts {
   periodDays: number;
 }
 
+export interface CampaignMacroStrategy {
+  macroStrategyCode: MacroStrategyCode;
+  winnersCount: number;
+  boostCandidatesCount: number;
+  testingCount: number;
+  ignoredCount: number;
+  losersCount: number;
+  expensiveCount: number;
+  totalEntities: number;
+  eligibleCount: number;
+}
+
+export type CampaignTargetingType = 'keyword' | 'product' | 'auto';
+
 export interface CampaignInsight {
   campaignId: string;
   diagnosisCode: CampaignDiagnosisCode;
   summaryFacts: SummaryFacts;
-  suggestedActions: InsightAction[];
+  macroStrategy: CampaignMacroStrategy;
   confidenceScore: number;
+  strategicPeriodDays: number;
+  trendDirection: TrendDirection;
+  trendAnalysis?: {
+    strategicAcos: number | null;
+    trendAcos: number | null;
+    strategicCvr: number | null;
+    trendCvr: number | null;
+  };
+  targetingType?: CampaignTargetingType;
 }
 
 export interface EntityInsight {
   entityKey: string;
   entityType: 'keyword' | 'target' | 'search_term' | 'ad_group';
   diagnosisCode: EntityDiagnosisCode;
+  eligibility: boolean;
   summaryFacts: SummaryFacts;
   suggestedActions: InsightAction[];
   linkedRecommendation?: {
@@ -66,14 +107,23 @@ export interface EntityInsight {
     strategyLabel: string;
   };
   confidenceScore: number;
+  // Multi-window v2 fields
+  decisionPeriodDays?: number;
+  validationApplied?: boolean;
+  validationExplanation?: string;
+  // Lifecycle guardrail v2.1
+  guardrailApplied?: boolean;
+  guardrailExplanation?: string;
 }
 
 // ── Rendered Insight ────────────────────────────────────────
 
 export interface RenderedInsight {
   title: string;
+  badgeText: string;
   explanation: string;
   summaryText: string;
+  nextStepText?: string;
   actions: Array<{
     label: string;
     execution: ActionExecution;
@@ -84,12 +134,26 @@ export interface RenderedInsight {
   confidenceLevel: 'high' | 'medium' | 'low';
 }
 
+export interface RenderedCampaignStrategy {
+  strategyTitle: string;
+  strategySummary: string;
+  explanation: string;
+  summaryText: string;
+  confidenceLabel: string;
+  confidenceLevel: 'high' | 'medium' | 'low';
+  trendLabel: string;
+  trendDirection: TrendDirection;
+  periodLabel: string;
+}
+
 // ── Templates ───────────────────────────────────────────────
 
 interface InsightTemplate {
   titleKey: string;
+  badgeKey?: string;
   explanationKey: string;
   summaryKey: string;
+  nextStepKey?: string;
 }
 
 const CAMPAIGN_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
@@ -97,6 +161,11 @@ const CAMPAIGN_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
     titleKey: 'insights.campaign.invisible.title',
     explanationKey: 'insights.campaign.invisible.explanation',
     summaryKey: 'insights.campaign.invisible.summary',
+  },
+  [CampaignDiagnosisCode.LOW_SIGNAL]: {
+    titleKey: 'insights.campaign.low_signal.title',
+    explanationKey: 'insights.campaign.low_signal.explanation',
+    summaryKey: 'insights.campaign.low_signal.summary',
   },
   [CampaignDiagnosisCode.IGNORED]: {
     titleKey: 'insights.campaign.ignored.title',
@@ -133,38 +202,66 @@ const CAMPAIGN_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
 const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
   [EntityDiagnosisCode.NO_IMPRESSIONS]: {
     titleKey: 'insights.entity.no_impressions.title',
+
     explanationKey: 'insights.entity.no_impressions.explanation',
     summaryKey: 'insights.entity.no_impressions.summary',
+    nextStepKey: 'insights.entity.no_impressions.nextStep',
   },
-  [EntityDiagnosisCode.LOW_CTR]: {
-    titleKey: 'insights.entity.low_ctr.title',
-    explanationKey: 'insights.entity.low_ctr.explanation',
-    summaryKey: 'insights.entity.low_ctr.summary',
+  [EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME]: {
+    titleKey: 'insights.entity.zero_clicks_low_volume.title',
+
+    explanationKey: 'insights.entity.zero_clicks_low_volume.explanation',
+    summaryKey: 'insights.entity.zero_clicks_low_volume.summary',
+    nextStepKey: 'insights.entity.zero_clicks_low_volume.nextStep',
   },
-  [EntityDiagnosisCode.TOO_EARLY]: {
-    titleKey: 'insights.entity.too_early.title',
-    explanationKey: 'insights.entity.too_early.explanation',
-    summaryKey: 'insights.entity.too_early.summary',
+  [EntityDiagnosisCode.ZERO_CLICKS]: {
+    titleKey: 'insights.entity.zero_clicks.title',
+
+    explanationKey: 'insights.entity.zero_clicks.explanation',
+    summaryKey: 'insights.entity.zero_clicks.summary',
+    nextStepKey: 'insights.entity.zero_clicks.nextStep',
+  },
+  [EntityDiagnosisCode.VERY_LOW_CLICKS]: {
+    titleKey: 'insights.entity.very_low_clicks.title',
+
+    explanationKey: 'insights.entity.very_low_clicks.explanation',
+    summaryKey: 'insights.entity.very_low_clicks.summary',
+    nextStepKey: 'insights.entity.very_low_clicks.nextStep',
+  },
+  [EntityDiagnosisCode.LOW_CLICKS]: {
+    titleKey: 'insights.entity.low_clicks.title',
+
+    explanationKey: 'insights.entity.low_clicks.explanation',
+    summaryKey: 'insights.entity.low_clicks.summary',
+    nextStepKey: 'insights.entity.low_clicks.nextStep',
   },
   [EntityDiagnosisCode.CLICKS_NO_SALES]: {
     titleKey: 'insights.entity.clicks_no_sales.title',
+
     explanationKey: 'insights.entity.clicks_no_sales.explanation',
     summaryKey: 'insights.entity.clicks_no_sales.summary',
+    nextStepKey: 'insights.entity.clicks_no_sales.nextStep',
   },
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: {
     titleKey: 'insights.entity.expensive_but_valid.title',
+
     explanationKey: 'insights.entity.expensive_but_valid.explanation',
     summaryKey: 'insights.entity.expensive_but_valid.summary',
+    nextStepKey: 'insights.entity.expensive_but_valid.nextStep',
   },
   [EntityDiagnosisCode.WINNER]: {
     titleKey: 'insights.entity.winner.title',
+
     explanationKey: 'insights.entity.winner.explanation',
     summaryKey: 'insights.entity.winner.summary',
+    nextStepKey: 'insights.entity.winner.nextStep',
   },
   [EntityDiagnosisCode.BOOST_CANDIDATE]: {
     titleKey: 'insights.entity.boost_candidate.title',
+
     explanationKey: 'insights.entity.boost_candidate.explanation',
     summaryKey: 'insights.entity.boost_candidate.summary',
+    nextStepKey: 'insights.entity.boost_candidate.nextStep',
   },
 };
 
@@ -172,6 +269,7 @@ const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
 
 export const CAMPAIGN_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   [CampaignDiagnosisCode.INVISIBLE]: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
+  [CampaignDiagnosisCode.LOW_SIGNAL]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
   [CampaignDiagnosisCode.IGNORED]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
   [CampaignDiagnosisCode.TOO_EARLY]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
   [CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING]: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-300' },
@@ -182,21 +280,52 @@ export const CAMPAIGN_DIAGNOSIS_COLORS: Record<string, { bg: string; text: strin
 
 export const ENTITY_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   [EntityDiagnosisCode.NO_IMPRESSIONS]: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' },
-  [EntityDiagnosisCode.LOW_CTR]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
-  [EntityDiagnosisCode.TOO_EARLY]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
+  [EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
+  [EntityDiagnosisCode.ZERO_CLICKS]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
+  [EntityDiagnosisCode.VERY_LOW_CLICKS]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
+  [EntityDiagnosisCode.LOW_CLICKS]: { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200' },
   [EntityDiagnosisCode.CLICKS_NO_SALES]: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-300' },
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
   [EntityDiagnosisCode.WINNER]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300' },
   [EntityDiagnosisCode.BOOST_CANDIDATE]: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-300' },
 };
 
+// ── Macro strategy colors ───────────────────────────────────
+
+export const MACRO_STRATEGY_COLORS: Record<string, { bg: string; text: string; border: string; icon: string }> = {
+  [MacroStrategyCode.SCALE_WINNERS]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300', icon: '🚀' },
+  [MacroStrategyCode.CONTINUE_TESTING]: { bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200', icon: '⏳' },
+  [MacroStrategyCode.FIX_LISTING]: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-300', icon: '📖' },
+  [MacroStrategyCode.CUT_LOSERS]: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-300', icon: '✂️' },
+  [MacroStrategyCode.NO_SIGNAL_YET]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200', icon: '🔍' },
+};
+
 // ── Execution type colors ───────────────────────────────────
+
+export const TREND_COLORS: Record<TrendDirection, { bg: string; text: string; icon: string }> = {
+  [TrendDirection.UP]: { bg: 'bg-emerald-50', text: 'text-emerald-600', icon: '↗' },
+  [TrendDirection.STABLE]: { bg: 'bg-slate-50', text: 'text-slate-500', icon: '→' },
+  [TrendDirection.DOWN]: { bg: 'bg-red-50', text: 'text-red-600', icon: '↘' },
+};
 
 export const EXECUTION_COLORS: Record<ActionExecution, { bg: string; text: string; icon: string }> = {
   ads: { bg: 'bg-blue-100', text: 'text-blue-800', icon: '⚡' },
   book: { bg: 'bg-orange-100', text: 'text-orange-800', icon: '📖' },
   none: { bg: 'bg-slate-100', text: 'text-slate-600', icon: '👁' },
 };
+
+// ── Targeting Type Labels ────────────────────────────────────
+
+export function getEntityLabel(targetingType?: CampaignTargetingType, plural = false): string {
+  switch (targetingType) {
+    case 'product':
+      return plural ? 'produits ciblés' : 'produit ciblé';
+    case 'auto':
+      return plural ? 'cibles' : 'cible';
+    default:
+      return plural ? 'mots-clés' : 'mot-clé';
+  }
+}
 
 // ── Render Functions ────────────────────────────────────────
 
@@ -207,6 +336,7 @@ function getConfidenceInfo(score: number): { label: string; level: 'high' | 'med
 }
 
 function buildParams(facts: SummaryFacts): Record<string, string | number> {
+  const remaining = Math.max(0, 15 - facts.clicks);
   return {
     impressions: facts.impressions.toLocaleString('fr-FR'),
     clicks: facts.clicks.toLocaleString('fr-FR'),
@@ -218,39 +348,57 @@ function buildParams(facts: SummaryFacts): Record<string, string | number> {
     acos: facts.acos !== null ? facts.acos.toFixed(1) : '—',
     periodDays: facts.periodDays.toString(),
     minClicks: '15',
+    remainingClicks: remaining.toString(),
     breakEven: '35',
   };
 }
 
-export function renderCampaignInsight(insight: CampaignInsight): RenderedInsight {
+export function renderCampaignInsight(insight: CampaignInsight): RenderedCampaignStrategy {
   const template = CAMPAIGN_INSIGHT_TEMPLATES[insight.diagnosisCode];
-  if (!template) {
-    return {
-      title: insight.diagnosisCode,
-      explanation: '',
-      summaryText: '',
-      actions: [],
-      confidenceLabel: '',
-      confidenceLevel: 'low',
-    };
-  }
-
   const params = buildParams(insight.summaryFacts);
   const conf = getConfidenceInfo(insight.confidenceScore);
+  const ms = insight.macroStrategy;
+
+  // Build strategy-specific params with dynamic entity labels
+  const entityLabel = getEntityLabel(insight.targetingType);
+  const entityLabelPlural = getEntityLabel(insight.targetingType, true);
+  const strategyParams: Record<string, string | number> = {
+    ...params,
+    winnersCount: ms.winnersCount.toString(),
+    boostCandidatesCount: ms.boostCandidatesCount.toString(),
+    testingCount: ms.testingCount.toString(),
+    ignoredCount: ms.ignoredCount.toString(),
+    losersCount: ms.losersCount.toString(),
+    expensiveCount: ms.expensiveCount.toString(),
+    totalEntities: ms.totalEntities.toString(),
+    eligibleCount: ms.eligibleCount.toString(),
+    entityLabel,
+    entityLabelPlural,
+  };
+
+  const trendDir = insight.trendDirection || TrendDirection.STABLE;
 
   return {
-    title: t(template.titleKey, params),
-    explanation: t(template.explanationKey, params),
-    summaryText: t(template.summaryKey, params),
-    actions: insight.suggestedActions.map(a => ({
-      label: t(a.i18nKey),
-      execution: a.execution,
-      executionLabel: t(`insights.execution.${a.execution}`),
-      type: a.type,
-    })),
+    strategyTitle: t(`insights.strategy.${ms.macroStrategyCode}.title`, strategyParams),
+    strategySummary: t(`insights.strategy.${ms.macroStrategyCode}.summary`, strategyParams),
+    explanation: template ? t(template.explanationKey, params) : '',
+    summaryText: template ? t(template.summaryKey, params) : '',
     confidenceLabel: conf.label,
     confidenceLevel: conf.level,
+    trendLabel: t(`insights.trend.${trendDir}`),
+    trendDirection: trendDir,
+    periodLabel: t('insights.period.label', {
+      days: (insight.strategicPeriodDays || params.periodDays).toString(),
+    }),
   };
+}
+
+function entityTypeToLabel(entityType: string): string {
+  switch (entityType) {
+    case 'target': return 'produit ciblé';
+    case 'search_term': return 'terme de recherche';
+    default: return 'mot-clé';
+  }
 }
 
 export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
@@ -258,6 +406,7 @@ export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
   if (!template) {
     return {
       title: insight.diagnosisCode,
+      badgeText: insight.diagnosisCode,
       explanation: '',
       summaryText: '',
       actions: [],
@@ -266,13 +415,18 @@ export function renderEntityInsight(insight: EntityInsight): RenderedInsight {
     };
   }
 
-  const params = buildParams(insight.summaryFacts);
+  const params = {
+    ...buildParams(insight.summaryFacts),
+    entityLabel: entityTypeToLabel(insight.entityType),
+  };
   const conf = getConfidenceInfo(insight.confidenceScore);
 
   return {
     title: t(template.titleKey, params),
+    badgeText: template.badgeKey ? t(template.badgeKey, params) : t(template.titleKey, params),
     explanation: t(template.explanationKey, params),
     summaryText: t(template.summaryKey, params),
+    nextStepText: template.nextStepKey ? t(template.nextStepKey, params) : undefined,
     actions: insight.suggestedActions.map(a => ({
       label: t(a.i18nKey),
       execution: a.execution,

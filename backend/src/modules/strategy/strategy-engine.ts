@@ -39,6 +39,7 @@ export interface StrategyResult {
   requiresConsent: boolean;
   consentLevel: ConsentLevel;
   consentMessage?: string;        // Message pédagogique si consentement requis
+  explanationBullets?: string[];  // Multi-window transparency bullets
 }
 
 // ─── Economic Context ───────────────────────────────
@@ -495,6 +496,7 @@ export class StrategyEngine {
     lifecyclePhase: LifecyclePhase,
     strategyContext?: StrategyContext,
     budgetGuard?: { maxSpend7d?: number; currentSpend7d?: number },
+    windowInfo?: { strategicDays: number; decisionDays: number; validationApplied: boolean },
   ): StrategyResult[] {
     if (recos.length === 0) return [];
 
@@ -599,6 +601,12 @@ export class StrategyEngine {
     const results: StrategyResult[] = scored.map((item) => {
       const isRecommended = recommendedIds.has(item.id);
 
+      const explanationBullets = windowInfo ? [
+        `Analyse principale : ${windowInfo.strategicDays} jours (phase ${PHASE_LABELS[lifecyclePhase]})`,
+        `Décision basée sur ${windowInfo.decisionDays} jours (données suffisantes)`,
+        ...(windowInfo.validationApplied ? ['Décision ajustée après vérification sur 30 jours'] : []),
+      ] : undefined;
+
       return {
         id: item.id,
         strategyScore: item.score,
@@ -608,6 +616,7 @@ export class StrategyEngine {
         requiresConsent: item.consent.requiresConsent,
         consentLevel: item.consent.consentLevel,
         consentMessage: item.consent.consentMessage,
+        explanationBullets,
       };
     });
 

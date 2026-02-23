@@ -4,17 +4,23 @@ import type { LifecyclePhase } from '@/db/schema/books';
 import {
   CampaignDiagnosisCode,
   EntityDiagnosisCode,
+  MacroStrategyCode,
+  TrendDirection,
   type ActionExecution,
   type InsightAction,
   type InsightMetrics,
   type SummaryFacts,
+  type TrendAnalysis,
   type CampaignInsight,
+  type CampaignMacroStrategy,
   type EntityInsight,
   type InsightCampaignInput,
   type InsightEntityInput,
+  type CampaignTargetingType,
 } from './types';
 
 const MIN_CLICKS = GUARDS.MIN_CLICKS_FOR_DECISION; // 15
+const MIN_IMPRESSIONS = GUARDS.MIN_IMPRESSIONS_FOR_SIGNAL; // 300
 
 @Injectable()
 export class InsightsService {
@@ -27,30 +33,112 @@ export class InsightsService {
   computeCampaignInsight(
     campaign: InsightCampaignInput,
     metrics: InsightMetrics,
-    lifecyclePhase: LifecyclePhase,
     breakEvenAcos: number,
     periodDays: number,
+    entityInsights: EntityInsight[],
+    dailyBudget?: number,
+    trendMetrics?: InsightMetrics,
+    targetingType?: CampaignTargetingType,
   ): CampaignInsight {
     const facts = this.buildSummaryFacts(metrics, periodDays);
     const diagnosisCode = this.diagnoseCampaign(
       metrics,
       breakEvenAcos,
-      campaign.dailyBudget ?? undefined,
+      dailyBudget,
       periodDays,
     );
-    const suggestedActions = this.buildCampaignActions(
-      diagnosisCode,
-      metrics,
-      lifecyclePhase,
-      breakEvenAcos,
-    );
+    const macroStrategy = this.getCampaignMacroStrategy(entityInsights);
+    const trend = trendMetrics
+      ? this.computeTrend(metrics, trendMetrics)
+      : { direction: TrendDirection.STABLE, analysis: undefined };
 
     return {
       campaignId: campaign.id,
       diagnosisCode,
       summaryFacts: facts,
-      suggestedActions,
+      macroStrategy,
       confidenceScore: this.computeConfidence(metrics.clicks),
+      strategicPeriodDays: periodDays,
+      trendDirection: trend.direction,
+      trendAnalysis: trend.analysis,
+      targetingType: targetingType ?? 'keyword',
+    };
+  }
+
+  /**
+   * Compute campaign macro strategy by aggregating entity insights bottom-up.
+   *
+   * Decision tree:
+   * - winnersCount + boostCandidatesCount > 0 → SCALE_WINNERS
+   * - losersCount > eligibleCount / 2 → CUT_LOSERS
+   * - losersCount > 0 && winnersCount === 0 → FIX_LISTING
+   * - testingCount > 0 || ignoredCount > 0 → CONTINUE_TESTING
+   * - fallback → NO_SIGNAL_YET
+   */
+  getCampaignMacroStrategy(entityInsights: EntityInsight[]): CampaignMacroStrategy {
+    let winnersCount = 0;
+    let boostCandidatesCount = 0;
+    let testingCount = 0;
+    let ignoredCount = 0;
+    let losersCount = 0;
+    let expensiveCount = 0;
+    let eligibleCount = 0;
+
+    for (const ei of entityInsights) {
+      if (ei.eligibility) eligibleCount++;
+
+      switch (ei.diagnosisCode) {
+        case EntityDiagnosisCode.WINNER:
+          winnersCount++;
+          break;
+        case EntityDiagnosisCode.BOOST_CANDIDATE:
+          boostCandidatesCount++;
+          break;
+        case EntityDiagnosisCode.VERY_LOW_CLICKS:
+        case EntityDiagnosisCode.LOW_CLICKS:
+          testingCount++;
+          break;
+        case EntityDiagnosisCode.NO_IMPRESSIONS:
+        case EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME:
+        case EntityDiagnosisCode.ZERO_CLICKS:
+          ignoredCount++;
+          break;
+        case EntityDiagnosisCode.CLICKS_NO_SALES:
+          losersCount++;
+          break;
+        case EntityDiagnosisCode.EXPENSIVE_BUT_VALID:
+          expensiveCount++;
+          break;
+      }
+    }
+
+    const totalEntities = entityInsights.length;
+    let macroStrategyCode: MacroStrategyCode;
+
+    if (winnersCount + boostCandidatesCount > 0) {
+      macroStrategyCode = MacroStrategyCode.SCALE_WINNERS;
+    } else if (eligibleCount >= 2 && losersCount > eligibleCount / 2) {
+      // Majority of eligible entities are losing → aggressive cleanup needed
+      macroStrategyCode = MacroStrategyCode.CUT_LOSERS;
+    } else if (losersCount > 0 && winnersCount === 0) {
+      // Some losers but not a clear majority → listing problem likely
+      macroStrategyCode = MacroStrategyCode.FIX_LISTING;
+    } else if (testingCount > 0 || ignoredCount > 0) {
+      macroStrategyCode = MacroStrategyCode.CONTINUE_TESTING;
+    } else {
+      macroStrategyCode = MacroStrategyCode.NO_SIGNAL_YET;
+    }
+
+    return {
+      macroStrategyCode,
+      winnersCount,
+      boostCandidatesCount,
+      testingCount,
+      ignoredCount,
+      losersCount,
+      expensiveCount,
+      totalEntities,
+      eligibleCount,
     };
   }
 
@@ -65,6 +153,7 @@ export class InsightsService {
   ): EntityInsight {
     const facts = this.buildSummaryFacts(metrics, periodDays);
     const diagnosisCode = this.diagnoseEntity(metrics, breakEvenAcos, avgCampaignCTR);
+    const eligibility = metrics.clicks >= MIN_CLICKS;
     const suggestedActions = this.buildEntityActions(
       diagnosisCode,
       metrics,
@@ -76,11 +165,42 @@ export class InsightsService {
       entityKey: entity.key,
       entityType: entity.type,
       diagnosisCode,
+      eligibility,
       summaryFacts: facts,
       suggestedActions,
       linkedRecommendation: linkedReco ?? undefined,
       confidenceScore: this.computeConfidence(metrics.clicks),
     };
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // MULTI-WINDOW DOWNGRADE
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Downgrade les actions suggérées suite à la validation 30j.
+   *
+   * - 'observe' → remplace tout par un simple "monitor"
+   * - 'soft_adjust' → pause → bid_down, add_negative → monitor, le reste inchangé
+   */
+  downgradeSuggestedActions(
+    actions: InsightAction[],
+    level: 'soft_adjust' | 'observe',
+  ): InsightAction[] {
+    if (level === 'observe') {
+      return [{ type: 'monitor', execution: 'none', i18nKey: 'insights.actions.monitor', priority: 1 }];
+    }
+
+    // soft_adjust : pause → bid_down, add_negative → monitor, le reste inchangé
+    return actions.map((a) => {
+      if (a.type === 'pause') {
+        return { ...a, type: 'bid_down', i18nKey: 'insights.actions.bid_down', execution: 'ads' as const };
+      }
+      if (a.type === 'add_negative') {
+        return { ...a, type: 'monitor', i18nKey: 'insights.actions.monitor', execution: 'none' as const };
+      }
+      return a;
+    });
   }
 
   // ══════════════════════════════════════════════════════════
@@ -93,11 +213,12 @@ export class InsightsService {
    * Priority check order:
    * 1. Budget cap (overlay — takes priority if detected)
    * 2. No impressions → INVISIBLE
-   * 3. No clicks → IGNORED
-   * 4. Insufficient clicks → TOO_EARLY
-   * 5. No orders with enough clicks → ATTRACTIVE_NOT_CONVERTING
-   * 6. Orders with acceptable ACoS → PROFITABLE
-   * 7. Orders with high ACoS → PROMISING_BUT_EXPENSIVE
+   * 3. Low impressions (< MIN_IMPRESSIONS_FOR_SIGNAL) → LOW_SIGNAL
+   * 4. No clicks → IGNORED
+   * 5. Insufficient clicks → TOO_EARLY
+   * 6. No orders with enough clicks → ATTRACTIVE_NOT_CONVERTING
+   * 7. Orders with acceptable ACoS → PROFITABLE
+   * 8. Orders with high ACoS → PROMISING_BUT_EXPENSIVE
    */
   diagnoseCampaign(
     metrics: InsightMetrics,
@@ -118,6 +239,10 @@ export class InsightsService {
 
     if (metrics.impressions === 0) {
       return CampaignDiagnosisCode.INVISIBLE;
+    }
+
+    if (metrics.impressions < MIN_IMPRESSIONS) {
+      return CampaignDiagnosisCode.LOW_SIGNAL;
     }
 
     if (metrics.clicks === 0) {
@@ -147,29 +272,43 @@ export class InsightsService {
 
   /**
    * Entity diagnosis decision tree.
+   *
+   * Chaque entité reçoit TOUJOURS un diagnostic humain lisible.
+   * Les cas pré-eligibility (clicks < 15) ont des diagnostics précis :
+   *   NO_IMPRESSIONS → ZERO_CLICKS → VERY_LOW_CLICKS → LOW_CLICKS
+   * Les cas post-eligibility (clicks >= 15) ont des diagnostics actionnables :
+   *   CLICKS_NO_SALES → EXPENSIVE_BUT_VALID → WINNER / BOOST_CANDIDATE
    */
   diagnoseEntity(
     metrics: InsightMetrics,
     breakEvenAcos: number,
     avgCampaignCTR?: number,
   ): EntityDiagnosisCode {
+    // ── Pré-eligibility : pas assez de données pour une action ──
     if (metrics.impressions === 0) {
       return EntityDiagnosisCode.NO_IMPRESSIONS;
     }
 
-    const ctr = metrics.impressions > 0
-      ? (metrics.clicks / metrics.impressions) * 100
-      : 0;
+    if (metrics.clicks === 0) {
+      // Pas assez d'impressions pour juger le CTR → on ne peut pas conclure
+      if (metrics.impressions < GUARDS.MIN_IMPRESSIONS_FOR_CTR_SIGNAL) {
+        return EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME;
+      }
+      // Assez d'impressions mais 0 clic → vraiment ignoré (couverture/titre à revoir)
+      return EntityDiagnosisCode.ZERO_CLICKS;
+    }
 
-    if (metrics.clicks < 5 || ctr < 0.3) {
-      return EntityDiagnosisCode.LOW_CTR;
+    if (metrics.clicks < 5) {
+      return EntityDiagnosisCode.VERY_LOW_CLICKS;
     }
 
     if (metrics.clicks < MIN_CLICKS) {
-      return EntityDiagnosisCode.TOO_EARLY;
+      return EntityDiagnosisCode.LOW_CLICKS;
     }
 
-    // Enough clicks to decide
+    // ── Post-eligibility : assez de données pour décider ──
+    const ctr = (metrics.clicks / metrics.impressions) * 100;
+
     if (metrics.orders === 0) {
       return EntityDiagnosisCode.CLICKS_NO_SALES;
     }
@@ -199,16 +338,6 @@ export class InsightsService {
   // ACTION BUILDERS
   // ══════════════════════════════════════════════════════════
 
-  private buildCampaignActions(
-    code: CampaignDiagnosisCode,
-    metrics: InsightMetrics,
-    lifecycle: LifecyclePhase,
-    breakEvenAcos: number,
-  ): InsightAction[] {
-    const actions = this.getCampaignBaseActions(code);
-    return this.applyLifecycleModifiers(actions, lifecycle, metrics, breakEvenAcos);
-  }
-
   private buildEntityActions(
     code: EntityDiagnosisCode,
     metrics: InsightMetrics,
@@ -220,42 +349,6 @@ export class InsightsService {
   }
 
   /**
-   * Base actions per campaign diagnosis code.
-   */
-  private getCampaignBaseActions(code: CampaignDiagnosisCode): InsightAction[] {
-    const actionMap: Record<CampaignDiagnosisCode, InsightAction[]> = {
-      [CampaignDiagnosisCode.INVISIBLE]: [
-        this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
-        this.action('improve_listing', 'book', 'insights.actions.improve_listing', 2),
-        this.action('monitor', 'none', 'insights.actions.monitor', 3),
-      ],
-      [CampaignDiagnosisCode.IGNORED]: [
-        this.action('improve_cover', 'book', 'insights.actions.improve_cover', 1),
-        this.action('bid_up', 'ads', 'insights.actions.bid_up', 2),
-      ],
-      [CampaignDiagnosisCode.TOO_EARLY]: [
-        this.action('monitor', 'none', 'insights.actions.monitor', 1),
-      ],
-      [CampaignDiagnosisCode.ATTRACTIVE_NOT_CONVERTING]: [
-        this.action('improve_listing', 'book', 'insights.actions.improve_listing', 1),
-        this.action('bid_down', 'ads', 'insights.actions.bid_down', 2),
-      ],
-      [CampaignDiagnosisCode.PROMISING_BUT_EXPENSIVE]: [
-        this.action('bid_down', 'ads', 'insights.actions.bid_down', 1),
-        this.action('improve_listing', 'book', 'insights.actions.improve_listing', 2),
-      ],
-      [CampaignDiagnosisCode.PROFITABLE]: [
-        this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
-        this.action('harvest', 'ads', 'insights.actions.harvest', 2),
-      ],
-      [CampaignDiagnosisCode.LIMITED_BY_BUDGET]: [
-        this.action('budget_increase', 'ads', 'insights.actions.budget_increase', 1),
-      ],
-    };
-    return actionMap[code] || [];
-  }
-
-  /**
    * Base actions per entity diagnosis code.
    */
   private getEntityBaseActions(code: EntityDiagnosisCode): InsightAction[] {
@@ -263,12 +356,21 @@ export class InsightsService {
       [EntityDiagnosisCode.NO_IMPRESSIONS]: [
         this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
       ],
-      [EntityDiagnosisCode.LOW_CTR]: [
+      [EntityDiagnosisCode.ZERO_CLICKS_LOW_VOLUME]: [
+        this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
+        this.action('patience', 'none', 'insights.actions.patience', 2),
+      ],
+      [EntityDiagnosisCode.ZERO_CLICKS]: [
         this.action('improve_cover', 'book', 'insights.actions.improve_cover', 1),
         this.action('monitor', 'none', 'insights.actions.monitor', 2),
       ],
-      [EntityDiagnosisCode.TOO_EARLY]: [
+      [EntityDiagnosisCode.VERY_LOW_CLICKS]: [
+        this.action('patience', 'none', 'insights.actions.patience', 1),
+        this.action('monitor', 'none', 'insights.actions.monitor', 2),
+      ],
+      [EntityDiagnosisCode.LOW_CLICKS]: [
         this.action('monitor', 'none', 'insights.actions.monitor', 1),
+        this.action('patience', 'none', 'insights.actions.patience', 2),
       ],
       [EntityDiagnosisCode.CLICKS_NO_SALES]: [
         this.action('improve_listing', 'book', 'insights.actions.improve_listing', 1),
@@ -369,6 +471,73 @@ export class InsightsService {
     return result
       .sort((a, b) => a.priority - b.priority)
       .slice(0, 3);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // TREND ANALYSIS
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Compare short-term (7j) metrics to strategic-period metrics.
+   * Returns UP if ACoS is dropping or CVR is rising,
+   * DOWN if ACoS is rising or CVR is dropping,
+   * STABLE otherwise.
+   *
+   * Threshold: 15% variation to trigger UP or DOWN.
+   */
+  computeTrend(
+    strategicMetrics: InsightMetrics,
+    trendMetrics: InsightMetrics,
+  ): { direction: TrendDirection; analysis: TrendAnalysis } {
+    const strategicAcos = strategicMetrics.sales > 0
+      ? (strategicMetrics.spend / strategicMetrics.sales) * 100
+      : null;
+    const trendAcos = trendMetrics.sales > 0
+      ? (trendMetrics.spend / trendMetrics.sales) * 100
+      : null;
+    const strategicCvr = strategicMetrics.clicks > 0
+      ? (strategicMetrics.orders / strategicMetrics.clicks) * 100
+      : null;
+    const trendCvr = trendMetrics.clicks > 0
+      ? (trendMetrics.orders / trendMetrics.clicks) * 100
+      : null;
+
+    const analysis: TrendAnalysis = {
+      strategicAcos: strategicAcos !== null ? Math.round(strategicAcos * 100) / 100 : null,
+      trendAcos: trendAcos !== null ? Math.round(trendAcos * 100) / 100 : null,
+      strategicCvr: strategicCvr !== null ? Math.round(strategicCvr * 100) / 100 : null,
+      trendCvr: trendCvr !== null ? Math.round(trendCvr * 100) / 100 : null,
+    };
+
+    // Not enough trend data → STABLE
+    if (trendMetrics.clicks === 0) {
+      return { direction: TrendDirection.STABLE, analysis };
+    }
+
+    // Not enough strategic data to compare → STABLE
+    if (strategicMetrics.clicks === 0) {
+      return { direction: TrendDirection.STABLE, analysis };
+    }
+
+    let isUp = false;
+    let isDown = false;
+
+    // ACoS comparison (lower is better → lower trendAcos = UP)
+    if (strategicAcos !== null && trendAcos !== null && strategicAcos > 0) {
+      if (trendAcos < strategicAcos * 0.85) isUp = true;
+      if (trendAcos > strategicAcos * 1.15) isDown = true;
+    }
+
+    // CVR comparison (higher is better → higher trendCvr = UP)
+    if (strategicCvr !== null && trendCvr !== null && strategicCvr > 0) {
+      if (trendCvr > strategicCvr * 1.15) isUp = true;
+      if (trendCvr < strategicCvr * 0.85) isDown = true;
+    }
+
+    // UP takes priority over DOWN (mixed signals = improving)
+    if (isUp) return { direction: TrendDirection.UP, analysis };
+    if (isDown) return { direction: TrendDirection.DOWN, analysis };
+    return { direction: TrendDirection.STABLE, analysis };
   }
 
   // ══════════════════════════════════════════════════════════

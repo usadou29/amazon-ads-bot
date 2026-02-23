@@ -573,10 +573,29 @@ export class ReportsService {
       this.logger.log(`[INGEST] Sample: date=${sampleRow.date}, impressions=${sampleRow.impressions}, clicks=${sampleRow.clicks}`);
     }
 
+    // Charger les amazonCampaignId des campagnes enabled pour ce profil
+    // → on n'ingère les métriques que pour les campagnes actives
+    const enabledCampaigns = await this.db
+      .select({ amazonCampaignId: campaigns.amazonCampaignId })
+      .from(campaigns)
+      .where(and(eq(campaigns.profileId, profile.id), eq(campaigns.state, 'enabled')));
+    const enabledCampaignIds = new Set(enabledCampaigns.map((c: { amazonCampaignId: number }) => String(c.amazonCampaignId)));
+
     const metrics: NewDailyMetric[] = [];
     let skippedNoId = 0;
+    let skippedInactiveCampaign = 0;
 
     for (const row of rows) {
+      // Filtrer les rows des campagnes inactives (le rapport contient toutes les campagnes du profil)
+      if (reportType !== 'campaigns' && row.campaignId && !enabledCampaignIds.has(String(row.campaignId))) {
+        skippedInactiveCampaign++;
+        continue;
+      }
+      // Pour le rapport campaigns, ne garder que les enabled
+      if (reportType === 'campaigns' && row.campaignId && !enabledCampaignIds.has(String(row.campaignId))) {
+        skippedInactiveCampaign++;
+        continue;
+      }
       const amazonId = row[idField];
       if (!amazonId) {
         skippedNoId++;
@@ -613,7 +632,7 @@ export class ReportsService {
     }
 
     this.logger.log(
-      `[INGEST] ${reportType}: ${metrics.length} metrics built, ${skippedNoId} rows skipped (no ID)`,
+      `[INGEST] ${reportType}: ${metrics.length} metrics built, ${skippedNoId} skipped (no ID), ${skippedInactiveCampaign} skipped (inactive campaign)`,
     );
 
     if (metrics.length === 0) {
@@ -632,6 +651,13 @@ export class ReportsService {
     profile: any,
     workspaceId: string,
   ): Promise<number> {
+    // Charger les amazonCampaignId des campagnes enabled
+    const enabledCampaigns = await this.db
+      .select({ amazonCampaignId: campaigns.amazonCampaignId })
+      .from(campaigns)
+      .where(and(eq(campaigns.profileId, profile.id), eq(campaigns.state, 'enabled')));
+    const enabledCampaignIds = new Set(enabledCampaigns.map((c: { amazonCampaignId: number }) => String(c.amazonCampaignId)));
+
     const metrics: NewDailyMetric[] = [];
     const searchTermRows: Array<{
       amazonAdGroupId: number;
@@ -641,10 +667,17 @@ export class ReportsService {
       matchType: string | null;
       date: string;
     }> = [];
+    let skippedInactive = 0;
 
     for (const row of rows) {
       const query = row.searchTerm || row.query;
       if (!query || !row.adGroupId) continue;
+
+      // Filtrer les search terms des campagnes inactives
+      if (row.campaignId && !enabledCampaignIds.has(String(row.campaignId))) {
+        skippedInactive++;
+        continue;
+      }
 
       const qHash = hashQuery(query);
       const entityKey = makeSearchTermEntityKey(row.adGroupId, qHash);
@@ -675,6 +708,10 @@ export class ReportsService {
         date: row.date,
       });
     }
+
+    this.logger.log(
+      `[INGEST] search_terms: ${metrics.length} metrics built, ${skippedInactive} skipped (inactive campaign)`,
+    );
 
     const metricsCount = await this.batchUpsertDailyMetrics(metrics);
 
