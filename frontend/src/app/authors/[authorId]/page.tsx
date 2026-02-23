@@ -56,6 +56,7 @@ export default function AuthorBooksPage() {
             asin: b.asin,
             marketplace: b.marketplace,
             author: b.author,
+            coverImageUrl: b.coverImageUrl || null,
             status,
             profit,
             profitFormatted: `${profit >= 0 ? '+' : ''}${profit.toFixed(0)}€`,

@@ -479,6 +479,49 @@ export class AmazonClientService {
   }
 
   /**
+   * Récupère les bid recommendations Amazon pour un product target.
+   * Utilise l'API SP /sp/targets/bidRecommendations.
+   * Retourne null si l'API échoue (le calcul fonctionne sans).
+   */
+  async getTargetBidRecommendations(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    targetId: number,
+  ): Promise<{ suggested: number; rangeMin: number; rangeMax: number } | null> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        targetId: targetId.toString(),
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.post('/sp/targets/bidRecommendations', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.TARGETS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.TARGETS,
+          },
+        });
+      });
+
+      const data = response.data;
+      if (data?.recommendations?.length > 0) {
+        const rec = data.recommendations[0];
+        return {
+          suggested: rec.suggestedBid?.suggested ?? rec.suggestedBid ?? 0,
+          rangeMin: rec.suggestedBid?.rangeStart ?? rec.rangeStart ?? 0,
+          rangeMax: rec.suggestedBid?.rangeEnd ?? rec.rangeEnd ?? 0,
+        };
+      }
+      return null;
+    } catch (error) {
+      this.logger.warn(`getTargetBidRecommendations failed for target ${targetId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Demande un rapport async
    */
   async requestReport(

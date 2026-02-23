@@ -31,6 +31,7 @@ export interface CreateBookDto {
   title?: string;
   author?: string;
   kdpId?: string;
+  coverImageUrl?: string;
   publicationDate?: string;
   acosTarget?: number;
   royaltyRate?: number;
@@ -42,6 +43,7 @@ export const createBook = (dto: CreateBookDto) => api.post('/books', { workspace
 export interface UpdateBookDto {
   title?: string;
   author?: string;
+  coverImageUrl?: string | null;
   publicationDate?: string;
   acosTarget?: number;
   royaltyRate?: number;

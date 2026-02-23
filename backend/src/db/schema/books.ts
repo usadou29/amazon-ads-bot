@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp, jsonb, decimal, date, unique } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, timestamp, jsonb, decimal, date, unique, text } from 'drizzle-orm/pg-core';
 import { workspaces } from './workspaces';
 
 export const books = pgTable('books', {
@@ -9,6 +9,7 @@ export const books = pgTable('books', {
   title: varchar('title', { length: 500 }),
   author: varchar('author', { length: 255 }),
   kdpId: varchar('kdp_id', { length: 100 }),
+  coverImageUrl: text('cover_image_url'),
   publicationDate: date('publication_date'),
   categories: jsonb('categories').default([]),
   tags: jsonb('tags').default([]),

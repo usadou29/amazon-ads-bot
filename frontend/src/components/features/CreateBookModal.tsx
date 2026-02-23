@@ -26,6 +26,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [marketplace, setMarketplace] = useState('FR');
+  const [coverImageUrl, setCoverImageUrl] = useState('');
   const [publicationDate, setPublicationDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +42,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
     setTitle('');
     setAuthor('');
     setMarketplace('FR');
+    setCoverImageUrl('');
     setPublicationDate('');
     setError(null);
     royaltyRef.current = { royaltyRate: null, salePrice: null, royaltyPerUnit: null };
@@ -60,6 +62,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
         marketplace,
         title: title.trim() || undefined,
         author: author.trim() || undefined,
+        coverImageUrl: coverImageUrl.trim() || undefined,
         publicationDate: publicationDate || undefined,
         royaltyRate: rv.royaltyRate ?? undefined,
         salePrice: rv.salePrice ?? undefined,
@@ -119,6 +122,31 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
             placeholder="Nom de plume"
             className={inputClass}
           />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Image de couverture</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="url"
+              value={coverImageUrl}
+              onChange={(e) => setCoverImageUrl(e.target.value)}
+              placeholder="https://m.media-amazon.com/images/I/..."
+              className={`${inputClass} flex-1`}
+            />
+            {coverImageUrl.trim() && (
+              <img
+                src={coverImageUrl.trim()}
+                alt="Aperçu couverture"
+                className="w-20 h-28 rounded object-cover border border-slate-200 flex-shrink-0"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                onLoad={(e) => { (e.target as HTMLImageElement).style.display = 'block'; }}
+              />
+            )}
+          </div>
+          <p className="text-xs text-slate-400 mt-1">
+            URL de l'image Amazon (clic droit sur la couverture Amazon → Copier l'adresse de l'image)
+          </p>
         </div>
 
         <div>

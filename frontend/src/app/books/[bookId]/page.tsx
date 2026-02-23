@@ -42,6 +42,11 @@ export default function BookDetailPage() {
   const [royaltySaved, setRoyaltySaved] = useState(false);
   const [royaltyError, setRoyaltyError] = useState<string | null>(null);
 
+  // Édition image de couverture
+  const [editingCover, setEditingCover] = useState(false);
+  const [coverUrlValue, setCoverUrlValue] = useState('');
+  const [savingCover, setSavingCover] = useState(false);
+
   // Édition date de publication & phase
   const [editingPubDate, setEditingPubDate] = useState(false);
   const [pubDateValue, setPubDateValue] = useState('');
@@ -132,6 +137,20 @@ export default function BookDetailPage() {
       // silently fail
     } finally {
       setSavingPubDate(false);
+    }
+  };
+
+  const handleSaveCover = async () => {
+    setSavingCover(true);
+    try {
+      await updateBook(bookId, { coverImageUrl: coverUrlValue.trim() || null });
+      const updated = await fetchBookDashboard(bookId, includeInactive);
+      setDashboard(updated);
+      setEditingCover(false);
+    } catch (err: any) {
+      // silently fail
+    } finally {
+      setSavingCover(false);
     }
   };
 
@@ -241,8 +260,29 @@ export default function BookDetailPage() {
       {/* ── En-tête du livre ── */}
       <div className="flex items-start justify-between mb-6">
         <div className="flex items-start gap-4">
-          <div className="w-16 h-24 rounded-lg bg-slate-200 flex-shrink-0 flex items-center justify-center text-2xl">
-            {status.emoji}
+          {/* Couverture du livre — cliquable pour éditer */}
+          <div className="relative group/cover flex-shrink-0">
+            {book.coverImageUrl ? (
+              <img
+                src={book.coverImageUrl}
+                alt={book.title || book.asin}
+                className="w-20 h-28 rounded-lg object-cover shadow-md cursor-pointer"
+                onClick={() => { setCoverUrlValue(book.coverImageUrl || ''); setEditingCover(true); }}
+              />
+            ) : (
+              <div
+                className="w-20 h-28 rounded-lg bg-slate-200 flex items-center justify-center text-3xl cursor-pointer"
+                onClick={() => { setCoverUrlValue(''); setEditingCover(true); }}
+              >
+                {status.emoji}
+              </div>
+            )}
+            <div
+              className="absolute inset-0 rounded-lg bg-black/40 opacity-0 group-hover/cover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
+              onClick={() => { setCoverUrlValue(book.coverImageUrl || ''); setEditingCover(true); }}
+            >
+              <span className="text-white text-xs font-medium">Modifier</span>
+            </div>
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900">{book.title || book.asin}</h1>
@@ -277,6 +317,68 @@ export default function BookDetailPage() {
           </label>
         </div>
       </div>
+
+      {/* ── Édition couverture (inline) ── */}
+      {editingCover && (
+        <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-slate-600 mb-1">URL de l'image de couverture</label>
+              <input
+                type="url"
+                value={coverUrlValue}
+                onChange={(e) => setCoverUrlValue(e.target.value)}
+                placeholder="https://m.media-amazon.com/images/I/..."
+                className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Clic droit sur la couverture Amazon → Copier l'adresse de l'image
+              </p>
+            </div>
+            {coverUrlValue.trim() && (
+              <img
+                src={coverUrlValue.trim()}
+                alt="Aperçu"
+                className="w-12 h-18 rounded object-cover border border-slate-200"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                onLoad={(e) => { (e.target as HTMLImageElement).style.display = 'block'; }}
+              />
+            )}
+          </div>
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={handleSaveCover}
+              disabled={savingCover}
+              className="px-3 py-1 text-xs font-medium text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-lg"
+            >
+              {savingCover ? 'Enregistrement...' : 'Enregistrer'}
+            </button>
+            <button
+              onClick={() => setEditingCover(false)}
+              className="px-3 py-1 text-xs font-medium text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg"
+            >
+              Annuler
+            </button>
+            {book.coverImageUrl && (
+              <button
+                onClick={async () => {
+                  setSavingCover(true);
+                  try {
+                    await updateBook(bookId, { coverImageUrl: null });
+                    const updated = await fetchBookDashboard(bookId, includeInactive);
+                    setDashboard(updated);
+                    setEditingCover(false);
+                  } finally { setSavingCover(false); }
+                }}
+                disabled={savingCover}
+                className="px-3 py-1 text-xs font-medium text-red-600 bg-white border border-red-200 hover:bg-red-50 rounded-lg ml-auto"
+              >
+                Supprimer l'image
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Phase de cycle de vie ── */}
       <div className={`mb-6 p-3 ${phaseColors.bg} border ${phaseColors.border} rounded-lg`}>
