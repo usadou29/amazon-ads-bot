@@ -138,7 +138,7 @@ export function CreateBookModal({ open, onClose, onSuccess }: CreateBookModalPro
               <img
                 src={coverImageUrl.trim()}
                 alt="Aperçu couverture"
-                className="w-20 h-28 rounded object-cover border border-slate-200 flex-shrink-0"
+                className="w-40 h-56 rounded-lg object-cover border border-slate-200 flex-shrink-0"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 onLoad={(e) => { (e.target as HTMLImageElement).style.display = 'block'; }}
               />

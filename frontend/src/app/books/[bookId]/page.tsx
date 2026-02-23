@@ -266,22 +266,22 @@ export default function BookDetailPage() {
               <img
                 src={book.coverImageUrl}
                 alt={book.title || book.asin}
-                className="w-20 h-28 rounded-lg object-cover shadow-md cursor-pointer"
+                className="w-40 h-56 rounded-xl object-cover shadow-lg cursor-pointer"
                 onClick={() => { setCoverUrlValue(book.coverImageUrl || ''); setEditingCover(true); }}
               />
             ) : (
               <div
-                className="w-20 h-28 rounded-lg bg-slate-200 flex items-center justify-center text-3xl cursor-pointer"
+                className="w-40 h-56 rounded-xl bg-slate-200 flex items-center justify-center text-5xl cursor-pointer"
                 onClick={() => { setCoverUrlValue(''); setEditingCover(true); }}
               >
                 {status.emoji}
               </div>
             )}
             <div
-              className="absolute inset-0 rounded-lg bg-black/40 opacity-0 group-hover/cover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
+              className="absolute inset-0 rounded-xl bg-black/40 opacity-0 group-hover/cover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer"
               onClick={() => { setCoverUrlValue(book.coverImageUrl || ''); setEditingCover(true); }}
             >
-              <span className="text-white text-xs font-medium">Modifier</span>
+              <span className="text-white text-sm font-medium">Modifier</span>
             </div>
           </div>
           <div>
@@ -339,7 +339,7 @@ export default function BookDetailPage() {
               <img
                 src={coverUrlValue.trim()}
                 alt="Aperçu"
-                className="w-12 h-18 rounded object-cover border border-slate-200"
+                className="w-24 h-36 rounded-lg object-cover border border-slate-200"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 onLoad={(e) => { (e.target as HTMLImageElement).style.display = 'block'; }}
               />

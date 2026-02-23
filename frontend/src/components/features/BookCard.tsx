@@ -129,10 +129,10 @@ export function BookCard({ book, onDeleted }: BookCardProps) {
             <img
               src={book.coverImageUrl}
               alt={book.title || book.asin}
-              className="w-14 h-20 rounded-md object-cover flex-shrink-0 shadow-sm"
+              className="w-28 h-40 rounded-lg object-cover flex-shrink-0 shadow-md"
             />
           ) : (
-            <div className="w-14 h-20 rounded-md bg-slate-200 flex-shrink-0 flex items-center justify-center text-xl">
+            <div className="w-28 h-40 rounded-lg bg-slate-200 flex-shrink-0 flex items-center justify-center text-3xl">
               {book.status.emoji}
             </div>
           )}
