@@ -107,6 +107,13 @@ export interface EntityInsight {
     strategyLabel: string;
   };
   confidenceScore: number;
+  // Multi-window v2 fields
+  decisionPeriodDays?: number;
+  validationApplied?: boolean;
+  validationExplanation?: string;
+  // Lifecycle guardrail v2.1
+  guardrailApplied?: boolean;
+  guardrailExplanation?: string;
 }
 
 // ── Rendered Insight ────────────────────────────────────────

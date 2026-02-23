@@ -49,6 +49,16 @@ export const GUARDS = {
 
   // Période de tendance court terme (en jours)
   TREND_PERIOD_DAYS: 7,
+
+  // Seuils de clics par phase pour la Decision Window
+  // hard = minimum de clics pour une décision confiante
+  // soft = minimum de clics pour une décision tentative (observe mode)
+  DECISION_CLICK_THRESHOLDS: {
+    launch:    { hard: 15, soft: 8 },
+    scale:     { hard: 15, soft: 10 },
+    evergreen: { hard: 20, soft: 12 },
+    relaunch:  { hard: 15, soft: 8 },
+  } as Record<string, { hard: number; soft: number }>,
 } as const;
 
 // Types pour les constantes

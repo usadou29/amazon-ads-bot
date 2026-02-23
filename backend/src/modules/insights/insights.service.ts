@@ -174,6 +174,36 @@ export class InsightsService {
   }
 
   // ══════════════════════════════════════════════════════════
+  // MULTI-WINDOW DOWNGRADE
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Downgrade les actions suggérées suite à la validation 30j.
+   *
+   * - 'observe' → remplace tout par un simple "monitor"
+   * - 'soft_adjust' → pause → bid_down, add_negative → monitor, le reste inchangé
+   */
+  downgradeSuggestedActions(
+    actions: InsightAction[],
+    level: 'soft_adjust' | 'observe',
+  ): InsightAction[] {
+    if (level === 'observe') {
+      return [{ type: 'monitor', execution: 'none', i18nKey: 'insights.actions.monitor', priority: 1 }];
+    }
+
+    // soft_adjust : pause → bid_down, add_negative → monitor, le reste inchangé
+    return actions.map((a) => {
+      if (a.type === 'pause') {
+        return { ...a, type: 'bid_down', i18nKey: 'insights.actions.bid_down', execution: 'ads' as const };
+      }
+      if (a.type === 'add_negative') {
+        return { ...a, type: 'monitor', i18nKey: 'insights.actions.monitor', execution: 'none' as const };
+      }
+      return a;
+    });
+  }
+
+  // ══════════════════════════════════════════════════════════
   // DIAGNOSIS TREES
   // ══════════════════════════════════════════════════════════
 

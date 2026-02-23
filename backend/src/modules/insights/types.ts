@@ -94,6 +94,13 @@ export interface EntityInsight {
     strategyLabel: string;
   };
   confidenceScore: number;
+  // Multi-window v2 fields
+  decisionPeriodDays?: number;         // Fenêtre de décision choisie dynamiquement
+  validationApplied?: boolean;          // Si la validation 30j a ajusté l'action
+  validationExplanation?: string;       // Raison de l'ajustement
+  // Lifecycle guardrail v2.1
+  guardrailApplied?: boolean;           // Si le guardrail lifecycle a downgradé l'action
+  guardrailExplanation?: string;        // Message explicatif pour l'UI
 }
 
 // ── Macro Strategy (campaign-level, derived from entity insights) ─
@@ -115,6 +122,25 @@ export interface CampaignMacroStrategy {
   expensiveCount: number;      // EXPENSIVE_BUT_VALID
   totalEntities: number;
   eligibleCount: number;       // entities with clicks >= 15
+}
+
+// ── Multi-Window Metrics ─────────────────────────────────────
+export interface WindowMetrics {
+  impressions: number;
+  clicks: number;
+  spend: number;
+  sales: number;
+  orders: number;
+  units: number;
+  acos?: number | null;
+  ctr?: number | null;
+  cvr?: number | null;
+}
+
+export interface MetricsByWindow {
+  window_7d: WindowMetrics;
+  window_14d: WindowMetrics;
+  window_30d: WindowMetrics;
 }
 
 // ── Metrics Input (compatible with existing CalculatedKPIs) ─

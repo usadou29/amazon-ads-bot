@@ -19,6 +19,8 @@ import type { LifecyclePhase } from '@/db/schema/books';
 import { reportJobs } from '@/db/schema/report-jobs';
 import { StrategyEngine } from '../strategy/strategy-engine';
 import { InsightsService } from '../insights/insights.service';
+import { resolveDecisionWindow, validateAgainstLongWindow, applyLifecycleGuardrail } from '../strategy/decision-window';
+import type { MetricsByWindow, WindowMetrics } from '../insights/types';
 import { AmazonClientService } from '../amazon-client/amazon-client.service';
 import { ReportsService } from '../reports/reports.service';
 import type { Marketplace } from '@/db/schema/marketplace-profiles';
@@ -1244,7 +1246,8 @@ export class BooksService {
     const lifecyclePhase = this.getEffectiveLifecyclePhase(book);
     const strategicDays = (GUARDS.STRATEGIC_PERIOD_BY_PHASE as Record<string, number>)[lifecyclePhase] ?? 14;
     const trendDays = GUARDS.TREND_PERIOD_DAYS; // 7
-    const maxDays = Math.max(displayDays, strategicDays, trendDays);
+    // Always fetch at least 30 days for multi-window decision engine
+    const maxDays = Math.max(displayDays, strategicDays, trendDays, 30);
 
     // Date ranges for the 3 windows
     const { startDate: maxStartDate, endDate } = this.computeDateRange(maxDays);
@@ -1252,9 +1255,15 @@ export class BooksService {
     const { startDate: strategicStartDate } = this.computeDateRange(strategicDays);
     const { startDate: trendStartDate } = this.computeDateRange(trendDays);
 
+    // Multi-window decision dates (7d, 14d, 30d)
+    const { startDate: startDate7d } = this.computeDateRange(7);
+    const { startDate: startDate14d } = this.computeDateRange(14);
+    const { startDate: startDate30d } = this.computeDateRange(30);
+
     this.logger.log(
-      `[CAMPAIGN-DETAIL] Dual fetch: display=${displayDays}d (${displayStartDate}), ` +
+      `[CAMPAIGN-DETAIL] Multi-window fetch: display=${displayDays}d (${displayStartDate}), ` +
       `strategic=${strategicDays}d (${strategicStartDate}), trend=${trendDays}d (${trendStartDate}), ` +
+      `decision windows: 7d/14d/30d, ` +
       `maxFetch=${maxDays}d (${maxStartDate}→${endDate}), lifecycle=${lifecyclePhase}`,
     );
 
@@ -1609,40 +1618,136 @@ export class BooksService {
         ? (campStrategicMetrics.clicks / campStrategicMetrics.impressions) * 100
         : 0;
 
-      // Entity insights FIRST (bottom-up) — using STRATEGIC metrics for decisions
+      // Entity insights FIRST (bottom-up) — using MULTI-WINDOW decision engine
       const entityInsights: any[] = [];
       for (const kw of camp.keywords) {
-        // Strategic metrics for this keyword
-        const kwStrategicMetrics = kw._rawRows.length > 0
-          ? this.aggregateRawRows(kw._rawRows, strategicStartDate, endDate)
-          : this.emptyMetrics();
+        // Multi-window metrics for decision engine
+        const kwMultiWindow = kw._rawRows.length > 0
+          ? this.aggregateMultiWindow(kw._rawRows, startDate7d, startDate14d, startDate30d, endDate)
+          : this.emptyMetricsByWindow();
 
+        // 1. Resolve the optimal decision window dynamically
+        const dwResult = resolveDecisionWindow(lifecyclePhase, kwMultiWindow);
+
+        // 2. Compute insight with metrics from the chosen decision window
         kw.insight = this.insightsService.computeEntityInsight(
           { key: `keyword:${kw.amazonKeywordId}`, type: 'keyword', name: kw.keywordText, campaignId: camp.id, campaignName: camp.name },
-          kwStrategicMetrics,
+          dwResult.metricsOnWindow,
           lifecyclePhase,
           breakEvenAcos,
-          strategicDays,
+          dwResult.chosenWindow,
           avgCampaignCTR,
         );
+
+        // 3. Enrich with decision window info
+        kw.insight.decisionPeriodDays = dwResult.chosenWindow;
+
+        // 4. Validation against long window (30d) for scale/evergreen/relaunch
+        if (lifecyclePhase !== 'launch') {
+          const primaryAction = kw.insight.suggestedActions[0]?.type;
+          if (primaryAction) {
+            const validation = validateAgainstLongWindow(
+              lifecyclePhase,
+              dwResult.metricsOnWindow,
+              kwMultiWindow.window_30d,
+              primaryAction,
+              breakEvenAcos,
+            );
+            if (validation.applied && validation.downgradeLevel && validation.downgradeLevel !== 'no_change') {
+              kw.insight.validationApplied = true;
+              kw.insight.validationExplanation = validation.reason;
+              kw.insight.suggestedActions = this.insightsService.downgradeSuggestedActions(
+                kw.insight.suggestedActions,
+                validation.downgradeLevel,
+              );
+            }
+          }
+        }
+
+        // 5. Lifecycle guardrail — downgrade strong actions on short windows
+        const kwPrimaryAfterValidation = kw.insight.suggestedActions[0]?.type;
+        if (kwPrimaryAfterValidation) {
+          const guardrail = applyLifecycleGuardrail(
+            kwPrimaryAfterValidation,
+            lifecyclePhase,
+            dwResult.chosenWindow,
+            kwMultiWindow,
+            breakEvenAcos,
+          );
+          if (guardrail.applied && guardrail.downgradeLevel) {
+            kw.insight.guardrailApplied = true;
+            kw.insight.guardrailExplanation = guardrail.explanation;
+            kw.insight.suggestedActions = this.insightsService.downgradeSuggestedActions(
+              kw.insight.suggestedActions,
+              guardrail.downgradeLevel,
+            );
+          }
+        }
+
         entityInsights.push(kw.insight);
         delete kw._rawRows; // clean up before sending to frontend
       }
 
-      // Entity insights — product targets (using STRATEGIC metrics)
+      // Entity insights — product targets (using MULTI-WINDOW decision engine)
       for (const tg of camp.productTargets) {
-        const tgStrategicMetrics = tg._rawRows.length > 0
-          ? this.aggregateRawRows(tg._rawRows, strategicStartDate, endDate)
-          : this.emptyMetrics();
+        const tgMultiWindow = tg._rawRows.length > 0
+          ? this.aggregateMultiWindow(tg._rawRows, startDate7d, startDate14d, startDate30d, endDate)
+          : this.emptyMetricsByWindow();
+
+        const dwResult = resolveDecisionWindow(lifecyclePhase, tgMultiWindow);
 
         tg.insight = this.insightsService.computeEntityInsight(
           { key: `target:${tg.amazonTargetId}`, type: 'target', name: tg.expression, campaignId: camp.id, campaignName: camp.name },
-          tgStrategicMetrics,
+          dwResult.metricsOnWindow,
           lifecyclePhase,
           breakEvenAcos,
-          strategicDays,
+          dwResult.chosenWindow,
           avgCampaignCTR,
         );
+
+        tg.insight.decisionPeriodDays = dwResult.chosenWindow;
+
+        if (lifecyclePhase !== 'launch') {
+          const primaryAction = tg.insight.suggestedActions[0]?.type;
+          if (primaryAction) {
+            const validation = validateAgainstLongWindow(
+              lifecyclePhase,
+              dwResult.metricsOnWindow,
+              tgMultiWindow.window_30d,
+              primaryAction,
+              breakEvenAcos,
+            );
+            if (validation.applied && validation.downgradeLevel && validation.downgradeLevel !== 'no_change') {
+              tg.insight.validationApplied = true;
+              tg.insight.validationExplanation = validation.reason;
+              tg.insight.suggestedActions = this.insightsService.downgradeSuggestedActions(
+                tg.insight.suggestedActions,
+                validation.downgradeLevel,
+              );
+            }
+          }
+        }
+
+        // 5. Lifecycle guardrail — downgrade strong actions on short windows
+        const tgPrimaryAfterValidation = tg.insight.suggestedActions[0]?.type;
+        if (tgPrimaryAfterValidation) {
+          const guardrail = applyLifecycleGuardrail(
+            tgPrimaryAfterValidation,
+            lifecyclePhase,
+            dwResult.chosenWindow,
+            tgMultiWindow,
+            breakEvenAcos,
+          );
+          if (guardrail.applied && guardrail.downgradeLevel) {
+            tg.insight.guardrailApplied = true;
+            tg.insight.guardrailExplanation = guardrail.explanation;
+            tg.insight.suggestedActions = this.insightsService.downgradeSuggestedActions(
+              tg.insight.suggestedActions,
+              guardrail.downgradeLevel,
+            );
+          }
+        }
+
         entityInsights.push(tg.insight);
         delete tg._rawRows; // clean up
       }
@@ -1787,6 +1892,44 @@ export class BooksService {
       cpc: clicks > 0 ? Math.round((spend / clicks) * 100) / 100 : 0,
       impressionShare,
     };
+  }
+
+  /**
+   * Aggregate raw rows into 3 time windows for the multi-window decision engine.
+   * Reuses aggregateRawRows() — no duplication.
+   */
+  private aggregateMultiWindow(
+    rows: Array<{ date: string; impressions: number; clicks: number; spend: number; sales: number; orders: number; units: number; impressionShare: number | null }>,
+    startDate7d: string,
+    startDate14d: string,
+    startDate30d: string,
+    endDate: string,
+  ): MetricsByWindow {
+    const toWindowMetrics = (m: ReturnType<typeof this.aggregateRawRows>): WindowMetrics => ({
+      impressions: m.impressions,
+      clicks: m.clicks,
+      spend: m.spend,
+      sales: m.sales,
+      orders: m.orders,
+      units: m.units,
+      acos: m.acos || null,
+      ctr: m.ctr || null,
+      cvr: m.cvr || null,
+    });
+
+    return {
+      window_7d:  toWindowMetrics(this.aggregateRawRows(rows, startDate7d, endDate)),
+      window_14d: toWindowMetrics(this.aggregateRawRows(rows, startDate14d, endDate)),
+      window_30d: toWindowMetrics(this.aggregateRawRows(rows, startDate30d, endDate)),
+    };
+  }
+
+  private emptyWindowMetrics(): WindowMetrics {
+    return { impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0, units: 0, acos: null, ctr: null, cvr: null };
+  }
+
+  private emptyMetricsByWindow(): MetricsByWindow {
+    return { window_7d: this.emptyWindowMetrics(), window_14d: this.emptyWindowMetrics(), window_30d: this.emptyWindowMetrics() };
   }
 
   /**

@@ -105,6 +105,27 @@ export function EntityInsightPopover({
               </div>
             )}
 
+            {/* Decision window transparency */}
+            {(insight.decisionPeriodDays || insight.validationApplied || insight.guardrailApplied) && (
+              <div className="mb-2 space-y-0.5">
+                {insight.decisionPeriodDays && (
+                  <p className="text-[10px] text-slate-400">
+                    Analyse sur {insight.decisionPeriodDays} jours
+                  </p>
+                )}
+                {insight.validationApplied && (
+                  <p className="text-[10px] text-amber-500 font-medium">
+                    Ajustement 30j appliqu&eacute;
+                  </p>
+                )}
+                {insight.guardrailApplied && insight.guardrailExplanation && (
+                  <p className="text-[10px] text-blue-500 font-medium">
+                    {insight.guardrailExplanation}
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Mini metrics row */}
             <div className="mb-3 grid grid-cols-4 gap-2 border-t border-slate-100 pt-3">
               <MiniMetric label="Impr." value={insight.summaryFacts.impressions.toLocaleString('fr-FR')} />

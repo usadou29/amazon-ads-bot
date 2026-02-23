@@ -14,8 +14,10 @@ import { InsightsService } from '@/modules/insights/insights.service';
 import { AmazonClientService } from '@/modules/amazon-client/amazon-client.service';
 import { GUARDS } from '@/config/guards';
 import { calculateRecommendedBid, type BidCalculationResult, type BidEligibility } from './bid-calculator';
+import { resolveDecisionWindow } from '@/modules/strategy/decision-window';
 import type { ActionSuggestionDto } from './action-suggestion.dto';
-import type { EntityDiagnosisCode } from '@/modules/insights/types';
+import type { EntityDiagnosisCode, MetricsByWindow, WindowMetrics } from '@/modules/insights/types';
+import type { LifecyclePhase } from '@/db/schema/books';
 import type { Marketplace } from '@/config/amazon';
 
 // ── Response Types ──────────────────────────────────────
@@ -73,12 +75,24 @@ export class ActionSuggestionService {
       throw new NotFoundException(`Entity ${entityKey} not found`);
     }
 
-    // 2. Calculer la période stratégique
-    const phase = lifecyclePhase || 'evergreen';
-    const strategicDays = GUARDS.STRATEGIC_PERIOD_BY_PHASE[phase] ?? 30;
+    // 2. Calculer la période stratégique + multi-window
+    const phase: LifecyclePhase = (lifecyclePhase || 'evergreen') as LifecyclePhase;
 
-    // 3. Charger les métriques sur la période stratégique
-    const metrics = await this.loadEntityMetrics(workspaceId, entityKey, entityType, strategicDays);
+    // 3. Charger les métriques sur 30j (max window) et slicer en mémoire
+    const metrics30d = await this.loadEntityMetrics(workspaceId, entityKey, entityType, 30);
+    const metrics14d = await this.loadEntityMetrics(workspaceId, entityKey, entityType, 14);
+    const metrics7d = await this.loadEntityMetrics(workspaceId, entityKey, entityType, 7);
+
+    const metricsByWindow: MetricsByWindow = {
+      window_7d: { ...metrics7d, units: 0, acos: null, ctr: null, cvr: null },
+      window_14d: { ...metrics14d, units: 0, acos: null, ctr: null, cvr: null },
+      window_30d: { ...metrics30d, units: 0, acos: null, ctr: null, cvr: null },
+    };
+
+    // Resolve optimal decision window
+    const dwResult = resolveDecisionWindow(phase, metricsByWindow);
+    const metrics = dwResult.metricsOnWindow;
+    const strategicDays = dwResult.chosenWindow;
 
     // 4. Obtenir le diagnostic
     const breakEvenAcos = acosTarget; // ACoS cible = break-even dans ce contexte
