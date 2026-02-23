@@ -9,6 +9,7 @@ import { ActionModal } from '@/components/features/ActionModal';
 import { BidActionPopover } from '@/components/features/BidActionPopover';
 import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transforms/recommendations';
 import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight } from '@/lib/transforms/insights';
+import { selectDefaultAction, insightActionToSuggestionItem, type ActionSuggestionItem } from '@/lib/action-selection';
 import { t } from '@/lib/i18n';
 import { fetchBookCampaignDetails } from '@/lib/api/client';
 
@@ -480,21 +481,49 @@ function RecoBadge({ count, onClick }: { count: number; onClick: () => void }) {
   );
 }
 
+/**
+ * Sélectionne la meilleure action pour une entité en utilisant le scoring.
+ * Convertit les InsightAction rendus en ActionSuggestionItem, puis appelle selectDefaultAction.
+ */
+function pickBestAction(
+  insight: EntityInsight | undefined,
+  rendered: ReturnType<typeof renderEntityInsight> | null,
+): { label: string; execution: 'ads' | 'book' | 'none'; type: string } | null {
+  if (!insight || !rendered || !rendered.actions.length) return null;
+
+  const items: ActionSuggestionItem[] = rendered.actions.map((a, i) =>
+    insightActionToSuggestionItem(a, insight, i),
+  );
+
+  const best = selectDefaultAction(items, {
+    diagnosisCode: insight.diagnosisCode,
+    clicks: insight.summaryFacts.clicks,
+  });
+
+  if (!best) return rendered.actions[0] || null;
+
+  // Retrouver l'action rendue correspondante
+  const match = rendered.actions.find(a => a.type === best.actionType);
+  return match || rendered.actions[0] || null;
+}
+
 function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: (e?: React.MouseEvent) => void }) {
   const execColors = EXECUTION_COLORS[action.execution];
+  const categoryTag = action.execution === 'ads' ? '⚡' : action.execution === 'book' ? '📖' : '👁';
+
   if (onClick) {
     return (
       <button
         onClick={(e) => onClick(e)}
         className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${execColors.bg} ${execColors.text}`}
       >
-        {execColors.icon} {action.label}
+        {categoryTag} {action.label}
       </button>
     );
   }
   return (
     <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${execColors.bg} ${execColors.text}`}>
-      {execColors.icon} {action.label}
+      {categoryTag} {action.label}
     </span>
   );
 }
@@ -576,7 +605,7 @@ function KeywordTableWithRecos({
               const entityKey = `keyword:${kw.amazonKeywordId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
               const kwRendered = kw.insight ? renderEntityInsight(kw.insight) : null;
-              const kwTopAction = kwRendered?.actions?.[0];
+              const kwTopAction = pickBestAction(kw.insight, kwRendered);
               return (
                 <tr
                   key={kw.id}
@@ -799,7 +828,7 @@ function ProductTargetTableWithRecos({
               const entityKey = `target:${tg.amazonTargetId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
               const tgRendered = tg.insight ? renderEntityInsight(tg.insight) : null;
-              const tgTopAction = tgRendered?.actions?.[0];
+              const tgTopAction = pickBestAction(tg.insight, tgRendered);
               return (
                 <tr
                   key={tg.id}

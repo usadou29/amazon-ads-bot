@@ -8,6 +8,7 @@ import {
   ENTITY_DIAGNOSIS_COLORS,
   EXECUTION_COLORS,
 } from '@/lib/transforms/insights';
+import { selectDefaultAction, insightActionToSuggestionItem } from '@/lib/action-selection';
 
 interface EntityInsightPopoverProps {
   insight: EntityInsight;
@@ -137,28 +138,65 @@ export function EntityInsightPopover({
               />
             </div>
 
-            {/* Actions */}
-            {rendered.actions.length > 0 && (
-              <div className="space-y-2 border-t border-slate-100 pt-3">
-                <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                  Actions suggérées
-                </p>
-                {rendered.actions.map((action, i) => {
-                  const execColors = EXECUTION_COLORS[action.execution];
-                  return (
-                    <div
-                      key={`${action.type}-${i}`}
-                      className="flex items-center gap-2 text-xs"
-                    >
-                      <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${execColors.bg} ${execColors.text}`}>
-                        {execColors.icon} {action.executionLabel}
-                      </span>
-                      <span className="text-slate-700">{action.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            {/* Actions — Recommandée + Autres */}
+            {rendered.actions.length > 0 && (() => {
+              // Convertir en ActionSuggestionItems pour le scoring
+              const items = rendered.actions.map((a, i) =>
+                insightActionToSuggestionItem(a, insight, i),
+              );
+              const best = selectDefaultAction(items, {
+                diagnosisCode: insight.diagnosisCode,
+                clicks: insight.summaryFacts.clicks,
+              });
+              const bestType = best?.actionType;
+              const recommendedAction = rendered.actions.find(a => a.type === bestType);
+              const otherActions = rendered.actions.filter(a => a.type !== bestType);
+
+              return (
+                <div className="space-y-2 border-t border-slate-100 pt-3">
+                  {/* Action recommandée */}
+                  {recommendedAction && (
+                    <>
+                      <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                        Action recommandée
+                      </p>
+                      <div className="flex items-center gap-2 text-xs rounded-lg bg-slate-50 px-2.5 py-2 border border-slate-100">
+                        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${EXECUTION_COLORS[recommendedAction.execution].bg} ${EXECUTION_COLORS[recommendedAction.execution].text}`}>
+                          {EXECUTION_COLORS[recommendedAction.execution].icon} {recommendedAction.executionLabel}
+                        </span>
+                        <span className="text-slate-700 font-medium">{recommendedAction.label}</span>
+                        <span className="ml-auto text-[9px] font-semibold rounded-full bg-blue-100 text-blue-700 px-1.5 py-0.5">
+                          Recommandée
+                        </span>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Autres options */}
+                  {otherActions.length > 0 && (
+                    <>
+                      <p className="text-[10px] font-medium uppercase tracking-wide text-slate-400 mt-2">
+                        Autres options
+                      </p>
+                      {otherActions.map((action, i) => {
+                        const execColors = EXECUTION_COLORS[action.execution];
+                        return (
+                          <div
+                            key={`${action.type}-${i}`}
+                            className="flex items-center gap-2 text-xs"
+                          >
+                            <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${execColors.bg} ${execColors.text}`}>
+                              {execColors.icon} {execColors.icon === '⚡' ? 'Action pub' : execColors.icon === '📖' ? 'Conseil livre' : 'Observation'}
+                            </span>
+                            <span className="text-slate-600">{action.label}</span>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Linked recommendation */}
             {insight.linkedRecommendation && (
