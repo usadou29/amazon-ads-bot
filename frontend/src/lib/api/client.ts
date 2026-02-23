@@ -92,6 +92,7 @@ export interface ActionSuggestionRequest {
   entityType: 'keyword' | 'target';
   acosTarget: number;
   lifecyclePhase?: string;
+  actionType?: 'bid_up' | 'bid_down';
 }
 export interface ExecuteDirectActionRequest {
   workspaceId: string;

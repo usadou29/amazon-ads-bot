@@ -67,7 +67,7 @@ export class ActionSuggestionService {
   ) {}
 
   async getActionSuggestion(dto: ActionSuggestionDto): Promise<ActionSuggestionResponse> {
-    const { workspaceId, entityKey, entityType, acosTarget, lifecyclePhase } = dto;
+    const { workspaceId, entityKey, entityType, acosTarget, lifecyclePhase, actionType } = dto;
 
     // 1. Charger l'entité depuis la DB
     const entity = await this.loadEntity(workspaceId, entityKey, entityType);
@@ -142,8 +142,14 @@ export class ActionSuggestionService {
     const aov = metrics.orders > 0 ? metrics.sales / metrics.orders : 0;
     const acosDecimal = acosTarget / 100; // convertir % → décimal
 
-    // Déterminer la direction forcée basée sur le diagnostic
-    const bidDirection = this.diagnosisToBidDirection(diagnosisCode);
+    // Déterminer la direction forcée :
+    // 1. Si le frontend envoie un actionType explicite (bid_up/bid_down), il prime
+    // 2. Sinon, on déduit du diagnostic
+    const bidDirection: BidDirection = actionType === 'bid_up'
+      ? 'up'
+      : actionType === 'bid_down'
+        ? 'down'
+        : this.diagnosisToBidDirection(diagnosisCode);
 
     const bidCalculation = calculateRecommendedBid({
       currentBid: entity.bid,

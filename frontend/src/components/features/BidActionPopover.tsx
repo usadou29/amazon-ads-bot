@@ -81,6 +81,7 @@ export function BidActionPopover({
       entityType,
       acosTarget,
       lifecyclePhase,
+      actionType,
     };
 
     fetchActionSuggestion(dto)

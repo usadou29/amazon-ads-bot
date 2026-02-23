@@ -17,6 +17,11 @@ export class ActionSuggestionDto {
   @IsOptional()
   @IsString()
   lifecyclePhase?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['bid_up', 'bid_down'])
+  actionType?: 'bid_up' | 'bid_down';
 }
 
 export class ExecuteDirectActionDto {

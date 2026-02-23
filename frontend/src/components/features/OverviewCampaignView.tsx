@@ -11,7 +11,7 @@ import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transform
 import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight } from '@/lib/transforms/insights';
 import { selectDefaultAction, insightActionToSuggestionItem, type ActionSuggestionItem } from '@/lib/action-selection';
 import { t } from '@/lib/i18n';
-import { fetchBookCampaignDetails } from '@/lib/api/client';
+import { fetchBookCampaignDetails, executeDirectAction } from '@/lib/api/client';
 
 // ── Types ──
 interface TrendData {
@@ -551,6 +551,109 @@ function pickBestAction(
   return match || rendered.actions[0] || null;
 }
 
+// ── Direct Action Confirm (pause / add_negative) ──
+function DirectActionConfirm({
+  entityKey,
+  entityType,
+  entityName,
+  actionType,
+  workspaceId,
+  onClose,
+  onActionExecuted,
+}: {
+  entityKey: string;
+  entityType: 'keyword' | 'target';
+  entityName: string;
+  actionType: string;
+  workspaceId: string;
+  onClose: () => void;
+  onActionExecuted?: () => void;
+}) {
+  const [applying, setApplying] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const labels: Record<string, { title: string; desc: string; btn: string; btnColor: string }> = {
+    pause: {
+      title: 'Mettre en pause',
+      desc: `Mettre en pause "${entityName}" ? Ce ciblage ne recevra plus de trafic publicitaire.`,
+      btn: 'Mettre en pause',
+      btnColor: 'bg-amber-600 hover:bg-amber-700',
+    },
+    add_negative: {
+      title: 'Bloquer ce terme',
+      desc: `Bloquer "${entityName}" ? Ce terme sera ajouté en négatif et ne déclenchera plus tes annonces.`,
+      btn: 'Bloquer',
+      btnColor: 'bg-red-600 hover:bg-red-700',
+    },
+  };
+
+  const config = labels[actionType] || { title: actionType, desc: `Exécuter "${actionType}" sur "${entityName}" ?`, btn: 'Confirmer', btnColor: 'bg-slate-600 hover:bg-slate-700' };
+
+  const handleConfirm = async () => {
+    setApplying(true);
+    setError(null);
+    try {
+      await executeDirectAction({
+        workspaceId,
+        entityKey,
+        entityType,
+        actionType: actionType === 'add_negative' ? 'pause' : 'pause', // Backend ne supporte que adjust_bid|pause pour l'instant
+        rationale: `Action directe : ${actionType}`,
+      });
+      setSuccess(true);
+      setTimeout(() => {
+        onActionExecuted?.();
+        onClose();
+      }, 1200);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || err.message || 'Erreur');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/20" onClick={onClose} />
+      <div className="fixed z-50 w-[320px] rounded-xl border border-slate-200 bg-white shadow-2xl" style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}>
+        <div className="px-4 py-3 border-b border-slate-100">
+          <h4 className="text-sm font-semibold text-slate-800">{config.title}</h4>
+        </div>
+        <div className="px-4 py-3 space-y-3">
+          {success ? (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-700 text-center font-medium">
+              Action appliquée
+            </div>
+          ) : (
+            <>
+              <p className="text-xs text-slate-600 leading-relaxed">{config.desc}</p>
+              {error && (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-2 text-xs text-red-600">{error}</div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={onClose}
+                  className="flex-1 rounded-lg px-3 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleConfirm}
+                  disabled={applying}
+                  className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors ${applying ? 'bg-slate-300 cursor-not-allowed' : config.btnColor}`}
+                >
+                  {applying ? 'Application…' : config.btn}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: (e?: React.MouseEvent) => void }) {
   const execColors = EXECUTION_COLORS[action.execution];
   const categoryTag = action.execution === 'ads' ? '⚡' : action.execution === 'book' ? '📖' : '👁';
@@ -602,6 +705,7 @@ function KeywordTableWithRecos({
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
   const [actionKeyword, setActionKeyword] = useState<KeywordItem | null>(null);
   const [actionKwType, setActionKwType] = useState<'bid_up' | 'bid_down'>('bid_up');
+  const [directActionKw, setDirectActionKw] = useState<{ kw: KeywordItem; actionType: string } | null>(null);
 
   if (keywords.length === 0) return null;
 
@@ -704,12 +808,16 @@ function KeywordTableWithRecos({
                       <EntityActionBadge
                         action={kwTopAction}
                         onClick={
-                          kwTopAction.execution === 'ads' && workspaceId && acosTarget != null
+                          // Bid actions → popover enchère
+                          (kwTopAction.type === 'bid_up' || kwTopAction.type === 'bid_down') && workspaceId && acosTarget != null
                             ? (e?: React.MouseEvent) => {
                                 const bidActionType = kwTopAction.type === 'bid_down' ? 'bid_down' as const : 'bid_up' as const;
                                 if (e) openBidPopover(kw, bidActionType, e);
                                 else setActionKeyword(kw);
                               }
+                          // Direct actions (pause, add_negative) → confirmation
+                          : (kwTopAction.type === 'pause' || kwTopAction.type === 'add_negative') && workspaceId
+                            ? () => setDirectActionKw({ kw, actionType: kwTopAction.type })
                             : undefined
                         }
                       />
@@ -795,6 +903,19 @@ function KeywordTableWithRecos({
           onActionExecuted={onActionExecuted}
         />
       )}
+
+      {/* Direct Action Confirm for keyword (pause / add_negative) */}
+      {directActionKw && workspaceId && (
+        <DirectActionConfirm
+          entityKey={`keyword:${directActionKw.kw.amazonKeywordId}`}
+          entityType="keyword"
+          entityName={directActionKw.kw.keywordText}
+          actionType={directActionKw.actionType}
+          workspaceId={workspaceId}
+          onClose={() => setDirectActionKw(null)}
+          onActionExecuted={onActionExecuted}
+        />
+      )}
     </div>
   );
 }
@@ -829,6 +950,7 @@ function ProductTargetTableWithRecos({
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
   const [actionTarget, setActionTarget] = useState<ProductTargetItem | null>(null);
   const [actionTgType, setActionTgType] = useState<'bid_up' | 'bid_down'>('bid_up');
+  const [directActionTg, setDirectActionTg] = useState<{ tg: ProductTargetItem; actionType: string } | null>(null);
 
   if (targets.length === 0) return null;
 
@@ -931,12 +1053,16 @@ function ProductTargetTableWithRecos({
                       <EntityActionBadge
                         action={tgTopAction}
                         onClick={
-                          tgTopAction.execution === 'ads' && workspaceId && acosTarget != null
+                          // Bid actions → popover enchère
+                          (tgTopAction.type === 'bid_up' || tgTopAction.type === 'bid_down') && workspaceId && acosTarget != null
                             ? (e?: React.MouseEvent) => {
                                 const bidActionType = tgTopAction.type === 'bid_down' ? 'bid_down' as const : 'bid_up' as const;
                                 if (e) openBidPopoverTg(tg, bidActionType, e);
                                 else setActionTarget(tg);
                               }
+                          // Direct actions (pause, add_negative) → confirmation
+                          : (tgTopAction.type === 'pause' || tgTopAction.type === 'add_negative') && workspaceId
+                            ? () => setDirectActionTg({ tg, actionType: tgTopAction.type })
                             : undefined
                         }
                       />
@@ -1018,6 +1144,19 @@ function ProductTargetTableWithRecos({
           lifecyclePhase={lifecyclePhase}
           actionType={actionTgType}
           onClose={() => setActionTarget(null)}
+          onActionExecuted={onActionExecuted}
+        />
+      )}
+
+      {/* Direct Action Confirm for target (pause / add_negative) */}
+      {directActionTg && workspaceId && (
+        <DirectActionConfirm
+          entityKey={`target:${directActionTg.tg.amazonTargetId}`}
+          entityType="target"
+          entityName={directActionTg.tg.expression}
+          actionType={directActionTg.actionType}
+          workspaceId={workspaceId}
+          onClose={() => setDirectActionTg(null)}
           onActionExecuted={onActionExecuted}
         />
       )}
