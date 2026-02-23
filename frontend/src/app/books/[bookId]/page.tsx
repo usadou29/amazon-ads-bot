@@ -21,6 +21,7 @@ import {
   refreshBookData,
 } from '@/lib/api/client';
 import { OverviewCampaignView } from '@/components/features/OverviewCampaignView';
+import { BookBilan } from '@/components/features/BookBilan';
 import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, interpretAdsDependency, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 import { computeStatus, StatusResult } from '@/lib/transforms/status';
 import { transformRecommendation, HumanRecommendation, groupRecommendationsByEntity, RecommendationGroup } from '@/lib/transforms/recommendations';
@@ -667,6 +668,11 @@ export default function BookDetailPage() {
                 })()}
               </CardContent>
             </Card>
+          )}
+
+          {/* ── Bilan : diagnostics & actions agrégés ── */}
+          {overviewCampaignDetails?.campaigns && (
+            <BookBilan campaigns={overviewCampaignDetails.campaigns} />
           )}
 
           {/* ── Campagnes avec recommandations intégrées ── */}
