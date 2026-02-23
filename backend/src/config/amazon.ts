@@ -51,6 +51,7 @@ export const AMAZON_CONFIG = {
     KEYWORDS: 'application/vnd.spKeyword.v3+json',
     TARGETS: 'application/vnd.spTargetingClause.v3+json',
     REPORTS: 'application/vnd.createasyncreportrequest.v3+json',
+    BID_RECOMMENDATIONS: 'application/vnd.spthemebasedbidrecommendation.v4+json',
   },
 
   // Rate limiting (requests per second)

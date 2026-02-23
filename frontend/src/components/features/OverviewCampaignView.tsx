@@ -6,6 +6,7 @@ import { RecommendationCard } from '@/components/features/RecommendationCard';
 import { CampaignInsightCard } from '@/components/features/CampaignInsightCard';
 import { EntityInsightPopover } from '@/components/features/EntityInsightPopover';
 import { ActionModal } from '@/components/features/ActionModal';
+import { BidActionPopover } from '@/components/features/BidActionPopover';
 import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transforms/recommendations';
 import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight } from '@/lib/transforms/insights';
 import { t } from '@/lib/i18n';
@@ -479,12 +480,12 @@ function RecoBadge({ count, onClick }: { count: number; onClick: () => void }) {
   );
 }
 
-function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: () => void }) {
+function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: (e?: React.MouseEvent) => void }) {
   const execColors = EXECUTION_COLORS[action.execution];
   if (onClick) {
     return (
       <button
-        onClick={onClick}
+        onClick={(e) => onClick(e)}
         className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${execColors.bg} ${execColors.text}`}
       >
         {execColors.icon} {action.label}
@@ -527,6 +528,7 @@ function KeywordTableWithRecos({
   const [modalKeyword, setModalKeyword] = useState<KeywordItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
   const [actionKeyword, setActionKeyword] = useState<KeywordItem | null>(null);
+  const [actionKwType, setActionKwType] = useState<'bid_up' | 'bid_down'>('bid_up');
 
   if (keywords.length === 0) return null;
 
@@ -535,6 +537,11 @@ function KeywordTableWithRecos({
     const recos = recommendationMap.get(entityKey) || [];
     setModalKeyword(kw);
     setModalRecos(recos);
+  };
+
+  const openBidPopover = (kw: KeywordItem, actionType: 'bid_up' | 'bid_down', _e: React.MouseEvent) => {
+    setActionKeyword(kw);
+    setActionKwType(actionType);
   };
 
   return (
@@ -619,7 +626,15 @@ function KeywordTableWithRecos({
                     {kwTopAction ? (
                       <EntityActionBadge
                         action={kwTopAction}
-                        onClick={kwTopAction.execution === 'ads' && workspaceId && acosTarget != null ? () => setActionKeyword(kw) : undefined}
+                        onClick={
+                          kwTopAction.execution === 'ads' && workspaceId && acosTarget != null
+                            ? (e?: React.MouseEvent) => {
+                                const bidActionType = kwTopAction.type === 'bid_down' ? 'bid_down' as const : 'bid_up' as const;
+                                if (e) openBidPopover(kw, bidActionType, e);
+                                else setActionKeyword(kw);
+                              }
+                            : undefined
+                        }
                       />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
@@ -688,17 +703,18 @@ function KeywordTableWithRecos({
         />
       )}
 
-      {/* Action Modal for keyword bid adjustment */}
+      {/* Bid Action Popover for keyword */}
       {actionKeyword && workspaceId && acosTarget != null && (
-        <ActionModal
-          open={!!actionKeyword}
-          onClose={() => setActionKeyword(null)}
+        <BidActionPopover
           entityKey={`keyword:${actionKeyword.amazonKeywordId}`}
           entityType="keyword"
           entityName={actionKeyword.keywordText}
+          currentBid={actionKeyword.bid}
           workspaceId={workspaceId}
           acosTarget={acosTarget}
           lifecyclePhase={lifecyclePhase}
+          actionType={actionKwType}
+          onClose={() => setActionKeyword(null)}
           onActionExecuted={onActionExecuted}
         />
       )}
@@ -735,6 +751,7 @@ function ProductTargetTableWithRecos({
   const [modalTarget, setModalTarget] = useState<ProductTargetItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
   const [actionTarget, setActionTarget] = useState<ProductTargetItem | null>(null);
+  const [actionTgType, setActionTgType] = useState<'bid_up' | 'bid_down'>('bid_up');
 
   if (targets.length === 0) return null;
 
@@ -743,6 +760,11 @@ function ProductTargetTableWithRecos({
     const recos = recommendationMap.get(entityKey) || [];
     setModalTarget(tg);
     setModalRecos(recos);
+  };
+
+  const openBidPopoverTg = (tg: ProductTargetItem, actionType: 'bid_up' | 'bid_down', _e: React.MouseEvent) => {
+    setActionTarget(tg);
+    setActionTgType(actionType);
   };
 
   return (
@@ -827,7 +849,15 @@ function ProductTargetTableWithRecos({
                     {tgTopAction ? (
                       <EntityActionBadge
                         action={tgTopAction}
-                        onClick={tgTopAction.execution === 'ads' && workspaceId && acosTarget != null ? () => setActionTarget(tg) : undefined}
+                        onClick={
+                          tgTopAction.execution === 'ads' && workspaceId && acosTarget != null
+                            ? (e?: React.MouseEvent) => {
+                                const bidActionType = tgTopAction.type === 'bid_down' ? 'bid_down' as const : 'bid_up' as const;
+                                if (e) openBidPopoverTg(tg, bidActionType, e);
+                                else setActionTarget(tg);
+                              }
+                            : undefined
+                        }
                       />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
@@ -895,17 +925,18 @@ function ProductTargetTableWithRecos({
         />
       )}
 
-      {/* Action Modal for target bid adjustment */}
+      {/* Bid Action Popover for target */}
       {actionTarget && workspaceId && acosTarget != null && (
-        <ActionModal
-          open={!!actionTarget}
-          onClose={() => setActionTarget(null)}
+        <BidActionPopover
           entityKey={`target:${actionTarget.amazonTargetId}`}
           entityType="target"
           entityName={actionTarget.expression}
+          currentBid={actionTarget.bid}
           workspaceId={workspaceId}
           acosTarget={acosTarget}
           lifecyclePhase={lifecyclePhase}
+          actionType={actionTgType}
+          onClose={() => setActionTarget(null)}
           onActionExecuted={onActionExecuted}
         />
       )}

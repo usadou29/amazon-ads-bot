@@ -98,29 +98,43 @@ export class ActionSuggestionService {
     const breakEvenAcos = acosTarget; // ACoS cible = break-even dans ce contexte
     const diagnosisCode = this.insightsService.diagnoseEntity(metrics, breakEvenAcos);
 
-    // 5. Fetch Amazon bid recommendations (keywords ET targets)
+    // 5. Fetch Amazon bid recommendations via v4 theme-based endpoint (seul endpoint actif depuis mai 2025)
+    // Keywords → {type: "KEYWORD_EXACT_MATCH", value: "mot clé"}
+    // Product targets → {type: "asinSameAs", value: "B0..."} (camelCase natif Amazon)
     let amazonBid: ActionSuggestionResponse['amazonBid'] | undefined;
-    if (entity.adAccountId && entity.profileId) {
+    if (entity.adAccountId && entity.profileId && entity.amazonCampaignId && entity.amazonAdGroupId) {
       try {
-        const rec = entityType === 'keyword'
-          ? await this.amazonClient.getBidRecommendations(
-              entity.adAccountId,
-              entity.profileId,
-              entity.marketplace as Marketplace,
-              entity.amazonEntityId,
-            )
-          : await this.amazonClient.getTargetBidRecommendations(
-              entity.adAccountId,
-              entity.profileId,
-              entity.marketplace as Marketplace,
-              entity.amazonEntityId,
-            );
-        if (rec) {
-          amazonBid = rec;
+        const targetingExpression = entityType === 'keyword'
+          ? this.buildKeywordTargetingExpression(entity)
+          : this.buildProductTargetExpression(entity);
+
+        if (targetingExpression) {
+          this.logger.log(
+            `[BID-RECO] Will request bid for ${entityType}: ` +
+            `campaign=${entity.amazonCampaignId} adGroup=${entity.amazonAdGroupId} ` +
+            `expression=${JSON.stringify(targetingExpression)} strategy=${entity.biddingStrategy || 'LEGACY_FOR_SALES'}`,
+          );
+
+          const rec = await this.amazonClient.getThemeBasedBidRecommendation(
+            entity.adAccountId,
+            entity.profileId,
+            entity.marketplace as Marketplace,
+            {
+              campaignId: entity.amazonCampaignId,
+              adGroupId: entity.amazonAdGroupId,
+              targetingExpression,
+              strategy: entity.biddingStrategy || 'LEGACY_FOR_SALES',
+            },
+          );
+          if (rec) amazonBid = rec;
+        } else {
+          this.logger.warn(`[BID-RECO] Could not build targeting expression for ${entityType}: ${JSON.stringify({ matchType: entity.matchType, keywordText: entity.keywordText, expressionType: entity.expressionType })}`);
         }
       } catch (err) {
         this.logger.warn(`Amazon bid recommendations failed: ${err.message}`);
       }
+    } else {
+      this.logger.warn(`[BID-RECO] Missing required fields: adAccountId=${entity.adAccountId} profileId=${entity.profileId} campaignId=${entity.amazonCampaignId} adGroupId=${entity.amazonAdGroupId}`);
     }
 
     // 6. Calculer le bid recommandé
@@ -222,6 +236,13 @@ export class ActionSuggestionService {
     adAccountId?: string;
     profileId?: number;
     marketplace?: string;
+    amazonCampaignId?: number;
+    amazonAdGroupId?: number;
+    biddingStrategy?: string;
+    matchType?: string;
+    keywordText?: string;
+    expressionType?: string;
+    expression?: any;
   } | null> {
     const amazonId = this.extractAmazonId(entityKey);
     if (amazonId === null) return null;
@@ -233,9 +254,13 @@ export class ActionSuggestionService {
           bid: keywords.bid,
           state: keywords.state,
           amazonEntityId: keywords.amazonKeywordId,
+          matchType: keywords.matchType,
           adAccountId: marketplaceProfiles.adAccountId,
           profileId: marketplaceProfiles.profileId,
           marketplace: marketplaceProfiles.marketplace,
+          amazonCampaignId: campaigns.amazonCampaignId,
+          amazonAdGroupId: adGroups.amazonAdGroupId,
+          biddingStrategy: campaigns.biddingStrategy,
         })
         .from(keywords)
         .innerJoin(adGroups, eq(keywords.adGroupId, adGroups.id))
@@ -254,6 +279,11 @@ export class ActionSuggestionService {
         adAccountId: r.adAccountId,
         profileId: r.profileId,
         marketplace: r.marketplace,
+        amazonCampaignId: r.amazonCampaignId,
+        amazonAdGroupId: r.amazonAdGroupId,
+        biddingStrategy: r.biddingStrategy ?? undefined,
+        matchType: r.matchType,
+        keywordText: r.name,
       };
     }
 
@@ -268,6 +298,9 @@ export class ActionSuggestionService {
         adAccountId: marketplaceProfiles.adAccountId,
         profileId: marketplaceProfiles.profileId,
         marketplace: marketplaceProfiles.marketplace,
+        amazonCampaignId: campaigns.amazonCampaignId,
+        amazonAdGroupId: adGroups.amazonAdGroupId,
+        biddingStrategy: campaigns.biddingStrategy,
       })
       .from(productTargets)
       .innerJoin(adGroups, eq(productTargets.adGroupId, adGroups.id))
@@ -290,6 +323,11 @@ export class ActionSuggestionService {
       adAccountId: r.adAccountId,
       profileId: r.profileId,
       marketplace: r.marketplace,
+      amazonCampaignId: r.amazonCampaignId,
+      amazonAdGroupId: r.amazonAdGroupId,
+      biddingStrategy: r.biddingStrategy ?? undefined,
+      expressionType: r.expressionType,
+      expression: r.expression,
     };
   }
 
@@ -354,6 +392,58 @@ export class ActionSuggestionService {
       default:
         return null;
     }
+  }
+
+  /**
+   * Construit la targetingExpression pour l'API v4 theme-based (keywords).
+   * Format: {type: "KEYWORD_EXACT_MATCH", value: "mot clé"}
+   */
+  private buildKeywordTargetingExpression(
+    entity: { matchType?: string; keywordText?: string },
+  ): { type: string; value?: string } | null {
+    if (!entity.matchType || !entity.keywordText) return null;
+
+    const matchTypeMap: Record<string, string> = {
+      exact: 'KEYWORD_EXACT_MATCH',
+      phrase: 'KEYWORD_PHRASE_MATCH',
+      broad: 'KEYWORD_BROAD_MATCH',
+    };
+    const amazonType = matchTypeMap[entity.matchType.toLowerCase()];
+    if (!amazonType) {
+      this.logger.warn(`Unknown keyword matchType: ${entity.matchType}`);
+      return null;
+    }
+
+    return { type: amazonType, value: entity.keywordText };
+  }
+
+  /**
+   * Construit la targetingExpression pour l'API v4 theme-based (product targets).
+   * Format camelCase natif Amazon: {type: "asinSameAs", value: "B0DPVHT7Y3"}
+   * Le v4 accepte les types camelCase pour product targeting.
+   */
+  private buildProductTargetExpression(
+    entity: { expressionType?: string; expression?: any },
+  ): { type: string; value?: string } | null {
+    // Le champ expression en DB est le format brut Amazon : [{type: "asinSameAs", value: "B0..."}]
+    if (Array.isArray(entity.expression) && entity.expression.length > 0) {
+      const expr = entity.expression[0];
+      if (expr && expr.type) {
+        return { type: expr.type, value: expr.value };
+      }
+    }
+
+    // Fallback: si expression est une string (ex: un ASIN brut)
+    if (typeof entity.expression === 'string' && entity.expression.length > 0) {
+      return { type: 'asinSameAs', value: entity.expression };
+    }
+
+    // Dernier recours: utiliser expressionType s'il existe
+    if (entity.expressionType && entity.expressionType !== 'manual') {
+      return { type: entity.expressionType };
+    }
+
+    return null;
   }
 
   private extractAmazonId(entityKey: string): number | null {

@@ -440,86 +440,111 @@ export class AmazonClientService {
    * Récupère les bid recommendations Amazon pour un keyword
    * Retourne null si l'API échoue (le calcul fonctionne sans)
    */
-  async getBidRecommendations(
-    adAccountId: string,
-    profileId: number,
-    marketplace: Marketplace,
-    keywordId: number,
-  ): Promise<{ suggested: number; rangeMin: number; rangeMax: number } | null> {
-    try {
-      const client = await this.createApiClient(adAccountId, profileId, marketplace);
-
-      const body = {
-        keywordId: keywordId.toString(),
-      };
-
-      const response = await retryWithBackoff(async () => {
-        return client.post('/sp/keywords/bidRecommendations', body, {
-          headers: {
-            Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
-            'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
-          },
-        });
-      });
-
-      const data = response.data;
-      if (data?.recommendations?.length > 0) {
-        const rec = data.recommendations[0];
-        return {
-          suggested: rec.suggestedBid?.suggested ?? rec.suggestedBid ?? 0,
-          rangeMin: rec.suggestedBid?.rangeStart ?? rec.rangeStart ?? 0,
-          rangeMax: rec.suggestedBid?.rangeEnd ?? rec.rangeEnd ?? 0,
-        };
-      }
-      return null;
-    } catch (error) {
-      this.logger.warn(`getBidRecommendations failed for keyword ${keywordId}: ${error.message}`);
-      return null;
-    }
-  }
-
   /**
-   * Récupère les bid recommendations Amazon pour un product target.
-   * Utilise l'API SP /sp/targets/bidRecommendations.
-   * Retourne null si l'API échoue (le calcul fonctionne sans).
+   * Récupère les bid recommendations Amazon via l'endpoint unifié v4 theme-based.
+   * POST /sp/targets/bid/recommendations
+   * Fonctionne pour keywords ET targets via les targetingExpressions.
    */
-  async getTargetBidRecommendations(
+  async getThemeBasedBidRecommendation(
     adAccountId: string,
     profileId: number,
     marketplace: Marketplace,
-    targetId: number,
+    params: {
+      campaignId: number;
+      adGroupId: number;
+      targetingExpression: { type: string; value?: string };
+      strategy?: string;
+    },
   ): Promise<{ suggested: number; rangeMin: number; rangeMax: number } | null> {
     try {
       const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-      const body = {
-        targetId: targetId.toString(),
+      // Mapper la strategy DB vers le format Amazon API
+      const strategyMap: Record<string, string> = {
+        legacyforsales: 'LEGACY_FOR_SALES',
+        legacy_for_sales: 'LEGACY_FOR_SALES',
+        autoforsales: 'AUTO_FOR_SALES',
+        auto_for_sales: 'AUTO_FOR_SALES',
+        manual: 'MANUAL',
+        rule_based: 'RULE_BASED',
+      };
+      const rawStrategy = (params.strategy || 'LEGACY_FOR_SALES').toLowerCase().replace(/\s+/g, '');
+      const strategy = strategyMap[rawStrategy] || params.strategy?.toUpperCase() || 'LEGACY_FOR_SALES';
+
+      const body: Record<string, any> = {
+        campaignId: params.campaignId,
+        adGroupId: params.adGroupId,
+        recommendationType: 'BIDS_FOR_EXISTING_AD_GROUP',
+        targetingExpressions: [params.targetingExpression],
+        strategy,
       };
 
+      this.logger.log(
+        `[BID-RECO] Requesting theme-based bid for campaign=${params.campaignId} ` +
+        `adGroup=${params.adGroupId} type=${params.targetingExpression.type} ` +
+        `value=${params.targetingExpression.value || 'N/A'} strategy=${strategy}`,
+      );
+      this.logger.log(`[BID-RECO] Full request body: ${JSON.stringify(body)}`);
+
       const response = await retryWithBackoff(async () => {
-        return client.post('/sp/targets/bidRecommendations', body, {
+        return client.post('/sp/targets/bid/recommendations', body, {
           headers: {
-            Accept: AMAZON_CONFIG.API_VERSION.TARGETS,
-            'Content-Type': AMAZON_CONFIG.API_VERSION.TARGETS,
+            Accept: AMAZON_CONFIG.API_VERSION.BID_RECOMMENDATIONS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.BID_RECOMMENDATIONS,
           },
         });
       });
 
       const data = response.data;
-      if (data?.recommendations?.length > 0) {
-        const rec = data.recommendations[0];
-        return {
-          suggested: rec.suggestedBid?.suggested ?? rec.suggestedBid ?? 0,
-          rangeMin: rec.suggestedBid?.rangeStart ?? rec.rangeStart ?? 0,
-          rangeMax: rec.suggestedBid?.rangeEnd ?? rec.rangeEnd ?? 0,
-        };
+      this.logger.log(`[BID-RECO] Response: ${JSON.stringify(data).slice(0, 800)}`);
+
+      // Format v4 réel :
+      // {
+      //   bidRecommendations: [{
+      //     theme: "CONVERSION_OPPORTUNITIES",
+      //     bidRecommendationsForTargetingExpressions: [{
+      //       targetingExpression: {type, value},
+      //       bidValues: [
+      //         {suggestedBid: 0.22},  ← rangeMin
+      //         {suggestedBid: 0.41},  ← suggested (médian)
+      //         {suggestedBid: 0.51}   ← rangeMax
+      //       ]
+      //     }]
+      //   }]
+      // }
+
+      const themes = data?.bidRecommendations;
+      if (themes?.length > 0) {
+        const theme = themes[0];
+        const exprRecos = theme.bidRecommendationsForTargetingExpressions;
+        if (exprRecos?.length > 0) {
+          const bidValues = exprRecos[0].bidValues;
+          if (bidValues?.length > 0) {
+            // bidValues contient 3 entrées : [low, suggested, high]
+            const low = Number(bidValues[0]?.suggestedBid ?? 0);
+            const suggested = bidValues.length >= 2 ? Number(bidValues[1]?.suggestedBid ?? 0) : low;
+            const high = bidValues.length >= 3 ? Number(bidValues[2]?.suggestedBid ?? 0) : suggested;
+
+            this.logger.log(`[BID-RECO] Parsed: suggested=${suggested} range=[${low} - ${high}]`);
+            return {
+              suggested,
+              rangeMin: low,
+              rangeMax: high,
+            };
+          }
+        }
       }
+
+      this.logger.warn(`[BID-RECO] No recommendations found in response`);
       return null;
     } catch (error) {
-      this.logger.warn(`getTargetBidRecommendations failed for target ${targetId}: ${error.message}`);
+      this.logger.warn(`[BID-RECO] Failed: ${error.message} (${error.response?.status || 'no status'} - ${JSON.stringify(error.response?.data || '').slice(0, 300)})`);
       return null;
     }
   }
+
+  // v3 endpoints supprimés - Amazon a déprécié /sp/targets/bidRecommendations en mai 2025
+  // Tout passe par le v4 theme-based endpoint maintenant
 
   /**
    * Demande un rapport async
