@@ -36,6 +36,7 @@ export interface AuthorBookSummary {
   asin: string;
   marketplace: string;
   author: string;
+  coverImageUrl: string | null;
   acosTarget: number | null;
   metrics: {
     spend: number;
@@ -430,6 +431,7 @@ export class AuthorsService {
         asin: book.asin,
         marketplace: book.marketplace,
         author: book.author || 'Auteur inconnu',
+        coverImageUrl: book.coverImageUrl || null,
         acosTarget,
         metrics: {
           spend: Math.round(metrics.spend * 100) / 100,

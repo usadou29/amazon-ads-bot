@@ -13,7 +13,7 @@ import { workspaces } from '@/db/schema/workspaces';
 import { InsightsService } from '@/modules/insights/insights.service';
 import { AmazonClientService } from '@/modules/amazon-client/amazon-client.service';
 import { GUARDS } from '@/config/guards';
-import { calculateRecommendedBid, type BidCalculationResult, type BidEligibility } from './bid-calculator';
+import { calculateRecommendedBid, type BidCalculationResult, type BidEligibility, type BidDirection } from './bid-calculator';
 import { resolveDecisionWindow } from '@/modules/strategy/decision-window';
 import type { ActionSuggestionDto } from './action-suggestion.dto';
 import type { EntityDiagnosisCode, MetricsByWindow, WindowMetrics } from '@/modules/insights/types';
@@ -98,17 +98,28 @@ export class ActionSuggestionService {
     const breakEvenAcos = acosTarget; // ACoS cible = break-even dans ce contexte
     const diagnosisCode = this.insightsService.diagnoseEntity(metrics, breakEvenAcos);
 
-    // 5. Fetch Amazon bid recommendations (keywords seulement)
+    // 5. Fetch Amazon bid recommendations (keywords ET targets)
     let amazonBid: ActionSuggestionResponse['amazonBid'] | undefined;
-    if (entityType === 'keyword' && entity.adAccountId && entity.profileId) {
-      const rec = await this.amazonClient.getBidRecommendations(
-        entity.adAccountId,
-        entity.profileId,
-        entity.marketplace as Marketplace,
-        entity.amazonEntityId,
-      );
-      if (rec) {
-        amazonBid = rec;
+    if (entity.adAccountId && entity.profileId) {
+      try {
+        const rec = entityType === 'keyword'
+          ? await this.amazonClient.getBidRecommendations(
+              entity.adAccountId,
+              entity.profileId,
+              entity.marketplace as Marketplace,
+              entity.amazonEntityId,
+            )
+          : await this.amazonClient.getTargetBidRecommendations(
+              entity.adAccountId,
+              entity.profileId,
+              entity.marketplace as Marketplace,
+              entity.amazonEntityId,
+            );
+        if (rec) {
+          amazonBid = rec;
+        }
+      } catch (err) {
+        this.logger.warn(`Amazon bid recommendations failed: ${err.message}`);
       }
     }
 
@@ -116,6 +127,9 @@ export class ActionSuggestionService {
     const cvr = metrics.clicks > 0 ? metrics.orders / metrics.clicks : 0;
     const aov = metrics.orders > 0 ? metrics.sales / metrics.orders : 0;
     const acosDecimal = acosTarget / 100; // convertir % → décimal
+
+    // Déterminer la direction forcée basée sur le diagnostic
+    const bidDirection = this.diagnosisToBidDirection(diagnosisCode);
 
     const bidCalculation = calculateRecommendedBid({
       currentBid: entity.bid,
@@ -130,6 +144,7 @@ export class ActionSuggestionService {
       amazonSuggestedBid: amazonBid?.suggested,
       amazonBidRangeMin: amazonBid?.rangeMin,
       amazonBidRangeMax: amazonBid?.rangeMax,
+      direction: bidDirection,
     });
 
     // 7. Déterminer les actions disponibles
@@ -320,6 +335,25 @@ export class ActionSuggestionService {
       spend: Number(r.spend) || 0,
       sales: Number(r.sales) || 0,
     };
+  }
+
+  /**
+   * Détermine la direction de bid forcée à partir du diagnostic.
+   * - CLICKS_NO_SALES, EXPENSIVE_BUT_VALID → 'down' (baisser)
+   * - WINNER, BOOST_CANDIDATE → 'up' (monter)
+   * - Autres → null (pas de direction forcée, la formule décide)
+   */
+  private diagnosisToBidDirection(diagnosisCode: EntityDiagnosisCode): BidDirection {
+    switch (diagnosisCode) {
+      case 'clicks_no_sales':
+      case 'expensive_but_valid':
+        return 'down';
+      case 'winner':
+      case 'boost_candidate':
+        return 'up';
+      default:
+        return null;
+    }
   }
 
   private extractAmazonId(entityKey: string): number | null {

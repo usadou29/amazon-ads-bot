@@ -17,6 +17,8 @@ export type BidEligibility =
 
 export type PositioningLabel = 'top' | 'bon' | 'moyen' | 'faible';
 
+export type BidDirection = 'up' | 'down' | null;
+
 export interface BidCalculationInput {
   currentBid: number;
   acosTarget: number;          // en décimal (0.40 = 40%)
@@ -30,6 +32,7 @@ export interface BidCalculationInput {
   amazonSuggestedBid?: number; // bid recommandé Amazon (live)
   amazonBidRangeMin?: number;
   amazonBidRangeMax?: number;
+  direction?: BidDirection;    // direction forcée par le diagnostic (empêche bid_down de monter)
 }
 
 export interface BidCalculationResult {
@@ -54,6 +57,7 @@ const K_MAX = 0.95;
 const K_DEFAULT = 0.7;
 
 const SMALL_TWEAK_MAX_PCT = 10; // ±10% pour small_tweak_max
+const MIN_DIRECTION_STEP_PCT = 5; // Si la formule va dans le mauvais sens, forcer ±5% min
 
 const POSITIONING: Record<PositioningLabel, { factor: number; maxAcosRatio: number }> = {
   top:    { factor: 0.85, maxAcosRatio: 0.7 },
@@ -112,6 +116,33 @@ function applyAllGuards(
     capped: reasons.length > 0,
     reason: reasons.length > 0 ? reasons.join('; ') : undefined,
   };
+}
+
+/**
+ * Force le bid dans la bonne direction.
+ * Si direction === 'down' et proposedBid >= currentBid → réduire de MIN_DIRECTION_STEP_PCT
+ * Si direction === 'up' et proposedBid <= currentBid → augmenter de MIN_DIRECTION_STEP_PCT
+ */
+function enforceDirection(
+  currentBid: number,
+  proposedBid: number,
+  direction: BidDirection,
+): { bid: number; enforced: boolean } {
+  if (!direction) return { bid: proposedBid, enforced: false };
+
+  if (direction === 'down' && proposedBid >= currentBid) {
+    // La formule propose de monter ou stagne alors que le diagnostic veut baisser
+    const forcedBid = round2(currentBid * (1 - MIN_DIRECTION_STEP_PCT / 100));
+    return { bid: forcedBid, enforced: true };
+  }
+
+  if (direction === 'up' && proposedBid <= currentBid) {
+    // La formule propose de baisser ou stagne alors que le diagnostic veut monter
+    const forcedBid = round2(currentBid * (1 + MIN_DIRECTION_STEP_PCT / 100));
+    return { bid: forcedBid, enforced: true };
+  }
+
+  return { bid: proposedBid, enforced: false };
 }
 
 function determinePositioning(acos: number | null, acosTarget: number): {
@@ -199,8 +230,15 @@ export function calculateRecommendedBid(input: BidCalculationInput): BidCalculat
 
   // ── small_tweak_max : ±10% max, pas de formule complète ──
   if (eligibility === 'small_tweak_max') {
-    // Direction basée sur le positionnement
-    const direction = positioning.label === 'top' || positioning.label === 'bon' ? 1 : -1;
+    // Direction basée sur le positionnement, SAUF si une direction est forcée
+    let direction: number;
+    if (input.direction === 'down') {
+      direction = -1;
+    } else if (input.direction === 'up') {
+      direction = 1;
+    } else {
+      direction = positioning.label === 'top' || positioning.label === 'bon' ? 1 : -1;
+    }
     const tweakPct = direction * SMALL_TWEAK_MAX_PCT;
     const proposed = round2(currentBid * (1 + tweakPct / 100));
 
@@ -260,12 +298,21 @@ export function calculateRecommendedBid(input: BidCalculationInput): BidCalculat
 
   rawBid = round2(rawBid);
 
+  // Forcer la direction si spécifiée (empêche bid_down de proposer plus haut)
+  const directionResult = enforceDirection(currentBid, rawBid, input.direction ?? null);
+  if (directionResult.enforced) {
+    rawBid = directionResult.bid;
+  }
+
   // Appliquer TOUS les gardes-fous (MIN/MAX + pourcentage)
   const guards = applyAllGuards(currentBid, rawBid);
   const finalBid = guards.finalBid;
 
   const changePct = ((finalBid - currentBid) / currentBid * 100).toFixed(1);
-  const direction = finalBid >= currentBid ? 'hausse' : 'baisse';
+  const dirLabel = finalBid >= currentBid ? 'hausse' : 'baisse';
+  const dirNote = directionResult.enforced
+    ? ` Direction forcée (${input.direction}).`
+    : '';
 
   return {
     ...base,
@@ -275,6 +322,6 @@ export function calculateRecommendedBid(input: BidCalculationInput): BidCalculat
     kFactor: round2(kFactor * 100) / 100,
     guardsCapped: guards.capped,
     guardsReason: guards.reason,
-    explanation: `CPC cible = ${cpcTarget}€, k = ${kFactor.toFixed(2)}, positionnement ${positioning.label}. ${direction === 'hausse' ? 'Augmentation' : 'Baisse'} de ${changePct}%.`,
+    explanation: `CPC cible = ${cpcTarget}€, k = ${kFactor.toFixed(2)}, positionnement ${positioning.label}. ${dirLabel === 'hausse' ? 'Augmentation' : 'Baisse'} de ${changePct}%.${dirNote}`,
   };
 }

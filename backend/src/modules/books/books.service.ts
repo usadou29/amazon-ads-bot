@@ -33,6 +33,7 @@ export interface CreateBookDto {
   title?: string;
   author?: string;
   kdpId?: string;
+  coverImageUrl?: string;
   publicationDate?: string;
   categories?: string[];
   tags?: string[];
@@ -47,6 +48,7 @@ export interface UpdateBookDto {
   title?: string;
   author?: string;
   kdpId?: string;
+  coverImageUrl?: string | null;
   publicationDate?: string;
   categories?: string[];
   tags?: string[];
@@ -214,6 +216,7 @@ export class BooksService {
         title: dto.title,
         author: dto.author,
         kdpId: dto.kdpId,
+        coverImageUrl: dto.coverImageUrl || null,
         publicationDate: dto.publicationDate,
         categories: dto.categories || [],
         tags: dto.tags || [],
@@ -251,6 +254,7 @@ export class BooksService {
     if (dto.title !== undefined) updateData.title = dto.title;
     if (dto.author !== undefined) updateData.author = dto.author;
     if (dto.kdpId !== undefined) updateData.kdpId = dto.kdpId;
+    if (dto.coverImageUrl !== undefined) updateData.coverImageUrl = dto.coverImageUrl;
     if (dto.publicationDate !== undefined) updateData.publicationDate = dto.publicationDate;
     if (dto.categories !== undefined) updateData.categories = dto.categories;
     if (dto.tags !== undefined) updateData.tags = dto.tags;
@@ -1077,6 +1081,7 @@ export class BooksService {
         asin: book.asin,
         author: book.author || 'Auteur inconnu',
         marketplace: book.marketplace,
+        coverImageUrl: book.coverImageUrl || null,
         publicationDate: book.publicationDate || null,
         acosTarget: book.acosTarget ? Number(book.acosTarget) : 40,
         royaltyRate: book.royaltyRate ? Number(book.royaltyRate) : null,

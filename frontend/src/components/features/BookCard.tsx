@@ -10,6 +10,7 @@ export interface BookCardData {
   asin: string;
   marketplace: string;
   author?: string;
+  coverImageUrl?: string | null;
   status: StatusResult;
   profit: number;
   profitFormatted: string;
@@ -123,10 +124,18 @@ export function BookCard({ book, onDeleted }: BookCardProps) {
               <p className="text-xs text-slate-400 mt-0.5">{book.author}</p>
             )}
           </div>
-          {/* Pastille de couverture placeholder */}
-          <div className="w-10 h-14 rounded bg-slate-200 flex-shrink-0 flex items-center justify-center text-lg">
-            {book.status.emoji}
-          </div>
+          {/* Couverture du livre */}
+          {book.coverImageUrl ? (
+            <img
+              src={book.coverImageUrl}
+              alt={book.title || book.asin}
+              className="w-28 h-40 rounded-lg object-cover flex-shrink-0 shadow-md"
+            />
+          ) : (
+            <div className="w-28 h-40 rounded-lg bg-slate-200 flex-shrink-0 flex items-center justify-center text-3xl">
+              {book.status.emoji}
+            </div>
+          )}
         </div>
 
         {/* ── Profit — LA métrique principale ── */}
