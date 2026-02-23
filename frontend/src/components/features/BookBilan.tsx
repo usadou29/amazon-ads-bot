@@ -599,68 +599,23 @@ export function BookBilan({ campaigns }: BookBilanProps) {
         )}
       </div>
 
-      {/* ═══ Détail par catégorie (secondaire) ═══ */}
-      <div className="px-5 pb-1">
-        <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider mb-2">Détail par catégorie</p>
-      </div>
-
-      {/* ═══ Catégories regroupées avec actions ═══ */}
-      <div className="px-5 pb-4 space-y-3">
-        {categoryResults.map(cat => {
-          const prioConf = PRIORITY_CONFIG[cat.priority];
-          const borderLeft = CATEGORY_BORDER[cat.definition.key];
-
+      {/* ═══ Détail technique (toujours visible) ═══ */}
+      <div className="px-5 pb-4 space-y-2">
+        {allDiagnosisCounts.map(d => {
           return (
-            <div
-              key={cat.definition.key}
-              className={`rounded-lg border border-slate-100 ${borderLeft} border-l-[3px] bg-white overflow-hidden`}
-            >
-              {/* En-tête catégorie */}
-              <div className="flex items-center justify-between px-4 py-2.5">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-base flex-shrink-0">{cat.definition.icon}</span>
-                  <span className="text-sm font-medium text-slate-800 truncate">
-                    {cat.definition.label}
-                  </span>
-                  <span className="text-xs text-slate-400 flex-shrink-0">
-                    {cat.entityCount} ({cat.pct}%)
+            <div key={d.code} className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className={`text-xs font-medium ${d.colors.text}`}>{d.label}</span>
+                  <span className="text-xs text-slate-400 ml-2 flex-shrink-0 tabular-nums">
+                    {d.count} ({d.pct}%)
                   </span>
                 </div>
-                <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider ${prioConf.bg} ${prioConf.text} ${prioConf.border} border`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${prioConf.dot}`} />
-                  {prioConf.label}
-                </span>
-              </div>
-
-              {/* Diagnostics + Actions */}
-              <div className="px-4 pb-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
-                {/* Diagnostics de cette catégorie */}
-                <div>
-                  {cat.diagnosisBreakdown.map(d => (
-                    <div key={d.code} className="flex items-center justify-between py-0.5">
-                      <span className="text-xs text-slate-500">{d.label}</span>
-                      <span className="text-xs text-slate-400 tabular-nums">{d.count}</span>
-                    </div>
-                  ))}
-                </div>
-                {/* Actions associées */}
-                <div>
-                  {cat.actions.length > 0 ? (
-                    cat.actions.map(a => {
-                      const colors = ACTION_COLORS[a.type] || { bg: 'bg-slate-50', text: 'text-slate-600' };
-                      return (
-                        <div key={a.type} className="flex items-center gap-1.5 py-0.5">
-                          <span className="text-xs text-slate-400">→</span>
-                          <span className={`inline-flex items-center px-1.5 py-px rounded text-[11px] font-medium ${colors.bg} ${colors.text}`}>
-                            {a.label}
-                          </span>
-                          <span className="text-[11px] text-slate-400 tabular-nums">×{a.count}</span>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <p className="text-xs text-slate-300 italic py-0.5">Aucune action</p>
-                  )}
+                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${d.pct}%`, backgroundColor: getBarColor(d.code) }}
+                  />
                 </div>
               </div>
             </div>
@@ -668,13 +623,13 @@ export function BookBilan({ campaigns }: BookBilanProps) {
         })}
       </div>
 
-      {/* ═══ Détail technique (dépliable) ═══ */}
+      {/* ═══ Détail par catégorie (dépliable) ═══ */}
       <div className="border-t border-slate-100">
         <button
           onClick={() => setShowTechnicalDetail(prev => !prev)}
           className="w-full flex items-center justify-between px-5 py-2.5 text-xs text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors"
         >
-          <span>Détail technique</span>
+          <span>Détail par catégorie</span>
           <svg
             className={`w-3.5 h-3.5 transition-transform ${showTechnicalDetail ? 'rotate-180' : ''}`}
             fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
@@ -684,22 +639,62 @@ export function BookBilan({ campaigns }: BookBilanProps) {
         </button>
 
         {showTechnicalDetail && (
-          <div className="px-5 pb-4 space-y-2">
-            {allDiagnosisCounts.map(d => {
+          <div className="px-5 pb-4 space-y-3">
+            {categoryResults.map(cat => {
+              const prioConf = PRIORITY_CONFIG[cat.priority];
+              const borderLeft = CATEGORY_BORDER[cat.definition.key];
+
               return (
-                <div key={d.code} className="flex items-center gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className={`text-xs font-medium ${d.colors.text}`}>{d.label}</span>
-                      <span className="text-xs text-slate-400 ml-2 flex-shrink-0 tabular-nums">
-                        {d.count} ({d.pct}%)
+                <div
+                  key={cat.definition.key}
+                  className={`rounded-lg border border-slate-100 ${borderLeft} border-l-[3px] bg-white overflow-hidden`}
+                >
+                  {/* En-tête catégorie */}
+                  <div className="flex items-center justify-between px-4 py-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-base flex-shrink-0">{cat.definition.icon}</span>
+                      <span className="text-sm font-medium text-slate-800 truncate">
+                        {cat.definition.label}
+                      </span>
+                      <span className="text-xs text-slate-400 flex-shrink-0">
+                        {cat.entityCount} ({cat.pct}%)
                       </span>
                     </div>
-                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{ width: `${d.pct}%`, backgroundColor: getBarColor(d.code) }}
-                      />
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider ${prioConf.bg} ${prioConf.text} ${prioConf.border} border`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${prioConf.dot}`} />
+                      {prioConf.label}
+                    </span>
+                  </div>
+
+                  {/* Diagnostics + Actions */}
+                  <div className="px-4 pb-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                    {/* Diagnostics de cette catégorie */}
+                    <div>
+                      {cat.diagnosisBreakdown.map(d => (
+                        <div key={d.code} className="flex items-center justify-between py-0.5">
+                          <span className="text-xs text-slate-500">{d.label}</span>
+                          <span className="text-xs text-slate-400 tabular-nums">{d.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Actions associées */}
+                    <div>
+                      {cat.actions.length > 0 ? (
+                        cat.actions.map(a => {
+                          const colors = ACTION_COLORS[a.type] || { bg: 'bg-slate-50', text: 'text-slate-600' };
+                          return (
+                            <div key={a.type} className="flex items-center gap-1.5 py-0.5">
+                              <span className="text-xs text-slate-400">→</span>
+                              <span className={`inline-flex items-center px-1.5 py-px rounded text-[11px] font-medium ${colors.bg} ${colors.text}`}>
+                                {a.label}
+                              </span>
+                              <span className="text-[11px] text-slate-400 tabular-nums">×{a.count}</span>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <p className="text-xs text-slate-300 italic py-0.5">Aucune action</p>
+                      )}
                     </div>
                   </div>
                 </div>

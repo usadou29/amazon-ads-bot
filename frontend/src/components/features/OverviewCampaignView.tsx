@@ -14,6 +14,11 @@ import { t } from '@/lib/i18n';
 import { fetchBookCampaignDetails } from '@/lib/api/client';
 
 // ── Types ──
+interface TrendData {
+  direction: 'up' | 'down' | 'stable' | 'new' | 'insufficient';
+  percentChange: number;
+}
+
 interface TargetMetrics {
   impressions: number;
   clicks: number;
@@ -26,6 +31,7 @@ interface TargetMetrics {
   cvr: number;
   cpc: number;
   impressionShare: number | null;
+  trend?: TrendData;
 }
 
 interface KeywordItem {
@@ -189,6 +195,44 @@ function DemandBadge({ impressions, periodDays }: { impressions: number; periodD
       title={`${formatInt(impressions)} impr. sur ${periodDays}j (${Math.round(dailyImpr)}/jour)`}
     >
       {label}
+    </span>
+  );
+}
+
+// ── Trend Badge ──
+// Affiche la tendance de rentabilité sur 7 jours (comparaison ACoS J1-J7 vs J8-J14)
+function TrendBadge({ trend }: { trend?: TrendData }) {
+  if (!trend || trend.direction === 'insufficient') {
+    return <span className="text-[10px] text-slate-300">—</span>;
+  }
+
+  if (trend.direction === 'new') {
+    return (
+      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600">
+        <span>★</span>
+        <span>Nouveau</span>
+      </span>
+    );
+  }
+
+  // down = ACoS baissé = rentabilité en hausse = vert ↑
+  // up = ACoS monté = rentabilité en baisse = rouge ↓
+  const config = {
+    down: { bg: 'bg-emerald-50', text: 'text-emerald-700', arrow: '↑' },
+    up: { bg: 'bg-red-50', text: 'text-red-700', arrow: '↓' },
+    stable: { bg: 'bg-amber-50', text: 'text-amber-600', arrow: '→' },
+  } as const;
+
+  const c = config[trend.direction];
+  const absChange = Math.round(Math.abs(trend.percentChange));
+
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium ${c.bg} ${c.text}`}
+      title={`Variation ACoS 7j : ${trend.percentChange > 0 ? '+' : ''}${Math.round(trend.percentChange)}%`}
+    >
+      <span>{c.arrow}</span>
+      <span>{absChange}%</span>
     </span>
   );
 }
@@ -594,6 +638,7 @@ function KeywordTableWithRecos({
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Tend. 7j</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
@@ -643,6 +688,9 @@ function KeywordTableWithRecos({
                     kw.metrics.acos > 50 ? 'text-red-600' : kw.metrics.acos > 30 ? 'text-amber-600' : kw.metrics.acos > 0 ? 'text-emerald-600' : 'text-slate-400'
                   }`}>
                     {kw.metrics.acos > 0 ? formatPct(kw.metrics.acos) : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    <TrendBadge trend={kw.metrics.trend} />
                   </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {kw.insight ? (
@@ -817,6 +865,7 @@ function ProductTargetTableWithRecos({
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Tend. 7j</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
@@ -866,6 +915,9 @@ function ProductTargetTableWithRecos({
                     tg.metrics.acos > 50 ? 'text-red-600' : tg.metrics.acos > 30 ? 'text-amber-600' : tg.metrics.acos > 0 ? 'text-emerald-600' : 'text-slate-400'
                   }`}>
                     {tg.metrics.acos > 0 ? formatPct(tg.metrics.acos) : '—'}
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    <TrendBadge trend={tg.metrics.trend} />
                   </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {tg.insight ? (

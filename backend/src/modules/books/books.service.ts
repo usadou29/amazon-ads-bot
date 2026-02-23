@@ -1265,6 +1265,11 @@ export class BooksService {
     const { startDate: startDate14d } = this.computeDateRange(14);
     const { startDate: startDate30d } = this.computeDateRange(30);
 
+    // Trend: previous 7-day window = [startDate14d .. startDate7d - 1 day]
+    const prev7dEndDate = new Date(startDate7d + 'T00:00:00Z');
+    prev7dEndDate.setUTCDate(prev7dEndDate.getUTCDate() - 1);
+    const previous7dEndStr = prev7dEndDate.toISOString().split('T')[0];
+
     this.logger.log(
       `[CAMPAIGN-DETAIL] Multi-window fetch: display=${displayDays}d (${displayStartDate}), ` +
       `strategic=${strategicDays}d (${strategicStartDate}), trend=${trendDays}d (${trendStartDate}), ` +
@@ -1536,6 +1541,12 @@ export class BooksService {
         const matchLabel = k.matchType
           ? (matchTypeLabels[k.matchType.toLowerCase()] || k.matchType)
           : '';
+
+        // Trend 7j : comparer ACoS [J1-J7] vs [J8-J14]
+        const current7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate7d, endDate) : null;
+        const previous7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate14d, previous7dEndStr) : null;
+        const trend = current7d && previous7d ? this.computeTrend(current7d, previous7d) : undefined;
+
         return {
           id: k.id,
           amazonKeywordId: String(k.amazonKeywordId),
@@ -1544,9 +1555,12 @@ export class BooksService {
           matchTypeRaw: k.matchType,
           state: k.state,
           bid: k.bid ? Number(k.bid) : null,
-          metrics: rows.length > 0
-            ? this.aggregateRawRows(rows, displayStartDate, endDate)
-            : this.emptyMetrics(),
+          metrics: {
+            ...(rows.length > 0
+              ? this.aggregateRawRows(rows, displayStartDate, endDate)
+              : this.emptyMetrics()),
+            trend,
+          },
           _rawRows: rows, // keep for strategic aggregation
         };
       });
@@ -1570,6 +1584,12 @@ export class BooksService {
         } else if (typeof t.expression === 'string') {
           label = t.expression;
         }
+
+        // Trend 7j : comparer ACoS [J1-J7] vs [J8-J14]
+        const current7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate7d, endDate) : null;
+        const previous7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate14d, previous7dEndStr) : null;
+        const trend = current7d && previous7d ? this.computeTrend(current7d, previous7d) : undefined;
+
         return {
           id: t.id,
           amazonTargetId: String(t.amazonTargetId),
@@ -1577,9 +1597,12 @@ export class BooksService {
           expression: label || t.expressionType || 'Cible produit',
           state: t.state,
           bid: t.bid ? Number(t.bid) : null,
-          metrics: rows.length > 0
-            ? this.aggregateRawRows(rows, displayStartDate, endDate)
-            : this.emptyMetrics(),
+          metrics: {
+            ...(rows.length > 0
+              ? this.aggregateRawRows(rows, displayStartDate, endDate)
+              : this.emptyMetrics()),
+            trend,
+          },
           _rawRows: rows, // keep for strategic aggregation
         };
       });
@@ -1948,6 +1971,54 @@ export class BooksService {
       startDate: start.toISOString().split('T')[0],
       endDate: end.toISOString().split('T')[0],
     };
+  }
+
+  /**
+   * Compare l'ACoS de la fenêtre courante (7j) vs la fenêtre précédente (7j)
+   * pour déterminer la tendance de rentabilité.
+   * ACoS en baisse = amélioration (down/vert), ACoS en hausse = dégradation (up/rouge).
+   */
+  private computeTrend(
+    current: { spend: number; sales: number; clicks: number; impressions: number },
+    previous: { spend: number; sales: number; clicks: number; impressions: number },
+  ): { direction: 'up' | 'down' | 'stable' | 'new' | 'insufficient'; percentChange: number } {
+    const cAcos = current.sales > 0 ? (current.spend / current.sales) * 100 : null;
+    const pAcos = previous.sales > 0 ? (previous.spend / previous.sales) * 100 : null;
+
+    // Pas assez de données sur les 2 fenêtres
+    if (current.impressions < 10 && previous.impressions < 10) {
+      return { direction: 'insufficient', percentChange: 0 };
+    }
+
+    // Mot-clé nouveau (pas de données sur la fenêtre précédente)
+    if (previous.impressions < 10) {
+      return { direction: 'new', percentChange: 0 };
+    }
+
+    // Ni la période courante ni la précédente n'ont de ventes
+    if (cAcos === null && pAcos === null) {
+      return { direction: 'insufficient', percentChange: 0 };
+    }
+
+    // Période précédente avait des ventes, pas la courante → dégradation
+    if (cAcos === null && pAcos !== null) {
+      return { direction: 'up', percentChange: 100 };
+    }
+
+    // Période courante a des ventes, pas la précédente → amélioration
+    if (cAcos !== null && pAcos === null) {
+      return { direction: 'down', percentChange: -100 };
+    }
+
+    // Les deux ont des ventes → comparer ACoS
+    const delta = ((cAcos! - pAcos!) / pAcos!) * 100;
+    const rounded = Math.round(delta * 10) / 10;
+
+    if (Math.abs(rounded) < 5) {
+      return { direction: 'stable', percentChange: rounded };
+    }
+    // ACoS baissé = amélioration (vert ↓), ACoS monté = dégradation (rouge ↑)
+    return { direction: rounded < 0 ? 'down' : 'up', percentChange: rounded };
   }
 
   /**
