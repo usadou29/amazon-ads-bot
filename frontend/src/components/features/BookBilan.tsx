@@ -266,13 +266,167 @@ function generateCampaignNarrative(
 }
 
 // ══════════════════════════════════════════════════════════════
+//  DIAGNOSTIC EXPERT GLOBAL
+// ══════════════════════════════════════════════════════════════
+
+interface GlobalExpertSummary {
+  headline: string;
+  explanation: string;
+  priorityFocus: 'conversion' | 'visibility' | 'learning';
+}
+
+interface ExpertSummaryInput {
+  visibilityPercent: number;
+  conversionPercent: number;
+  performingPercent: number;
+  testingPercent: number;
+  diagnosticsCounts: {
+    total: number;
+    clicksNoSales: number;
+    noImpressions: number;
+    winners: number;
+    boostCandidates: number;
+  };
+  lifecyclePhase?: string;
+}
+
+/**
+ * Génère un diagnostic expert compréhensible par un auteur KDP.
+ * 100% déterministe — aucun appel IA externe.
+ *
+ * Logique :
+ *  1. Si peu de données (< 5 entités) → apprentissage
+ *  2. Si conversion% >= visibility% et conversion% > 20% → pb conversion
+ *  3. Si visibility% > conversion% et visibility% > 20% → pb visibilité
+ *  4. Si les deux sont faibles ou équilibrés → apprentissage
+ *  5. Override : si > 50% performants → féliciter
+ */
+export function generateGlobalExpertSummary(input: ExpertSummaryInput): GlobalExpertSummary {
+  const {
+    visibilityPercent,
+    conversionPercent,
+    performingPercent,
+    testingPercent,
+    diagnosticsCounts,
+    lifecyclePhase,
+  } = input;
+
+  const total = diagnosticsCounts.total;
+
+  // ── Cas 0 : pas de données ──
+  if (total === 0) {
+    return {
+      headline: 'Aucune donnée de campagne disponible.',
+      explanation: 'Lance tes premières campagnes pour obtenir un diagnostic.',
+      priorityFocus: 'learning',
+    };
+  }
+
+  // ── Cas 1 : trop peu d'entités pour conclure ──
+  if (total < 5) {
+    return {
+      headline: 'Tes campagnes démarrent — on collecte les premières données.',
+      explanation: `Avec seulement ${total} ciblage${total > 1 ? 's' : ''} analysé${total > 1 ? 's' : ''}, c'est encore trop tôt pour tirer des conclusions. Laisse tourner quelques jours.`,
+      priorityFocus: 'learning',
+    };
+  }
+
+  // ── Cas 2 : majorité performante (> 50%) ──
+  if (performingPercent > 50) {
+    const winnersTotal = diagnosticsCounts.winners + diagnosticsCounts.boostCandidates;
+    if (conversionPercent > 15) {
+      return {
+        headline: `La majorité de tes ciblages sont rentables, mais ${conversionPercent}% présentent encore des problèmes de conversion.`,
+        explanation: 'Tes campagnes tournent bien. Pour aller plus loin, concentre-toi sur les mots-clés qui génèrent des clics sans ventes — une amélioration de ta fiche livre pourrait débloquer ces derniers.',
+        priorityFocus: 'conversion',
+      };
+    }
+    return {
+      headline: `Tes campagnes sont performantes : ${winnersTotal} ciblage${winnersTotal > 1 ? 's' : ''} rentable${winnersTotal > 1 ? 's' : ''}.`,
+      explanation: 'Continue sur cette lancée. Surveille régulièrement les performances et augmente progressivement les enchères sur tes meilleurs mots-clés.',
+      priorityFocus: 'visibility',
+    };
+  }
+
+  // ── Cas 3 : conversion domine ──
+  if (conversionPercent >= visibilityPercent && conversionPercent > 20) {
+    const isLaunch = lifecyclePhase === 'launch';
+    const clicksNoSales = diagnosticsCounts.clicksNoSales;
+
+    if (conversionPercent >= 50) {
+      return {
+        headline: `Ton livre reçoit du trafic, mais plus de la moitié de tes ciblages ne convertissent pas.`,
+        explanation: isLaunch
+          ? `En phase de lancement, c'est normal d'avoir un taux de conversion bas. Mais avec ${clicksNoSales} mot${clicksNoSales > 1 ? 's' : ''}-clé${clicksNoSales > 1 ? 's' : ''} en "clics sans ventes", vérifie ta fiche livre : titre, description, couverture et prix.`
+          : `Avant d'investir plus en publicité, améliore d'abord ta fiche livre (couverture, description, avis). ${clicksNoSales} ciblage${clicksNoSales > 1 ? 's' : ''} attirent des lecteurs qui repartent sans acheter.`,
+        priorityFocus: 'conversion',
+      };
+    }
+
+    return {
+      headline: `${conversionPercent}% de tes ciblages attirent des clics mais ne génèrent pas de ventes.`,
+      explanation: 'Le trafic est là, mais quelque chose freine l\'achat. Vérifie ta couverture, ta description et tes avis — c\'est souvent là que se joue la conversion.',
+      priorityFocus: 'conversion',
+    };
+  }
+
+  // ── Cas 4 : visibilité domine ──
+  if (visibilityPercent > conversionPercent && visibilityPercent > 20) {
+    const noImpressions = diagnosticsCounts.noImpressions;
+
+    if (visibilityPercent >= 50) {
+      return {
+        headline: `Plus de la moitié de tes ciblages manquent de visibilité.`,
+        explanation: noImpressions > 0
+          ? `${noImpressions} mot${noImpressions > 1 ? 's' : ''}-clé${noImpressions > 1 ? 's' : ''} n'ont reçu aucune impression. Tes enchères sont probablement trop basses, ou ces termes sont trop compétitifs. Augmente progressivement les enchères sur les plus pertinents.`
+          : 'Tes annonces apparaissent peu dans les résultats. Augmenter les enchères sur tes termes prioritaires te donnera plus de données pour optimiser.',
+        priorityFocus: 'visibility',
+      };
+    }
+
+    return {
+      headline: `${visibilityPercent}% de tes ciblages ne reçoivent pas assez de trafic.`,
+      explanation: 'Pour que tes campagnes puissent apprendre et s\'optimiser, elles ont besoin de visibilité. Augmente les enchères sur les termes les plus pertinents pour ton livre.',
+      priorityFocus: 'visibility',
+    };
+  }
+
+  // ── Cas 5 : phase d'apprentissage (testing élevé ou équilibre) ──
+  if (testingPercent >= 30) {
+    return {
+      headline: 'Tes campagnes accumulent des données — c\'est la phase d\'apprentissage.',
+      explanation: `${testingPercent}% de tes ciblages sont en cours de test. Dans quelques jours, on aura assez de clics pour savoir lesquels convertissent et ajuster les enchères.`,
+      priorityFocus: 'learning',
+    };
+  }
+
+  // ── Cas 6 : mixte ou équilibre (fallback) ──
+  if (conversionPercent > 0 && visibilityPercent > 0) {
+    const mainIssue = conversionPercent >= visibilityPercent ? 'conversion' : 'visibility';
+    return {
+      headline: 'Tes campagnes présentent des signaux mixtes.',
+      explanation: mainIssue === 'conversion'
+        ? 'Tu as à la fois des problèmes de visibilité et de conversion. Commence par la conversion : améliore ta fiche livre, puis augmente progressivement les enchères.'
+        : 'Tu as à la fois des problèmes de visibilité et de conversion. Commence par la visibilité : augmente tes enchères pour collecter plus de données, puis optimise la conversion.',
+      priorityFocus: mainIssue,
+    };
+  }
+
+  return {
+    headline: 'Tes campagnes sont en cours d\'analyse.',
+    explanation: 'Pas encore assez de données pour identifier une tendance claire. Continue de laisser tourner.',
+    priorityFocus: 'learning',
+  };
+}
+
+// ══════════════════════════════════════════════════════════════
 //  COMPOSANT PRINCIPAL
 // ══════════════════════════════════════════════════════════════
 
 export function BookBilan({ campaigns }: BookBilanProps) {
   const [showTechnicalDetail, setShowTechnicalDetail] = useState(false);
 
-  const { categoryResults, totalEntities, narrative, allDiagnosisCounts } = useMemo(() => {
+  const { categoryResults, totalEntities, narrative, expertSummary, allDiagnosisCounts } = useMemo(() => {
     // ── 1. Collecter les données brutes ──
     const diagMap = new Map<string, number>();
     const actMapByCategory = new Map<HumanCategory, Map<string, number>>();
@@ -358,32 +512,96 @@ export function BookBilan({ campaigns }: BookBilanProps) {
     // ── 4. Narrative ──
     const narrative = generateCampaignNarrative(categoryResults, total);
 
-    return { categoryResults, totalEntities: total, narrative, allDiagnosisCounts };
+    // ── 5. Diagnostic expert global ──
+    const visibilityCat = categoryResults.find(c => c.definition.key === 'visibility');
+    const conversionCat = categoryResults.find(c => c.definition.key === 'conversion');
+    const performingCat = categoryResults.find(c => c.definition.key === 'performing');
+    const testingCat = categoryResults.find(c => c.definition.key === 'testing');
+
+    const expertSummary = generateGlobalExpertSummary({
+      visibilityPercent: visibilityCat?.pct ?? 0,
+      conversionPercent: conversionCat?.pct ?? 0,
+      performingPercent: performingCat?.pct ?? 0,
+      testingPercent: testingCat?.pct ?? 0,
+      diagnosticsCounts: {
+        total,
+        clicksNoSales: diagMap.get('clicks_no_sales') || 0,
+        noImpressions: diagMap.get('no_impressions') || 0,
+        winners: diagMap.get('winner') || 0,
+        boostCandidates: diagMap.get('boost_candidate') || 0,
+      },
+    });
+
+    return { categoryResults, totalEntities: total, narrative, expertSummary, allDiagnosisCounts };
   }, [campaigns]);
 
   if (totalEntities === 0) return null;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-      {/* ═══ Synthèse narrative ═══ */}
+      {/* ═══ 🧠 Diagnostic expert global ═══ */}
       <div className="px-5 pt-5 pb-4">
-        <h3 className="text-sm font-semibold text-slate-900 mb-0.5">
-          Bilan de tes campagnes
-        </h3>
-        <p className="text-xs text-slate-400 mb-3">
-          {totalEntities} mot{totalEntities > 1 ? 's' : ''}-clé{totalEntities > 1 ? 's' : ''} / ciblage{totalEntities > 1 ? 's' : ''} analysé{totalEntities > 1 ? 's' : ''}
-        </p>
-
-        <div className="rounded-lg bg-slate-50 border border-slate-100 px-4 py-3">
-          <p className="text-sm font-medium text-slate-800 leading-snug">
-            {narrative.headline}
-          </p>
-          {narrative.detail && (
-            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              {narrative.detail}
-            </p>
-          )}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">🧠</span>
+            <h3 className="text-sm font-bold text-slate-900">Diagnostic global</h3>
+          </div>
+          <span className="text-xs text-slate-400">
+            {totalEntities} ciblage{totalEntities > 1 ? 's' : ''} analysé{totalEntities > 1 ? 's' : ''}
+          </span>
         </div>
+
+        {/* Bloc expert coloré selon priorityFocus */}
+        {expertSummary.priorityFocus === 'conversion' && (
+          <div className="rounded-lg border-2 border-red-200 bg-red-50 px-4 py-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-700 border border-red-300">
+                🎯 Priorité : Conversion
+              </span>
+            </div>
+            <p className="text-sm font-semibold text-red-900 leading-snug">
+              {expertSummary.headline}
+            </p>
+            <p className="text-[13px] text-red-800 mt-2 leading-relaxed">
+              {expertSummary.explanation}
+            </p>
+          </div>
+        )}
+        {expertSummary.priorityFocus === 'visibility' && (
+          <div className="rounded-lg border-2 border-amber-200 bg-amber-50 px-4 py-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-300">
+                👀 Priorité : Visibilité
+              </span>
+            </div>
+            <p className="text-sm font-semibold text-amber-900 leading-snug">
+              {expertSummary.headline}
+            </p>
+            <p className="text-[13px] text-amber-800 mt-2 leading-relaxed">
+              {expertSummary.explanation}
+            </p>
+          </div>
+        )}
+        {expertSummary.priorityFocus === 'learning' && (
+          <div className="rounded-lg border-2 border-blue-200 bg-blue-50 px-4 py-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-700 border border-blue-300">
+                🧪 Phase : Apprentissage
+              </span>
+            </div>
+            <p className="text-sm font-semibold text-blue-900 leading-snug">
+              {expertSummary.headline}
+            </p>
+            <p className="text-[13px] text-blue-800 mt-2 leading-relaxed">
+              {expertSummary.explanation}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* ═══ Détail par catégorie (secondaire) ═══ */}
+      <div className="px-5 pb-1">
+        <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider mb-2">Détail par catégorie</p>
       </div>
 
       {/* ═══ Catégories regroupées avec actions ═══ */}
