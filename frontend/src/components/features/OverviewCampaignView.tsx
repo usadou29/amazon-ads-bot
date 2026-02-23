@@ -1111,13 +1111,13 @@ export function OverviewCampaignView({
     );
   }
 
-  // Sort campaigns: manual first, then auto, then by spend descending
+  // Sort campaigns: manual first, then auto, then by name (stable order across period changes)
   const sortedCampaigns = [...campaignDetails.campaigns].sort((a, b) => {
     // manual targeting first
     if (a.targetingType === 'manual' && b.targetingType !== 'manual') return -1;
     if (a.targetingType !== 'manual' && b.targetingType === 'manual') return 1;
-    // then by total spend descending
-    return b.metrics.spend - a.metrics.spend;
+    // then alphabetically by name (stable across period changes)
+    return a.name.localeCompare(b.name);
   });
 
   return (
