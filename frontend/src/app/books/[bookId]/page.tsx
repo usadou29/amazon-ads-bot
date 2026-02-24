@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
@@ -30,9 +30,6 @@ import { useSyncContext } from '@/lib/contexts/SyncContext';
 
 // ── Sync status types ──
 type SyncStatus = 'idle' | 'syncing' | 'done';
-const POLL_INTERVAL_MS = 15_000;       // Poll every 15 seconds
-const FRESH_THRESHOLD_MS = 30 * 60_000; // Skip refresh if data < 30 min old
-const MAX_POLL_DURATION_MS = 10 * 60_000; // Stop polling after 10 min
 
 export default function BookDetailPage() {
   const params = useParams();
@@ -92,113 +89,46 @@ export default function BookDetailPage() {
       .finally(() => setOverviewLoading(false));
   }, [bookId, overviewDays, syncCompletedCount]);
 
-  // ── Smart sync: refresh + polling until data is fresh ──
+  // ── Simple sync: refresh bids from Amazon on page load, then reload data ──
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
-  const initialSyncedAtRef = useRef<string | null>(null);
-  const pollStartRef = useRef<number>(0);
   const dataRefreshedRef = useRef(false);
-
-  // Reload dashboard + campaign details from DB (no Amazon call)
-  const reloadAllData = useCallback(async () => {
-    try {
-      const [newDashboard, newDetails] = await Promise.all([
-        fetchBookDashboard(bookId, includeInactive),
-        fetchBookCampaignDetails(bookId, overviewDays),
-      ]);
-      setDashboard(newDashboard);
-      setOverviewCampaignDetails(newDetails);
-      return newDetails;
-    } catch {
-      return null;
-    }
-  }, [bookId, includeInactive, overviewDays]);
 
   useEffect(() => {
     if (!bookId || dataRefreshedRef.current) return;
     dataRefreshedRef.current = true;
     let cancelled = false;
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const checkAndRefresh = async () => {
-      // 1. Get current data to check lastSyncedAt
-      let details: any = null;
-      try {
-        details = await fetchBookCampaignDetails(bookId, overviewDays);
-        if (!cancelled) setOverviewCampaignDetails(details);
-      } catch { /* proceed anyway */ }
-
-      if (cancelled) return;
-
-      const lastSynced = details?.lastSyncedAt;
-      if (lastSynced) {
-        const age = Date.now() - new Date(lastSynced).getTime();
-        if (age < FRESH_THRESHOLD_MS) {
-          // Data is fresh, no need to refresh from Amazon
-          setSyncStatus('done');
-          pollTimer = setTimeout(() => { if (!cancelled) setSyncStatus('idle'); }, 3000);
-          return;
-        }
-      }
-
-      // 2. Data is stale — trigger refresh from Amazon
-      initialSyncedAtRef.current = lastSynced || null;
-      pollStartRef.current = Date.now();
+    const doRefresh = async () => {
       setSyncStatus('syncing');
-
       try {
+        // refreshBookData updates bids from Amazon API (instant)
+        // and requests new reports in background (for next cron cycle)
         await refreshBookData(bookId);
-      } catch {
-        if (!cancelled) setSyncStatus('idle');
-        return;
-      }
+      } catch { /* best effort */ }
 
       if (cancelled) return;
 
-      // 3. Start polling for new data
-      const pollForFreshData = async () => {
-        if (cancelled) return;
-
-        const elapsed = Date.now() - pollStartRef.current;
-        if (elapsed > MAX_POLL_DURATION_MS) {
-          if (!cancelled) {
-            setSyncStatus('idle');
-            await reloadAllData();
-          }
-          return;
-        }
-
-        try {
-          const freshDetails = await fetchBookCampaignDetails(bookId, overviewDays);
-          if (cancelled) return;
-          const newSyncedAt = freshDetails?.lastSyncedAt;
-
-          if (newSyncedAt && newSyncedAt !== initialSyncedAtRef.current) {
-            // Fresh data arrived! Reload everything
-            setOverviewCampaignDetails(freshDetails);
-            const newDashboard = await fetchBookDashboard(bookId, includeInactive);
-            if (!cancelled) {
-              setDashboard(newDashboard);
-              setSyncStatus('done');
-              pollTimer = setTimeout(() => { if (!cancelled) setSyncStatus('idle'); }, 5000);
-            }
-            return;
-          }
-        } catch { /* keep polling */ }
-
+      // Reload dashboard + campaign details with fresh bid data
+      try {
+        const [newDashboard, newDetails] = await Promise.all([
+          fetchBookDashboard(bookId, includeInactive),
+          fetchBookCampaignDetails(bookId, overviewDays),
+        ]);
         if (!cancelled) {
-          pollTimer = setTimeout(pollForFreshData, POLL_INTERVAL_MS);
+          setDashboard(newDashboard);
+          setOverviewCampaignDetails(newDetails);
         }
-      };
+      } catch { /* initial useEffects already loaded data */ }
 
-      pollTimer = setTimeout(pollForFreshData, POLL_INTERVAL_MS);
+      if (!cancelled) {
+        setSyncStatus('done');
+        setTimeout(() => { if (!cancelled) setSyncStatus('idle'); }, 5000);
+      }
     };
 
-    checkAndRefresh();
+    doRefresh();
 
-    return () => {
-      cancelled = true;
-      if (pollTimer) clearTimeout(pollTimer);
-    };
+    return () => { cancelled = true; };
   }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSaveRoyalty = async () => {
