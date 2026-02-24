@@ -249,9 +249,18 @@ export class ReportsService {
       existing[0].ingestedAt &&
       (Date.now() - new Date(existing[0].ingestedAt).getTime()) > STALE_THRESHOLD_MS;
 
+    // Anti-boucle : si un rapport vide a été re-essayé récemment (< 30min), ne pas re-requester
+    const EMPTY_RETRY_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+    const isEmptyReport = existing.length > 0 &&
+      existing[0].status === 'ingested' &&
+      (existing[0].recordsProcessed ?? 0) === 0;
+    const emptyRetryCooldown = isEmptyReport &&
+      existing[0].ingestedAt &&
+      (Date.now() - new Date(existing[0].ingestedAt).getTime()) < EMPTY_RETRY_COOLDOWN_MS;
+
     const shouldReRequest = existing.length > 0 && (
       existing[0].status === 'failed' ||
-      (existing[0].status === 'ingested' && (existing[0].recordsProcessed ?? 0) === 0) ||
+      (isEmptyReport && !emptyRetryCooldown) ||
       isStale
     );
 
@@ -512,11 +521,18 @@ export class ReportsService {
     if (rows.length === 0) {
       this.logger.warn(
         `Report ${job.id} (${job.reportType}): EMPTY report — 0 rows returned by Amazon. ` +
-        `This means Amazon returned no data for this report type.`,
+        `This may indicate an API issue or genuinely no data for this report type/period.`,
       );
+      // Marquer comme 'ingested' avec 0 records — le shouldReRequest le reprendra
+      // mais on ajoute un délai via ingestedAt pour éviter un retry en boucle
       await this.db
         .update(reportJobs)
-        .set({ status: 'ingested', ingestedAt: new Date(), recordsProcessed: 0 })
+        .set({
+          status: 'ingested',
+          ingestedAt: new Date(),
+          recordsProcessed: 0,
+          errorMessage: 'Empty report — Amazon returned 0 rows',
+        })
         .where(eq(reportJobs.id, job.id));
       return;
     }

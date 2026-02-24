@@ -60,6 +60,7 @@ const CATEGORIES: CategoryDefinition[] = [
     shortLabel: 'Conversion',
     diagnosisCodes: [
       EntityDiagnosisCode.CLICKS_NO_SALES,
+      EntityDiagnosisCode.VERY_EXPENSIVE,
       EntityDiagnosisCode.EXPENSIVE_BUT_VALID,
       EntityDiagnosisCode.ZERO_CLICKS, // vu mais ignoré = pb fiche/couverture = conversion au sens large
     ],
@@ -107,6 +108,7 @@ const DIAGNOSIS_LABELS: Record<string, string> = {
   very_low_clicks: 'Très peu de clics',
   low_clicks: 'Début de signal',
   clicks_no_sales: 'Clics sans ventes',
+  very_expensive: 'Trop cher',
   expensive_but_valid: 'Rentable… tout juste',
   winner: 'Gagnant',
   boost_candidate: 'Potentiel de croissance',
@@ -719,6 +721,7 @@ function getBarColor(code: string): string {
     case 'boost_candidate': return '#2563eb';
     case 'expensive_but_valid': return '#d97706';
     case 'clicks_no_sales': return '#dc2626';
+    case 'very_expensive': return '#ea580c';
     case 'zero_clicks': return '#f59e0b';
     case 'low_clicks': return '#3b82f6';
     case 'very_low_clicks': return '#94a3b8';

@@ -79,6 +79,7 @@ export function executionToCategory(execution: string): ActionCategory {
 /** Diagnosis codes that get urgency bonus for specific action types */
 const URGENCY_MAP: Record<string, ActionType[]> = {
   clicks_no_sales: ['pause', 'add_negative', 'bid_down'],
+  very_expensive: ['bid_down'],
   expensive_but_valid: ['bid_down'],
   winner: ['bid_up'],
   boost_candidate: ['bid_up'],

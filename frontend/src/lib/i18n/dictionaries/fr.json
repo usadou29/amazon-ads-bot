@@ -109,42 +109,42 @@
     "campaign": {
       "invisible": {
         "title": "Invisible aux yeux des clients",
-        "summary": "0 impression sur {periodDays} jours",
+        "summary": "0 impression sur {periodDays}j ({dateRange})",
         "explanation": "Personne ne voit ta campagne. Augmente les enchères ou vérifie que ta campagne est bien active."
       },
       "low_signal": {
         "title": "Signal faible",
-        "summary": "{impressions} impr. sur {periodDays}j — signal insuffisant",
-        "explanation": "Seulement {impressions} impressions sur {periodDays} jours. Il faut au moins 300 impressions pour tirer des conclusions fiables. Vérifie que tes enchères sont compétitives."
+        "summary": "{impressions} impr. sur {periodDays}j ({dateRange}) — signal insuffisant",
+        "explanation": "Seulement {impressions} impressions sur {periodDays}j ({dateRange}). Il faut au moins 300 impressions pour tirer des conclusions fiables. Vérifie que tes enchères sont compétitives."
       },
       "ignored": {
         "title": "Visible mais ignorée",
-        "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
+        "summary": "{impressions} impressions, 0 clic sur {periodDays}j ({dateRange})",
         "explanation": "Les gens voient ton annonce mais ne cliquent pas. Vérifie ta couverture et ton titre — c'est la première chose qu'ils voient."
       },
       "too_early": {
         "title": "Trop tôt pour conclure",
-        "summary": "{clicks} clics (il en faut au moins {minClicks}) sur {periodDays} jours",
+        "summary": "{clicks} clics (il en faut au moins {minClicks}) sur {periodDays}j ({dateRange})",
         "explanation": "Pas assez de données pour tirer une conclusion fiable. Laisse la campagne tourner quelques jours de plus."
       },
       "attractive_not_converting": {
         "title": "Attire mais ne vend pas",
-        "summary": "{clicks} clics, 0 vente sur {periodDays} jours (CTR {ctr}%)",
+        "summary": "{clicks} clics, 0 vente sur {periodDays}j ({dateRange}) (CTR {ctr}%)",
         "explanation": "Les gens cliquent sur ton annonce mais n'achètent pas. Le problème vient probablement de ta fiche livre : prix, couverture, résumé ou avis."
       },
       "promising_but_expensive": {
         "title": "Vend, mais à quel prix",
-        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays} jours",
+        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays}j ({dateRange})",
         "explanation": "Tu fais des ventes mais le coût publicitaire est trop élevé par rapport à tes redevances. Optimise tes enchères ou améliore ta fiche pour augmenter la conversion."
       },
       "profitable": {
         "title": "Rentable",
-        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays} jours",
+        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays}j ({dateRange})",
         "explanation": "Cette campagne te rapporte de l'argent. Tu peux envisager d'augmenter l'investissement pour accélérer."
       },
       "limited_by_budget": {
         "title": "Freinée par le budget",
-        "summary": "{spend}€ dépensés sur {periodDays} jours (budget quasi atteint)",
+        "summary": "{spend}€ dépensés sur {periodDays}j ({dateRange}) (budget quasi atteint)",
         "explanation": "Ta campagne est performante mais le budget quotidien la limite. Augmente-le pour lui donner plus d'espace."
       }
     },
@@ -152,63 +152,70 @@
       "no_impressions": {
         "title": "Pas diffusé",
 
-        "summary": "0 impression sur {periodDays} jours",
+        "summary": "0 impression sur {periodDays}j ({dateRange})",
         "explanation": "Ce {entityLabel} n'a généré aucune impression. L'enchère est probablement trop basse pour apparaître dans les résultats.",
         "nextStep": "Augmente l'enchère ou vérifie que ce {entityLabel} est bien actif."
       },
       "zero_clicks_low_volume": {
         "title": "Peu de visibilité",
 
-        "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
+        "summary": "{impressions} impressions, 0 clic sur {periodDays}j ({dateRange})",
         "explanation": "Trop peu de visibilité pour juger si ta couverture ou ton titre posent problème. Avec seulement {impressions} impressions, on est encore dans le bruit statistique.",
         "nextStep": "Augmente légèrement l'enchère ou élargis le ciblage pour accumuler des données. Il faut au moins 300 impressions pour avoir un signal fiable."
       },
       "zero_clicks": {
         "title": "Vu mais ignoré",
 
-        "summary": "{impressions} impressions, 0 clic sur {periodDays} jours",
+        "summary": "{impressions} impressions, 0 clic sur {periodDays}j ({dateRange})",
         "explanation": "Ton annonce a été affichée {impressions} fois et personne n'a cliqué. Le problème vient probablement de la couverture ou du titre qui n'attirent pas l'attention.",
         "nextStep": "Vérifie ta couverture et ton titre. Si ce {entityLabel} est pertinent, améliore ta fiche produit."
       },
       "very_low_clicks": {
         "title": "Très peu de clics",
 
-        "summary": "{clicks} clic(s) pour {impressions} impressions sur {periodDays} jours",
+        "summary": "{clicks} clic(s) pour {impressions} impressions sur {periodDays}j ({dateRange})",
         "explanation": "Seulement {clicks} clic(s) pour le moment. C'est trop tôt pour tirer des conclusions fiables.",
         "nextStep": "Patiente. Il faut au moins {minClicks} clics pour avoir un signal exploitable."
       },
       "low_clicks": {
         "title": "Début de signal",
 
-        "summary": "{clicks} clics pour {impressions} impressions (CTR {ctr}%) sur {periodDays} jours",
+        "summary": "{clicks} clics pour {impressions} impressions (CTR {ctr}%) sur {periodDays}j ({dateRange})",
         "explanation": "On commence à voir une tendance avec {clicks} clics. Encore un peu de patience avant de pouvoir recommander une action.",
         "nextStep": "Surveille. Plus que {remainingClicks} clics avant d'avoir assez de données pour décider."
       },
       "clicks_no_sales": {
         "title": "Clics sans ventes",
 
-        "summary": "{clicks} clics, {spend}€ dépensés, 0 vente sur {periodDays} jours",
+        "summary": "{clicks} clics, {spend}€ dépensés, {orders} vente(s) sur {periodDays}j ({dateRange})",
         "explanation": "Les gens cliquent mais n'achètent pas. Le problème vient de ta fiche livre, pas de ce {entityLabel}.",
         "nextStep": "Améliore ta fiche livre (description, avis) ou bloque ce terme si le budget file."
+      },
+      "very_expensive": {
+        "title": "Trop cher",
+
+        "summary": "{orders} vente(s), ACoS {acos}% (cible ≤{breakEven}%) sur {periodDays}j ({dateRange})",
+        "explanation": "Ce {entityLabel} génère des ventes mais à un coût bien trop élevé (ACoS {acos}% vs cible {breakEven}%). Il faut baisser l'enchère sérieusement.",
+        "nextStep": "Baisse l'enchère pour ramener l'ACoS vers ta cible. Si ça ne s'améliore pas, envisage de mettre en pause."
       },
       "expensive_but_valid": {
         "title": "Rentable... tout juste",
 
-        "summary": "{orders} vente(s), ACoS {acos}% (cible ≤{breakEven}%) sur {periodDays} jours",
+        "summary": "{orders} vente(s), ACoS {acos}% (cible ≤{breakEven}%) sur {periodDays}j ({dateRange})",
         "explanation": "Tu fais des ventes mais à un coût élevé. Baisse l'enchère pour améliorer la rentabilité.",
         "nextStep": "Baisse l'enchère progressivement pour réduire l'ACoS."
       },
       "winner": {
         "title": "Gagnant",
 
-        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays} jours",
+        "summary": "{orders} vente(s), ACoS {acos}% sur {periodDays}j ({dateRange})",
         "explanation": "Excellente performance. Ce {entityLabel} convertit bien et reste rentable.",
         "nextStep": "Augmente l'enchère pour capter encore plus de trafic rentable."
       },
       "boost_candidate": {
         "title": "Potentiel de croissance",
 
-        "summary": "{orders} vente(s), CTR {ctr}% (au-dessus de la moyenne) sur {periodDays} jours",
+        "summary": "{orders} vente(s), CTR {ctr}% (au-dessus de la moyenne) sur {periodDays}j ({dateRange})",
         "explanation": "Ce {entityLabel} a un CTR supérieur à la moyenne et convertit bien. Augmente l'enchère pour capter plus de trafic.",
         "nextStep": "Monte l'enchère pour maximiser le volume sur ce {entityLabel} performant."
       }

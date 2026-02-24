@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
@@ -27,6 +27,12 @@ import { computeStatus, StatusResult } from '@/lib/transforms/status';
 import { transformRecommendation, HumanRecommendation, groupRecommendationsByEntity, RecommendationGroup } from '@/lib/transforms/recommendations';
 import { t } from '@/lib/i18n';
 import { useSyncContext } from '@/lib/contexts/SyncContext';
+
+// ── Sync status types ──
+type SyncStatus = 'idle' | 'syncing' | 'done';
+const POLL_INTERVAL_MS = 15_000;       // Poll every 15 seconds
+const FRESH_THRESHOLD_MS = 30 * 60_000; // Skip refresh if data < 30 min old
+const MAX_POLL_DURATION_MS = 10 * 60_000; // Stop polling after 10 min
 
 export default function BookDetailPage() {
   const params = useParams();
@@ -86,22 +92,113 @@ export default function BookDetailPage() {
       .finally(() => setOverviewLoading(false));
   }, [bookId, overviewDays, syncCompletedCount]);
 
-  // Refresh all data from Amazon API on page load (background)
-  // Ensures displayed bids, metrics (impressions, clicks, spend, sales) match current Amazon values
+  // ── Smart sync: refresh + polling until data is fresh ──
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const initialSyncedAtRef = useRef<string | null>(null);
+  const pollStartRef = useRef<number>(0);
   const dataRefreshedRef = useRef(false);
+
+  // Reload dashboard + campaign details from DB (no Amazon call)
+  const reloadAllData = useCallback(async () => {
+    try {
+      const [newDashboard, newDetails] = await Promise.all([
+        fetchBookDashboard(bookId, includeInactive),
+        fetchBookCampaignDetails(bookId, overviewDays),
+      ]);
+      setDashboard(newDashboard);
+      setOverviewCampaignDetails(newDetails);
+      return newDetails;
+    } catch {
+      return null;
+    }
+  }, [bookId, includeInactive, overviewDays]);
+
   useEffect(() => {
     if (!bookId || dataRefreshedRef.current) return;
     dataRefreshedRef.current = true;
-    refreshBookData(bookId).then((result) => {
-      // Toujours recharger les données après refresh pour garantir la conformité avec Amazon
-      // Les enchères sont mises à jour de manière synchrone, les rapports en arrière-plan
-      fetchBookCampaignDetails(bookId, overviewDays)
-        .then(setOverviewCampaignDetails)
-        .catch(() => {});
-      fetchBookDashboard(bookId, includeInactive)
-        .then(setDashboard)
-        .catch(() => {});
-    }).catch(() => {});
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const checkAndRefresh = async () => {
+      // 1. Get current data to check lastSyncedAt
+      let details: any = null;
+      try {
+        details = await fetchBookCampaignDetails(bookId, overviewDays);
+        if (!cancelled) setOverviewCampaignDetails(details);
+      } catch { /* proceed anyway */ }
+
+      if (cancelled) return;
+
+      const lastSynced = details?.lastSyncedAt;
+      if (lastSynced) {
+        const age = Date.now() - new Date(lastSynced).getTime();
+        if (age < FRESH_THRESHOLD_MS) {
+          // Data is fresh, no need to refresh from Amazon
+          setSyncStatus('done');
+          pollTimer = setTimeout(() => { if (!cancelled) setSyncStatus('idle'); }, 3000);
+          return;
+        }
+      }
+
+      // 2. Data is stale — trigger refresh from Amazon
+      initialSyncedAtRef.current = lastSynced || null;
+      pollStartRef.current = Date.now();
+      setSyncStatus('syncing');
+
+      try {
+        await refreshBookData(bookId);
+      } catch {
+        if (!cancelled) setSyncStatus('idle');
+        return;
+      }
+
+      if (cancelled) return;
+
+      // 3. Start polling for new data
+      const pollForFreshData = async () => {
+        if (cancelled) return;
+
+        const elapsed = Date.now() - pollStartRef.current;
+        if (elapsed > MAX_POLL_DURATION_MS) {
+          if (!cancelled) {
+            setSyncStatus('idle');
+            await reloadAllData();
+          }
+          return;
+        }
+
+        try {
+          const freshDetails = await fetchBookCampaignDetails(bookId, overviewDays);
+          if (cancelled) return;
+          const newSyncedAt = freshDetails?.lastSyncedAt;
+
+          if (newSyncedAt && newSyncedAt !== initialSyncedAtRef.current) {
+            // Fresh data arrived! Reload everything
+            setOverviewCampaignDetails(freshDetails);
+            const newDashboard = await fetchBookDashboard(bookId, includeInactive);
+            if (!cancelled) {
+              setDashboard(newDashboard);
+              setSyncStatus('done');
+              pollTimer = setTimeout(() => { if (!cancelled) setSyncStatus('idle'); }, 5000);
+            }
+            return;
+          }
+        } catch { /* keep polling */ }
+
+        if (!cancelled) {
+          pollTimer = setTimeout(pollForFreshData, POLL_INTERVAL_MS);
+        }
+      };
+
+      pollTimer = setTimeout(pollForFreshData, POLL_INTERVAL_MS);
+    };
+
+    checkAndRefresh();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
   }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSaveRoyalty = async () => {
@@ -293,6 +390,19 @@ export default function BookDetailPage() {
               <p className="text-xs text-slate-400 mt-0.5">
                 Prix : {Number(book.salePrice).toFixed(2)}€ · Redevance : {Number(book.royaltyPerUnit).toFixed(2)}€/livre
               </p>
+            )}
+            {/* ── Badge de synchronisation Amazon ── */}
+            {syncStatus === 'syncing' && (
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                <span className="text-[11px] text-amber-600">Synchronisation Amazon en cours...</span>
+              </div>
+            )}
+            {syncStatus === 'done' && (
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span className="text-[11px] text-emerald-600">Données Amazon à jour</span>
+              </div>
             )}
           </div>
         </div>

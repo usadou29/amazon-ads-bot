@@ -276,16 +276,18 @@ export class MetricsController {
     const entityKey = `${entityType}:${amazonId}`;
     this.logger.log(`[DIAGNOSTIC] Fetching raw daily metrics for ${entityKey}`);
 
-    // Compute date ranges
+    // Compute date ranges — end = yesterday (Amazon data has 1-day lag)
     const now = new Date();
-    const startDate30d = new Date(now);
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const startDate30d = new Date(yesterday);
     startDate30d.setDate(startDate30d.getDate() - 29);
-    const startDate14d = new Date(now);
+    const startDate14d = new Date(yesterday);
     startDate14d.setDate(startDate14d.getDate() - 13);
-    const startDate7d = new Date(now);
+    const startDate7d = new Date(yesterday);
     startDate7d.setDate(startDate7d.getDate() - 6);
 
-    const endDateStr = now.toISOString().split('T')[0];
+    const endDateStr = yesterday.toISOString().split('T')[0];
     const start30dStr = startDate30d.toISOString().split('T')[0];
 
     // Fetch ALL raw daily rows for the last 30 days

@@ -21,7 +21,8 @@ export enum EntityDiagnosisCode {
   ZERO_CLICKS = 'zero_clicks',           // impressions >= 300, clicks === 0 → vraiment ignoré
   VERY_LOW_CLICKS = 'very_low_clicks',   // 1-4 clicks
   LOW_CLICKS = 'low_clicks',             // 5-14 clicks
-  CLICKS_NO_SALES = 'clicks_no_sales',   // clicks >= 15, orders === 0 (ou ACoS trop haut)
+  CLICKS_NO_SALES = 'clicks_no_sales',   // clicks >= 15, orders === 0
+  VERY_EXPENSIVE = 'very_expensive',     // orders > 0 mais ACoS > breakEven × 1.3 → saigne du budget
   EXPENSIVE_BUT_VALID = 'expensive_but_valid',
   WINNER = 'winner',
   BOOST_CANDIDATE = 'boost_candidate',

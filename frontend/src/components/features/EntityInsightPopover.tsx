@@ -7,6 +7,7 @@ import {
   renderEntityInsight,
   ENTITY_DIAGNOSIS_COLORS,
   EXECUTION_COLORS,
+  computeDateRange,
 } from '@/lib/transforms/insights';
 import { selectDefaultAction, insightActionToSuggestionItem } from '@/lib/action-selection';
 
@@ -111,7 +112,7 @@ export function EntityInsightPopover({
               <div className="mb-2 space-y-0.5">
                 {insight.decisionPeriodDays && (
                   <p className="text-[10px] text-slate-400">
-                    Analyse sur {insight.decisionPeriodDays} jours
+                    Analyse sur {insight.decisionPeriodDays}j ({computeDateRange(insight.decisionPeriodDays)})
                   </p>
                 )}
                 {insight.validationApplied && (
@@ -134,7 +135,7 @@ export function EntityInsightPopover({
                   ⚠️ Divergence de fenêtres
                 </p>
                 <p className="text-[10px] text-amber-600">
-                  Sur {insight.decisionPeriodDays}j : 0 commande — mais sur 30j : {insight.longWindowFacts.orders} commande{insight.longWindowFacts.orders > 1 ? 's' : ''}{insight.longWindowFacts.acos !== null ? ` (ACoS ${insight.longWindowFacts.acos.toFixed(1)}%)` : ''}.
+                  Sur {insight.decisionPeriodDays}j ({computeDateRange(insight.decisionPeriodDays!)}) : 0 commande — mais sur 30j ({computeDateRange(30)}) : {insight.longWindowFacts.orders} commande{insight.longWindowFacts.orders > 1 ? 's' : ''}{insight.longWindowFacts.acos !== null ? ` (ACoS ${insight.longWindowFacts.acos.toFixed(1)}%)` : ''}.
                   Ce mot-clé convertit sur la période longue.
                 </p>
               </div>
@@ -144,7 +145,7 @@ export function EntityInsightPopover({
             {insight.longWindowFacts && insight.summaryFacts.orders > 0 && insight.longWindowFacts.orders > insight.summaryFacts.orders && (
               <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                 <p className="text-[10px] text-slate-500">
-                  Sur 30j : {insight.longWindowFacts.clicks} clics, {insight.longWindowFacts.orders} cmd.{insight.longWindowFacts.acos !== null ? `, ACoS ${insight.longWindowFacts.acos.toFixed(1)}%` : ''}
+                  Sur 30j ({computeDateRange(30)}) : {insight.longWindowFacts.clicks} clics, {insight.longWindowFacts.orders} cmd.{insight.longWindowFacts.acos !== null ? `, ACoS ${insight.longWindowFacts.acos.toFixed(1)}%` : ''}
                 </p>
               </div>
             )}

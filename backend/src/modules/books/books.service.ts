@@ -578,10 +578,11 @@ export class BooksService {
   }
 
   private getDefaultDateRange(): { startDate: string; endDate: string } {
-    // 30 derniers jours incluant aujourd'hui (cohérent avec Amazon Ads)
+    // 30 derniers jours se terminant hier (Amazon a 1 jour de retard)
     const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - 29); // 30 jours = aujourd'hui - 29
+    end.setDate(end.getDate() - 1); // hier = dernier jour complet de data Amazon
+    const start = new Date(end);
+    start.setDate(start.getDate() - 29); // 30 jours
     return {
       startDate: start.toISOString().split('T')[0],
       endDate: end.toISOString().split('T')[0],
@@ -1284,6 +1285,7 @@ export class BooksService {
         isPrimary: campaignBookMapping.isPrimary,
         campaign: {
           id: campaigns.id,
+          profileId: campaigns.profileId,
           name: campaigns.name,
           campaignType: campaigns.campaignType,
           state: campaigns.state,
@@ -1300,6 +1302,31 @@ export class BooksService {
 
     if (mappings.length === 0) {
       return { campaigns: [] };
+    }
+
+    // ── Dernière date de sync des métriques pour ce livre ──
+    // On prend le MAX(ingested_at) des report_jobs du même profil
+    const profileIdSet = new Set<string>();
+    for (const m of mappings) {
+      const pid = (m.campaign as any).profileId;
+      if (pid) profileIdSet.add(String(pid));
+    }
+    const profileIds = Array.from(profileIdSet);
+    let lastSyncedAt: string | null = null;
+    if (profileIds.length > 0) {
+      const [syncInfo] = await this.db
+        .select({
+          lastIngestedAt: sql<string>`MAX(${reportJobs.ingestedAt})`,
+        })
+        .from(reportJobs)
+        .where(
+          and(
+            inArray(reportJobs.profileId, profileIds),
+            sql`${reportJobs.status} = 'ingested'`,
+            sql`${reportJobs.recordsProcessed} > 0`,
+          ),
+        );
+      lastSyncedAt = syncInfo?.lastIngestedAt ? new Date(syncInfo.lastIngestedAt).toISOString() : null;
     }
 
     // Use maxStartDate for all queries (fetch the widest window, aggregate in-memory)
@@ -1841,6 +1868,7 @@ export class BooksService {
       strategicPeriodDays: strategicDays,
       lifecyclePhase,
       breakEvenAcos,
+      lastSyncedAt,
     };
   }
 
@@ -1988,11 +2016,14 @@ export class BooksService {
   }
 
   /**
-   * Compute date string for "N days ago including today".
+   * Compute date range for "N days ending yesterday".
+   * Amazon data has a 1-day lag — today's data doesn't exist yet.
+   * This matches the frontend computeDateRange() which also uses yesterday as end.
    */
   private computeDateRange(days: number): { startDate: string; endDate: string } {
     const end = new Date();
-    const start = new Date();
+    end.setDate(end.getDate() - 1); // hier = dernier jour complet de data Amazon
+    const start = new Date(end);
     start.setDate(start.getDate() - (days - 1));
     return {
       startDate: start.toISOString().split('T')[0],

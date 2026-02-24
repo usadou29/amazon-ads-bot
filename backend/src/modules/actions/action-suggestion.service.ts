@@ -390,6 +390,7 @@ export class ActionSuggestionService {
   private diagnosisToBidDirection(diagnosisCode: EntityDiagnosisCode): BidDirection {
     switch (diagnosisCode) {
       case 'clicks_no_sales':
+      case 'very_expensive':
       case 'expensive_but_valid':
         return 'down';
       case 'winner':

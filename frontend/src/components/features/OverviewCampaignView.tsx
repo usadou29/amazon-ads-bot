@@ -8,7 +8,7 @@ import { EntityInsightPopover } from '@/components/features/EntityInsightPopover
 import { ActionModal } from '@/components/features/ActionModal';
 import { BidActionPopover } from '@/components/features/BidActionPopover';
 import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transforms/recommendations';
-import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight } from '@/lib/transforms/insights';
+import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight, computeDateRange } from '@/lib/transforms/insights';
 import { selectDefaultAction, insightActionToSuggestionItem, type ActionSuggestionItem } from '@/lib/action-selection';
 import { t } from '@/lib/i18n';
 import { fetchBookCampaignDetails, executeDirectAction } from '@/lib/api/client';
@@ -77,6 +77,7 @@ interface CampaignDetailsResponse {
   periodDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
   breakEvenAcos?: number;
+  lastSyncedAt?: string | null;
 }
 
 interface RecoHandlers {
@@ -573,7 +574,7 @@ function RecommendationsModal({
             Métriques actuelles ({modalDays === 1 ? "aujourd'hui" : `${modalDays}j`})
             {metricsLoading && <span className="ml-2 text-slate-400">Chargement...</span>}
           </p>
-          <MetricChips m={currentMetrics} />
+          <MetricChips m={currentMetrics} periodDays={modalDays} />
         </div>
       )}
 
@@ -598,13 +599,58 @@ function RecommendationsModal({
   );
 }
 
+// ── Data Freshness Indicator ──
+function DataFreshnessIndicator({ lastSyncedAt }: { lastSyncedAt: string }) {
+  const syncDate = new Date(lastSyncedAt);
+  const now = new Date();
+  const diffMs = now.getTime() - syncDate.getTime();
+  const diffMinutes = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMinutes / 60);
+
+  let timeAgo: string;
+  if (diffMinutes < 1) timeAgo = "à l'instant";
+  else if (diffMinutes < 60) timeAgo = `il y a ${diffMinutes} min`;
+  else if (diffHours < 24) timeAgo = `il y a ${diffHours}h${diffMinutes % 60 > 0 ? String(diffMinutes % 60).padStart(2, '0') : ''}`;
+  else timeAgo = `il y a ${Math.floor(diffHours / 24)}j`;
+
+  // Stale = more than 6 hours
+  const isStale = diffHours >= 6;
+  // Warning = more than 2 hours
+  const isWarning = diffHours >= 2;
+
+  const color = isStale
+    ? 'text-red-500'
+    : isWarning
+      ? 'text-amber-500'
+      : 'text-slate-400';
+
+  const dotColor = isStale
+    ? 'bg-red-400'
+    : isWarning
+      ? 'bg-amber-400'
+      : 'bg-emerald-400';
+
+  return (
+    <div className={`flex items-center gap-1.5 text-[11px] ${color}`}>
+      <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotColor}`} />
+      <span>
+        Données Amazon synchronisées {timeAgo}
+        {isStale && ' — les données peuvent être obsolètes'}
+      </span>
+    </div>
+  );
+}
+
 // ── Metric Mini Row ──
-function MetricChips({ m }: { m: TargetMetrics }) {
+function MetricChips({ m, periodDays }: { m: TargetMetrics; periodDays?: number }) {
   if (m.impressions === 0 && m.clicks === 0 && m.spend === 0) {
     return <span className="text-xs text-slate-300 italic">Aucune donnée</span>;
   }
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+      {periodDays && (
+        <span className="text-slate-400 italic">{periodDays}j ({computeDateRange(periodDays)})</span>
+      )}
       <span><span className="text-slate-400">Impr.</span> <span className="font-medium text-slate-700">{formatInt(m.impressions)}</span></span>
       <span><span className="text-slate-400">Clics</span> <span className="font-medium text-slate-700">{formatInt(m.clicks)}</span></span>
       <span><span className="text-slate-400">Dépensé</span> <span className="font-medium text-slate-700">{formatEur(m.spend)}</span></span>
@@ -1486,7 +1532,7 @@ function OverviewCampaignCard({
 
         {/* Campaign-level metrics summary */}
         <div className="mt-3 p-2.5 bg-slate-50 rounded-lg">
-          <MetricChips m={campaign.metrics} />
+          <MetricChips m={campaign.metrics} periodDays={parentDays} />
         </div>
 
         {/* Campaign insight */}
@@ -1624,6 +1670,11 @@ export function OverviewCampaignView({
           ))}
         </div>
       </div>
+
+      {/* Data freshness indicator */}
+      {campaignDetails.lastSyncedAt && (
+        <DataFreshnessIndicator lastSyncedAt={campaignDetails.lastSyncedAt} />
+      )}
 
       {/* Campaign cards */}
       {sortedCampaigns.map((campaign) => (
