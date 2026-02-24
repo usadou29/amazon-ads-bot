@@ -425,50 +425,76 @@ function EvolutionCharts({ diagnostic }: { diagnostic: DiagnosticData }) {
 
       {/* SVG Chart */}
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ height }}>
-        {/* Qualitative zone bands + all labels */}
-        {visibleZones.map((zone) => {
-          const yTop = pad.top + ch - ((zone.zoneTop - minVal) / range) * ch;
-          const yBottom = pad.top + ch - ((zone.zoneBottom - minVal) / range) * ch;
-          const bandHeight = yBottom - yTop;
-          if (bandHeight < 1) return null;
-          const yMid = yTop + bandHeight / 2;
-          return (
-            <g key={zone.label}>
-              {/* Colored band */}
-              <rect
-                x={pad.left}
-                y={yTop}
-                width={cw}
-                height={bandHeight}
-                fill={zone.color}
-                opacity={0.25}
-              />
-              {/* Separator line at zone boundary */}
-              {zone.zoneBottom > minVal && (
-                <line
-                  x1={pad.left}
-                  y1={yBottom}
-                  x2={width - pad.right}
-                  y2={yBottom}
-                  stroke={zone.textColor}
-                  strokeWidth="0.3"
-                  opacity={0.3}
+        {/* Qualitative zone bands + labels (collapse small bands into one "Médiocre" label) */}
+        {(() => {
+          // Pre-compute band heights to detect overlap
+          const bandsInfo = visibleZones.map((zone) => {
+            const yTop = pad.top + ch - ((zone.zoneTop - minVal) / range) * ch;
+            const yBottom = pad.top + ch - ((zone.zoneBottom - minVal) / range) * ch;
+            return { zone, yTop, yBottom, bandHeight: yBottom - yTop };
+          });
+          // A band needs at least 12px to show its label without overlap
+          const MIN_LABEL_HEIGHT = 12;
+          // Find which bands are too small — group consecutive small ones from the bottom
+          const smallFromBottom: number[] = [];
+          for (let i = 0; i < bandsInfo.length; i++) {
+            if (bandsInfo[i].bandHeight < MIN_LABEL_HEIGHT) smallFromBottom.push(i);
+            else break; // stop at first large band
+          }
+
+          return bandsInfo.map(({ zone, yTop, yBottom, bandHeight }, i) => {
+            if (bandHeight < 1) return null;
+            const yMid = yTop + bandHeight / 2;
+            // Show label logic:
+            // - If this band is big enough → show its own label
+            // - If it's too small and it's the first (lowest) small band → show "Médiocre"
+            // - If it's too small and not the first → hide label
+            const isTooSmall = smallFromBottom.includes(i);
+            const isFirstSmall = smallFromBottom.length > 0 && smallFromBottom[0] === i;
+            const showLabel = !isTooSmall || isFirstSmall;
+            // For collapsed small bands, place "Médiocre" at the combined midpoint
+            const labelY = isFirstSmall && smallFromBottom.length > 1
+              ? (bandsInfo[smallFromBottom[0]].yBottom + bandsInfo[smallFromBottom[smallFromBottom.length - 1]].yTop) / 2 + 3
+              : yMid + 3;
+            const labelText = isTooSmall ? 'Médiocre' : zone.label;
+            const labelColor = isTooSmall ? '#dc2626' : zone.textColor;
+            return (
+              <g key={zone.label}>
+                <rect
+                  x={pad.left}
+                  y={yTop}
+                  width={cw}
+                  height={bandHeight}
+                  fill={zone.color}
+                  opacity={0.25}
                 />
-              )}
-              {/* Zone label */}
-              <text
-                x={pad.left - 3}
-                y={yMid + 3}
-                fontSize="7"
-                fill={zone.textColor}
-                textAnchor="end"
-                fontWeight="600"
-              >
-                {zone.label}
-              </text>
-            </g>
-          );
-        })}
+                {zone.zoneBottom > minVal && (
+                  <line
+                    x1={pad.left}
+                    y1={yBottom}
+                    x2={width - pad.right}
+                    y2={yBottom}
+                    stroke={zone.textColor}
+                    strokeWidth="0.3"
+                    opacity={0.3}
+                  />
+                )}
+                {showLabel && (
+                  <text
+                    x={pad.left - 3}
+                    y={labelY}
+                    fontSize="7"
+                    fill={labelColor}
+                    textAnchor="end"
+                    fontWeight="600"
+                  >
+                    {labelText}
+                  </text>
+                )}
+              </g>
+            );
+          });
+        })()}
 
         {/* Zone backgrounds */}
         {idx7d > 0 && (
