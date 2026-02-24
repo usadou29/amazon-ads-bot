@@ -199,41 +199,150 @@ function DemandBadge({ impressions, periodDays }: { impressions: number; periodD
   );
 }
 
-// ── Trend Badge ──
-// Affiche la tendance de rentabilité sur 7 jours (comparaison ACoS J1-J7 vs J8-J14)
-function TrendBadge({ trend }: { trend?: TrendData }) {
+// ── Trend Badge (Rentabilité 7j) ──
+// Compare l'ACoS des 7 derniers jours vs les 7 jours précédents.
+// Cliquable : ouvre un popover explicatif en overlay fixe (visible même dans un overflow).
+function TrendBadge({ trend, entityName }: { trend?: TrendData; entityName?: string }) {
+  const [open, setOpen] = useState(false);
+
   if (!trend || trend.direction === 'insufficient') {
     return <span className="text-[10px] text-slate-300">—</span>;
   }
 
   if (trend.direction === 'new') {
     return (
-      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600">
-        <span>★</span>
-        <span>Nouveau</span>
-      </span>
+      <>
+        <span
+          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all"
+          onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        >
+          <span>★</span>
+          <span>Nouveau</span>
+        </span>
+        {open && <TrendModal trend={trend} entityName={entityName} onClose={() => setOpen(false)} />}
+      </>
     );
   }
 
   // down = ACoS baissé = rentabilité en hausse = vert ↑
   // up = ACoS monté = rentabilité en baisse = rouge ↓
   const config = {
-    down: { bg: 'bg-emerald-50', text: 'text-emerald-700', arrow: '↑' },
-    up: { bg: 'bg-red-50', text: 'text-red-700', arrow: '↓' },
-    stable: { bg: 'bg-amber-50', text: 'text-amber-600', arrow: '→' },
+    down: { bg: 'bg-emerald-50', text: 'text-emerald-700', arrow: '↑', ring: 'hover:ring-emerald-300' },
+    up: { bg: 'bg-red-50', text: 'text-red-700', arrow: '↓', ring: 'hover:ring-red-300' },
+    stable: { bg: 'bg-amber-50', text: 'text-amber-600', arrow: '→', ring: 'hover:ring-amber-300' },
   } as const;
 
   const c = config[trend.direction];
   const absChange = Math.round(Math.abs(trend.percentChange));
 
   return (
-    <span
-      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium ${c.bg} ${c.text}`}
-      title={`Variation ACoS 7j : ${trend.percentChange > 0 ? '+' : ''}${Math.round(trend.percentChange)}%`}
-    >
-      <span>{c.arrow}</span>
-      <span>{absChange}%</span>
-    </span>
+    <>
+      <span
+        className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium cursor-pointer hover:ring-2 transition-all ${c.bg} ${c.text} ${c.ring}`}
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+      >
+        <span>{c.arrow}</span>
+        <span>{absChange}%</span>
+      </span>
+      {open && <TrendModal trend={trend} entityName={entityName} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+// ── Trend Modal (overlay fixe, toujours visible) ──
+function TrendModal({ trend, entityName, onClose }: {
+  trend: TrendData;
+  entityName?: string;
+  onClose: () => void;
+}) {
+  const absChange = Math.round(Math.abs(trend.percentChange));
+  const name = entityName ? `« ${entityName} »` : 'ce mot-clé';
+
+  let icon = '';
+  let title = '';
+  let explanation = '';
+  let accentBorder = '';
+  let accentBg = '';
+  let iconBg = '';
+
+  if (trend.direction === 'new') {
+    icon = '★';
+    title = 'Nouveau mot-clé';
+    explanation = `${name} n'a pas assez d'historique pour calculer une tendance. Il faut au moins 2 semaines de données pour comparer.`;
+    accentBorder = 'border-l-blue-500';
+    accentBg = 'bg-blue-50';
+    iconBg = 'bg-blue-100 text-blue-600';
+  } else if (trend.direction === 'down') {
+    icon = '↗';
+    title = `Rentabilité en hausse`;
+    explanation = `L'ACoS de ${name} a baissé de ${absChange}% cette semaine par rapport à la semaine précédente.\n\nConcrètement, tu paies moins cher pour générer des ventes. C'est positif, ça veut dire que ce mot-clé devient plus rentable.`;
+    accentBorder = 'border-l-emerald-500';
+    accentBg = 'bg-emerald-50';
+    iconBg = 'bg-emerald-100 text-emerald-600';
+  } else if (trend.direction === 'up') {
+    icon = '↘';
+    title = `Rentabilité en baisse`;
+    explanation = `L'ACoS de ${name} a augmenté de ${absChange}% cette semaine par rapport à la semaine précédente.\n\nConcrètement, tu paies plus cher pour chaque euro de vente. Surveille ce mot-clé — si la tendance continue, une baisse d'enchère pourrait être nécessaire.`;
+    accentBorder = 'border-l-red-500';
+    accentBg = 'bg-red-50';
+    iconBg = 'bg-red-100 text-red-600';
+  } else {
+    icon = '→';
+    title = 'Rentabilité stable';
+    explanation = `L'ACoS de ${name} n'a pas bougé significativement entre cette semaine et la précédente (variation inférieure à 5%).\n\nPas de changement nécessaire pour le moment.`;
+    accentBorder = 'border-l-amber-500';
+    accentBg = 'bg-amber-50';
+    iconBg = 'bg-amber-100 text-amber-600';
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
+      {/* Fond semi-transparent */}
+      <div className="absolute inset-0 bg-black/20" />
+
+      {/* Carte modale */}
+      <div
+        className={`relative bg-white rounded-xl shadow-2xl border border-slate-200 w-[340px] max-w-[90vw] overflow-hidden border-l-4 ${accentBorder}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className={`flex items-center gap-3 px-5 py-4 ${accentBg}`}>
+          <div className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-lg font-bold ${iconBg}`}>
+            {icon}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+            {trend.direction !== 'new' && trend.direction !== 'stable' && (
+              <p className="text-xs text-slate-500 mt-0.5">
+                Variation ACoS : {trend.direction === 'up' ? '+' : ''}{Math.round(trend.percentChange)}%
+              </p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full hover:bg-black/10 text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Corps */}
+        <div className="px-5 py-4">
+          {explanation.split('\n\n').map((paragraph, i) => (
+            <p key={i} className={`text-[13px] leading-relaxed text-slate-600 ${i > 0 ? 'mt-3' : ''}`}>
+              {paragraph}
+            </p>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 bg-slate-50 border-t border-slate-100">
+          <p className="text-[11px] text-slate-400">
+            Comparaison de l'ACoS des 7 derniers jours vs les 7 jours précédents.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -856,7 +965,7 @@ function KeywordTableWithRecos({
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
-              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Tend. 7j</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Rent. 7j</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
@@ -908,7 +1017,7 @@ function KeywordTableWithRecos({
                     {kw.metrics.acos > 0 ? formatPct(kw.metrics.acos) : '—'}
                   </td>
                   <td className="py-2 px-2 text-center">
-                    <TrendBadge trend={kw.metrics.trend} />
+                    <TrendBadge trend={kw.metrics.trend} entityName={kw.keywordText} />
                   </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {kw.insight ? (
@@ -1101,7 +1210,7 @@ function ProductTargetTableWithRecos({
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
-              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Tend. 7j</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Rent. 7j</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
@@ -1153,7 +1262,7 @@ function ProductTargetTableWithRecos({
                     {tg.metrics.acos > 0 ? formatPct(tg.metrics.acos) : '—'}
                   </td>
                   <td className="py-2 px-2 text-center">
-                    <TrendBadge trend={tg.metrics.trend} />
+                    <TrendBadge trend={tg.metrics.trend} entityName={tg.expression} />
                   </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {tg.insight ? (
