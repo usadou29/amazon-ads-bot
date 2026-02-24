@@ -301,14 +301,17 @@ function InsightModal({
   );
 }
 
-// ── Qualitative Y-axis zones for ROAS ──
-// ROAS thresholds: < 1x = Médiocre, 1–2x = Moyen, 2–3x = Bon, > 3x = Excellent
-const ROAS_ZONES = [
-  { threshold: 0,   label: 'Médiocre', color: '#fecaca', textColor: '#dc2626' },
-  { threshold: 1,   label: 'Moyen',    color: '#fef3c7', textColor: '#d97706' },
-  { threshold: 2,   label: 'Bon',      color: '#d1fae5', textColor: '#059669' },
-  { threshold: 3,   label: 'Excellent', color: '#a7f3d0', textColor: '#047857' },
-] as const;
+// ── Y-axis tick helper for ACoS % ──
+function computeAcosTicks(maxVal: number): number[] {
+  // Nice round steps depending on range
+  const candidates = [10, 20, 25, 50];
+  const step = candidates.find(s => maxVal / s <= 6) || 50;
+  const ticks: number[] = [];
+  for (let v = 0; v <= maxVal; v += step) {
+    ticks.push(v);
+  }
+  return ticks;
+}
 
 // ── Single Unified Rentabilité Chart with 7j / 14j / 30j zones ──
 function EvolutionCharts({ diagnostic }: { diagnostic: DiagnosticData }) {
@@ -324,22 +327,23 @@ function EvolutionCharts({ diagnostic }: { diagnostic: DiagnosticData }) {
     );
   }
 
-  // Compute rolling ROAS (3-day smoothing) for all available rows
+  // Compute rolling ACoS (7-day smoothing) = spend / sales * 100
+  // 7-day window absorbs days with 0 sales without spiking the curve
   const values: { date: string; value: number }[] = [];
   for (let i = 0; i < sortedRows.length; i++) {
     let spend = 0;
     let sales = 0;
-    const windowSize = Math.min(3, i + 1);
+    const windowSize = Math.min(7, i + 1);
     for (let j = i - windowSize + 1; j <= i; j++) {
       if (j >= 0) {
         spend += sortedRows[j].spend;
         sales += sortedRows[j].sales;
       }
     }
-    const roas = spend > 0 ? sales / spend : null;
-    if (roas !== null) {
-      values.push({ date: sortedRows[i].date, value: roas });
-    }
+    if (spend <= 0) continue; // skip days with no ad activity
+    if (sales <= 0) continue; // skip if no sales at all in the 7-day window
+    const acos = (spend / sales) * 100;
+    values.push({ date: sortedRows[i].date, value: acos });
   }
 
   if (values.length < 2) {
@@ -358,36 +362,41 @@ function EvolutionCharts({ diagnostic }: { diagnostic: DiagnosticData }) {
   const ch = height - pad.top - pad.bottom;
 
   const rawMax = Math.max(...values.map(v => v.value));
-  // Fixed Y scale: always 0 → max(3.5, data max + 0.5) so all 4 zones are always visible
+  // Also consider window aggregate ACoS values so the Y scale covers everything
+  const windowAcosValues = (['7d', '14d', '30d'] as const)
+    .map(k => windows[k])
+    .filter(w => w && w.sales > 0)
+    .map(w => (w.spend / w.sales) * 100);
+  const overallMax = Math.max(rawMax, ...windowAcosValues);
+  // Y scale: 0 → enough headroom above the highest ACoS value
   const minVal = 0;
-  const maxVal = Math.max(rawMax + 0.5, 3.5);
+  const maxVal = Math.max(overallMax * 1.1, 20);
   const range = maxVal - minVal;
 
-  // All 4 zones always visible
-  const visibleZones = ROAS_ZONES.map((zone, i) => ({
-    ...zone,
-    zoneBottom: zone.threshold,
-    zoneTop: i < ROAS_ZONES.length - 1 ? ROAS_ZONES[i + 1].threshold : maxVal,
-  }));
+  // Y-axis percentage ticks
+  const yTicks = computeAcosTicks(maxVal);
 
+  // Y-axis inverted: low ACoS (good) at top, high ACoS (bad) at bottom
   const points = values.map((v, i) => ({
     x: pad.left + (i / (values.length - 1)) * cw,
-    y: pad.top + ch - ((v.value - minVal) / range) * ch,
+    y: pad.top + ((v.value - minVal) / range) * ch,
     value: v.value,
     date: v.date,
   }));
 
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-  const fillD = pathD + ` L ${points[points.length - 1].x.toFixed(1)} ${pad.top + ch} L ${points[0].x.toFixed(1)} ${pad.top + ch} Z`;
+  // Fill towards the top (good = low ACoS)
+  const fillD = pathD + ` L ${points[points.length - 1].x.toFixed(1)} ${pad.top} L ${points[0].x.toFixed(1)} ${pad.top} Z`;
 
-  // Trend color (last 7d vs first 7d of data)
-  const recentLen = Math.min(7, Math.floor(values.length / 3));
-  const firstAvg = values.slice(0, recentLen).reduce((s, v) => s + v.value, 0) / recentLen;
-  const lastAvg = values.slice(-recentLen).reduce((s, v) => s + v.value, 0) / recentLen;
-  const improving = lastAvg > firstAvg;
-  const worsening = lastAvg < firstAvg * 0.95;
-  const strokeColor = improving ? '#10b981' : worsening ? '#ef4444' : '#64748b';
-  const fillColor = improving ? '#10b98110' : worsening ? '#ef444410' : '#64748b10';
+  // Color based on current ACoS vs 35% threshold
+  const ACOS_THRESHOLD = 35;
+  const currentAcos = values[values.length - 1].value;
+  const isGood = currentAcos <= ACOS_THRESHOLD;
+  const strokeColor = '#94a3b8'; // gris neutre pour le trait de la courbe
+  const fillColor = isGood ? '#10b98115' : '#ef444430';
+
+  // Threshold line Y position
+  const thresholdY = pad.top + ((ACOS_THRESHOLD - minVal) / range) * ch;
 
   // ── Zone separators: find index where 7d and 14d start ──
   const yesterday = new Date();
@@ -413,88 +422,58 @@ function EvolutionCharts({ diagnostic }: { diagnostic: DiagnosticData }) {
   const windowKeys = ['7d', '14d', '30d'] as const;
   const availableWindows = windowKeys
     .map(k => ({ key: k, w: windows[k] }))
-    .filter(({ w }) => w && w.daysWithData >= 1 && w.spend > 0);
+    .filter(({ w }) => w && w.daysWithData >= 1 && w.sales > 0);
 
   return (
     <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-3 py-2.5">
       {/* Chart title */}
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[11px] font-medium text-slate-600">Rentabilité (ventes / dépenses)</span>
+        <span className="text-[11px] font-medium text-slate-600">Évolution ACoS (coût pub / ventes)</span>
         <span className="text-[10px] text-slate-400">{values.length}j de données</span>
       </div>
 
       {/* SVG Chart */}
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ height }}>
-        {/* Qualitative zone bands + labels (collapse small bands into one "Médiocre" label) */}
-        {(() => {
-          // Pre-compute band heights to detect overlap
-          const bandsInfo = visibleZones.map((zone) => {
-            const yTop = pad.top + ch - ((zone.zoneTop - minVal) / range) * ch;
-            const yBottom = pad.top + ch - ((zone.zoneBottom - minVal) / range) * ch;
-            return { zone, yTop, yBottom, bandHeight: yBottom - yTop };
-          });
-          // A band needs at least 12px to show its label without overlap
-          const MIN_LABEL_HEIGHT = 12;
-          // Find which bands are too small — group consecutive small ones from the bottom
-          const smallFromBottom: number[] = [];
-          for (let i = 0; i < bandsInfo.length; i++) {
-            if (bandsInfo[i].bandHeight < MIN_LABEL_HEIGHT) smallFromBottom.push(i);
-            else break; // stop at first large band
-          }
+        {/* Y-axis percentage ticks + horizontal grid lines (inverted: 0% at top) */}
+        {yTicks.map((tick) => {
+          const y = pad.top + ((tick - minVal) / range) * ch;
+          return (
+            <g key={tick}>
+              <line
+                x1={pad.left}
+                y1={y}
+                x2={width - pad.right}
+                y2={y}
+                stroke="#e2e8f0"
+                strokeWidth="0.5"
+              />
+              <text
+                x={pad.left - 4}
+                y={y + 3}
+                fontSize="8"
+                fill="#94a3b8"
+                textAnchor="end"
+                fontWeight="500"
+              >
+                {tick}%
+              </text>
+            </g>
+          );
+        })}
 
-          return bandsInfo.map(({ zone, yTop, yBottom, bandHeight }, i) => {
-            if (bandHeight < 1) return null;
-            const yMid = yTop + bandHeight / 2;
-            // Show label logic:
-            // - If this band is big enough → show its own label
-            // - If it's too small and it's the first (lowest) small band → show "Médiocre"
-            // - If it's too small and not the first → hide label
-            const isTooSmall = smallFromBottom.includes(i);
-            const isFirstSmall = smallFromBottom.length > 0 && smallFromBottom[0] === i;
-            const showLabel = !isTooSmall || isFirstSmall;
-            // For collapsed small bands, place "Médiocre" at the combined midpoint
-            const labelY = isFirstSmall && smallFromBottom.length > 1
-              ? (bandsInfo[smallFromBottom[0]].yBottom + bandsInfo[smallFromBottom[smallFromBottom.length - 1]].yTop) / 2 + 3
-              : yMid + 3;
-            const labelText = isTooSmall ? 'Médiocre' : zone.label;
-            const labelColor = isTooSmall ? '#dc2626' : zone.textColor;
-            return (
-              <g key={zone.label}>
-                <rect
-                  x={pad.left}
-                  y={yTop}
-                  width={cw}
-                  height={bandHeight}
-                  fill={zone.color}
-                  opacity={0.25}
-                />
-                {zone.zoneBottom > minVal && (
-                  <line
-                    x1={pad.left}
-                    y1={yBottom}
-                    x2={width - pad.right}
-                    y2={yBottom}
-                    stroke={zone.textColor}
-                    strokeWidth="0.3"
-                    opacity={0.3}
-                  />
-                )}
-                {showLabel && (
-                  <text
-                    x={pad.left - 3}
-                    y={labelY}
-                    fontSize="7"
-                    fill={labelColor}
-                    textAnchor="end"
-                    fontWeight="600"
-                  >
-                    {labelText}
-                  </text>
-                )}
-              </g>
-            );
-          });
-        })()}
+        {/* Green zone (ACoS < 35%) and red zone (ACoS > 35%) backgrounds */}
+        <rect x={pad.left} y={pad.top} width={cw} height={thresholdY - pad.top} fill="#10b981" opacity={0.07} />
+        <rect x={pad.left} y={thresholdY} width={cw} height={pad.top + ch - thresholdY} fill="#ef4444" opacity={0.18} />
+
+        {/* 35% threshold line */}
+        <line
+          x1={pad.left} y1={thresholdY}
+          x2={width - pad.right} y2={thresholdY}
+          stroke="#94a3b8" strokeWidth="0.8" strokeDasharray="4,3"
+        />
+        <text x={pad.left - 4} y={thresholdY + 3} fontSize="8" fill="#64748b" textAnchor="end" fontWeight="600">
+          35%
+        </text>
 
         {/* Zone backgrounds */}
         {idx7d > 0 && (
@@ -559,7 +538,7 @@ function EvolutionCharts({ diagnostic }: { diagnostic: DiagnosticData }) {
           fontWeight="700"
           textAnchor="end"
         >
-          {lastPoint.value.toFixed(1)}x
+          {lastPoint.value.toFixed(1)}%
         </text>
 
         {/* Separator dots on the line */}
@@ -572,15 +551,15 @@ function EvolutionCharts({ diagnostic }: { diagnostic: DiagnosticData }) {
       {availableWindows.length > 0 && (
         <div className="flex items-center gap-3 mt-2 flex-wrap">
           {availableWindows.map(({ key, w }) => {
-            const roas = w.sales / w.spend;
-            const color = roas >= 2 ? 'text-emerald-600' : roas >= 1 ? 'text-amber-600' : 'text-red-500';
+            const acos = (w.spend / w.sales) * 100;
+            const color = acos <= 30 ? 'text-emerald-600' : acos <= 50 ? 'text-amber-600' : 'text-red-500';
             return (
               <div key={key} className="flex items-center gap-1.5 text-[10px]">
                 <span className="text-slate-400 font-medium">{key.replace('d', 'j')} :</span>
-                <span className={`font-semibold ${color}`}>{roas.toFixed(1)}x</span>
+                <span className={`font-semibold ${color}`}>{acos.toFixed(0)}%</span>
                 <span className="text-slate-300">|</span>
-                <span className="text-slate-400">{w.orders} cmd.</span>
-                <span className="text-slate-400">{w.spend.toFixed(0)}€</span>
+                <span className="text-slate-400">{w.spend.toFixed(1)}€ dép.</span>
+                <span className="text-slate-400">/ {w.sales.toFixed(1)}€ ventes</span>
               </div>
             );
           })}
