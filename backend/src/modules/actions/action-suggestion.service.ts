@@ -51,6 +51,17 @@ export interface ActionSuggestionResponse {
     enabled: boolean;
     reason?: string;
   }>;
+  // Cooldown fields
+  cooldown?: {
+    active: boolean;
+    daysSinceChange: number;
+    cooldownDays: number;
+    remainingDays: number;
+    lastChangeType: string;
+    previousBid: number;
+    newBid: number;
+    lastChangeAt: string; // ISO date string
+  };
 }
 
 // ── Service ─────────────────────────────────────────────
@@ -77,6 +88,9 @@ export class ActionSuggestionService {
 
     // 2. Calculer la période stratégique + multi-window
     const phase: LifecyclePhase = (lifecyclePhase || 'evergreen') as LifecyclePhase;
+
+    // 2b. CHECK COOLDOWN — si une enchère a été modifiée récemment, on bloque les actions bid
+    const cooldownInfo = this.checkCooldown(entity, phase);
 
     // 3. Charger les métriques sur 30j (max window) et slicer en mémoire
     const metrics30d = await this.loadEntityMetrics(workspaceId, entityKey, entityType, 30);
@@ -169,19 +183,22 @@ export class ActionSuggestionService {
 
     // 7. Déterminer les actions disponibles
     const isProfitable = metrics.orders >= 1 && metrics.sales > metrics.spend;
-    const availableActions = this.buildAvailableActions(bidCalculation.eligibility, isProfitable, diagnosisCode);
+    const availableActions = this.buildAvailableActions(bidCalculation.eligibility, isProfitable, diagnosisCode, cooldownInfo);
 
     // 8. Construire les métriques de sortie
     const acos = metrics.sales > 0 ? (metrics.spend / metrics.sales) * 100 : null;
     const ctr = metrics.impressions > 0 ? (metrics.clicks / metrics.impressions) * 100 : null;
     const cvrPercent = metrics.clicks > 0 ? (metrics.orders / metrics.clicks) * 100 : null;
 
+    // Si cooldown actif, overrider le diagnostic
+    const finalDiagnosisCode = cooldownInfo?.active ? 'cooldown_active' as EntityDiagnosisCode : diagnosisCode;
+
     return {
       entityKey,
       entityType,
       entityName: entity.name,
-      diagnosisCode,
-      eligibility: bidCalculation.eligibility,
+      diagnosisCode: finalDiagnosisCode,
+      eligibility: cooldownInfo?.active ? 'cooldown' as BidEligibility : bidCalculation.eligibility,
       metrics: {
         impressions: metrics.impressions,
         clicks: metrics.clicks,
@@ -197,6 +214,7 @@ export class ActionSuggestionService {
       bidCalculation,
       amazonBid,
       availableActions,
+      cooldown: cooldownInfo || undefined,
     };
   }
 
@@ -206,11 +224,18 @@ export class ActionSuggestionService {
     eligibility: BidEligibility,
     isProfitable: boolean,
     diagnosisCode: EntityDiagnosisCode,
+    cooldownInfo?: ActionSuggestionResponse['cooldown'] | null,
   ): ActionSuggestionResponse['availableActions'] {
     const actions: ActionSuggestionResponse['availableActions'] = [];
 
-    // adjust_bid
-    if (eligibility === 'insufficient_data') {
+    // adjust_bid — bloqué si cooldown actif
+    if (cooldownInfo?.active) {
+      actions.push({
+        type: 'adjust_bid',
+        enabled: false,
+        reason: `En observation (J+${cooldownInfo.daysSinceChange}/${cooldownInfo.cooldownDays}) — enchère modifiée le ${new Date(cooldownInfo.lastChangeAt).toLocaleDateString('fr-FR')}`,
+      });
+    } else if (eligibility === 'insufficient_data') {
       actions.push({ type: 'adjust_bid', enabled: false, reason: 'Pas assez de données (< 5 clics)' });
     } else if (eligibility === 'observe_only') {
       actions.push({ type: 'adjust_bid', enabled: false, reason: 'Phase d\'observation' });
@@ -218,7 +243,7 @@ export class ActionSuggestionService {
       actions.push({ type: 'adjust_bid', enabled: true });
     }
 
-    // pause
+    // pause — TOUJOURS autorisé pendant le cooldown (sauf si insuffisant data / rentable)
     if (isProfitable) {
       actions.push({ type: 'pause', enabled: false, reason: 'Entité rentable — pause déconseillée' });
     } else if (eligibility === 'insufficient_data') {
@@ -228,6 +253,47 @@ export class ActionSuggestionService {
     }
 
     return actions;
+  }
+
+  /**
+   * Vérifie si l'entité est en période de cooldown après une modification d'enchère.
+   * Retourne null si pas de cooldown, sinon les détails du cooldown.
+   */
+  private checkCooldown(
+    entity: {
+      lastBidChangeAt?: Date | null;
+      lastBidChangeType?: string | null;
+      previousBid?: number | null;
+      newBid?: number | null;
+    },
+    phase: LifecyclePhase,
+  ): ActionSuggestionResponse['cooldown'] | null {
+    if (!entity.lastBidChangeAt) return null;
+
+    const cooldownDays = GUARDS.COOLDOWN_DAYS_BY_PHASE[phase] ?? 7;
+    const lastChangeAt = new Date(entity.lastBidChangeAt);
+    const now = new Date();
+    const diffMs = now.getTime() - lastChangeAt.getTime();
+    const daysSinceChange = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const remainingDays = Math.max(0, cooldownDays - daysSinceChange);
+    const active = daysSinceChange < cooldownDays;
+
+    if (!active) return null;
+
+    this.logger.log(
+      `[COOLDOWN] Entity has active cooldown: phase=${phase}, daysSince=${daysSinceChange}, cooldownDays=${cooldownDays}, remaining=${remainingDays}`,
+    );
+
+    return {
+      active: true,
+      daysSinceChange,
+      cooldownDays,
+      remainingDays,
+      lastChangeType: entity.lastBidChangeType || 'unknown',
+      previousBid: entity.previousBid ?? 0,
+      newBid: entity.newBid ?? 0,
+      lastChangeAt: lastChangeAt.toISOString(),
+    };
   }
 
   private async loadEntity(
@@ -249,6 +315,11 @@ export class ActionSuggestionService {
     keywordText?: string;
     expressionType?: string;
     expression?: any;
+    // Cooldown fields
+    lastBidChangeAt?: Date | null;
+    lastBidChangeType?: string | null;
+    previousBid?: number | null;
+    newBid?: number | null;
   } | null> {
     const amazonId = this.extractAmazonId(entityKey);
     if (amazonId === null) return null;
@@ -267,6 +338,10 @@ export class ActionSuggestionService {
           amazonCampaignId: campaigns.amazonCampaignId,
           amazonAdGroupId: adGroups.amazonAdGroupId,
           biddingStrategy: campaigns.biddingStrategy,
+          lastBidChangeAt: keywords.lastBidChangeAt,
+          lastBidChangeType: keywords.lastBidChangeType,
+          previousBid: keywords.previousBid,
+          newBid: keywords.newBid,
         })
         .from(keywords)
         .innerJoin(adGroups, eq(keywords.adGroupId, adGroups.id))
@@ -290,6 +365,10 @@ export class ActionSuggestionService {
         biddingStrategy: r.biddingStrategy ?? undefined,
         matchType: r.matchType,
         keywordText: r.name,
+        lastBidChangeAt: r.lastBidChangeAt,
+        lastBidChangeType: r.lastBidChangeType,
+        previousBid: r.previousBid ? Number(r.previousBid) : null,
+        newBid: r.newBid ? Number(r.newBid) : null,
       };
     }
 
@@ -307,6 +386,10 @@ export class ActionSuggestionService {
         amazonCampaignId: campaigns.amazonCampaignId,
         amazonAdGroupId: adGroups.amazonAdGroupId,
         biddingStrategy: campaigns.biddingStrategy,
+        lastBidChangeAt: productTargets.lastBidChangeAt,
+        lastBidChangeType: productTargets.lastBidChangeType,
+        previousBid: productTargets.previousBid,
+        newBid: productTargets.newBid,
       })
       .from(productTargets)
       .innerJoin(adGroups, eq(productTargets.adGroupId, adGroups.id))
@@ -334,6 +417,10 @@ export class ActionSuggestionService {
       biddingStrategy: r.biddingStrategy ?? undefined,
       expressionType: r.expressionType,
       expression: r.expression,
+      lastBidChangeAt: r.lastBidChangeAt,
+      lastBidChangeType: r.lastBidChangeType,
+      previousBid: r.previousBid ? Number(r.previousBid) : null,
+      newBid: r.newBid ? Number(r.newBid) : null,
     };
   }
 

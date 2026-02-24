@@ -13,7 +13,8 @@ export type BidEligibility =
   | 'insufficient_data'   // clicks < 5 → pas d'action possible
   | 'observe_only'        // clicks 5-14, orders === 0 → patience
   | 'small_tweak_max'     // clicks 5-14, orders >= 1 → ±10% max
-  | 'full_calculation';   // clicks >= 15 → formule complète
+  | 'full_calculation'    // clicks >= 15 → formule complète
+  | 'cooldown';           // enchère modifiée récemment → en observation
 
 export type PositioningLabel = 'top' | 'bon' | 'moyen' | 'faible';
 

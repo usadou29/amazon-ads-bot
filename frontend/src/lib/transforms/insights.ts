@@ -30,6 +30,7 @@ export enum EntityDiagnosisCode {
   EXPENSIVE_BUT_VALID = 'expensive_but_valid',
   WINNER = 'winner',
   BOOST_CANDIDATE = 'boost_candidate',
+  COOLDOWN_ACTIVE = 'cooldown_active',
 }
 
 export type ActionExecution = 'ads' | 'book' | 'none';
@@ -279,6 +280,13 @@ const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
     summaryKey: 'insights.entity.boost_candidate.summary',
     nextStepKey: 'insights.entity.boost_candidate.nextStep',
   },
+  [EntityDiagnosisCode.COOLDOWN_ACTIVE]: {
+    titleKey: 'insights.entity.cooldown_active.title',
+
+    explanationKey: 'insights.entity.cooldown_active.explanation',
+    summaryKey: 'insights.entity.cooldown_active.summary',
+    nextStepKey: 'insights.entity.cooldown_active.nextStep',
+  },
 };
 
 // ── Diagnosis colors (for badges) ───────────────────────────
@@ -305,6 +313,7 @@ export const ENTITY_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string;
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
   [EntityDiagnosisCode.WINNER]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300' },
   [EntityDiagnosisCode.BOOST_CANDIDATE]: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-300' },
+  [EntityDiagnosisCode.COOLDOWN_ACTIVE]: { bg: 'bg-indigo-50', text: 'text-indigo-600', border: 'border-indigo-200' },
 };
 
 // ── Macro strategy colors ───────────────────────────────────

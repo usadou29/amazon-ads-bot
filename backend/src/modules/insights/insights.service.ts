@@ -393,6 +393,10 @@ export class InsightsService {
       [EntityDiagnosisCode.BOOST_CANDIDATE]: [
         this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
       ],
+      [EntityDiagnosisCode.COOLDOWN_ACTIVE]: [
+        this.action('patience', 'none', 'insights.actions.patience', 1),
+        this.action('monitor', 'none', 'insights.actions.monitor', 2),
+      ],
     };
     return actionMap[code] || [];
   }

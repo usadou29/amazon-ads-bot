@@ -26,6 +26,7 @@ export enum EntityDiagnosisCode {
   EXPENSIVE_BUT_VALID = 'expensive_but_valid',
   WINNER = 'winner',
   BOOST_CANDIDATE = 'boost_candidate',
+  COOLDOWN_ACTIVE = 'cooldown_active',  // Enchère modifiée récemment, en période d'observation
 }
 
 // ── Trend Direction ─────────────────────────────────────────

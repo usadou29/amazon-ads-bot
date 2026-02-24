@@ -40,6 +40,15 @@ export const GUARDS = {
     relaunch: 14,
   } as Record<string, number>,
 
+  // Cooldown après modification d'enchère (en jours) par phase de cycle de vie
+  // Pendant le cooldown, aucune modification d'enchère n'est autorisée (pause/negative restent possibles)
+  COOLDOWN_DAYS_BY_PHASE: {
+    launch: 3,
+    relaunch: 3,
+    scale: 5,
+    evergreen: 7,
+  } as Record<string, number>,
+
   // Seuil minimum d'impressions pour avoir un signal fiable (campagne)
   MIN_IMPRESSIONS_FOR_SIGNAL: 300,
 

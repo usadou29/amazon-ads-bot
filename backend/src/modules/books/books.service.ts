@@ -1406,6 +1406,10 @@ export class BooksService {
           state: keywords.state,
           bid: keywords.bid,
           adGroupId: keywords.adGroupId,
+          lastBidChangeAt: keywords.lastBidChangeAt,
+          lastBidChangeType: keywords.lastBidChangeType,
+          previousBid: keywords.previousBid,
+          newBid: keywords.newBid,
         })
         .from(keywords)
         .where(inArray(keywords.adGroupId, adGroupIds));
@@ -1420,6 +1424,10 @@ export class BooksService {
           state: productTargets.state,
           bid: productTargets.bid,
           adGroupId: productTargets.adGroupId,
+          lastBidChangeAt: productTargets.lastBidChangeAt,
+          lastBidChangeType: productTargets.lastBidChangeType,
+          previousBid: productTargets.previousBid,
+          newBid: productTargets.newBid,
         })
         .from(productTargets)
         .where(inArray(productTargets.adGroupId, adGroupIds));
@@ -1574,6 +1582,17 @@ export class BooksService {
         const previous7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate14d, previous7dEndStr) : null;
         const trend = current7d && previous7d ? this.computeTrend(current7d, previous7d) : undefined;
 
+        // Compute cooldown info if lastBidChangeAt exists
+        let cooldown: { active: boolean; daysSinceChange: number; cooldownDays: number; remainingDays: number } | undefined;
+        if (k.lastBidChangeAt) {
+          const cooldownDays = (GUARDS.COOLDOWN_DAYS_BY_PHASE as Record<string, number>)[lifecyclePhase] ?? 7;
+          const diffMs = Date.now() - new Date(k.lastBidChangeAt).getTime();
+          const daysSinceChange = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+          if (daysSinceChange < cooldownDays) {
+            cooldown = { active: true, daysSinceChange, cooldownDays, remainingDays: cooldownDays - daysSinceChange };
+          }
+        }
+
         return {
           id: k.id,
           amazonKeywordId: String(k.amazonKeywordId),
@@ -1582,6 +1601,7 @@ export class BooksService {
           matchTypeRaw: k.matchType,
           state: k.state,
           bid: k.bid ? Number(k.bid) : null,
+          cooldown,
           metrics: {
             ...(rows.length > 0
               ? this.aggregateRawRows(rows, displayStartDate, endDate)
@@ -1617,6 +1637,17 @@ export class BooksService {
         const previous7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate14d, previous7dEndStr) : null;
         const trend = current7d && previous7d ? this.computeTrend(current7d, previous7d) : undefined;
 
+        // Compute cooldown info if lastBidChangeAt exists
+        let cooldown: { active: boolean; daysSinceChange: number; cooldownDays: number; remainingDays: number } | undefined;
+        if (t.lastBidChangeAt) {
+          const cooldownDays = (GUARDS.COOLDOWN_DAYS_BY_PHASE as Record<string, number>)[lifecyclePhase] ?? 7;
+          const diffMs = Date.now() - new Date(t.lastBidChangeAt).getTime();
+          const daysSinceChange = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+          if (daysSinceChange < cooldownDays) {
+            cooldown = { active: true, daysSinceChange, cooldownDays, remainingDays: cooldownDays - daysSinceChange };
+          }
+        }
+
         return {
           id: t.id,
           amazonTargetId: String(t.amazonTargetId),
@@ -1624,6 +1655,7 @@ export class BooksService {
           expression: label || t.expressionType || 'Cible produit',
           state: t.state,
           bid: t.bid ? Number(t.bid) : null,
+          cooldown,
           metrics: {
             ...(rows.length > 0
               ? this.aggregateRawRows(rows, displayStartDate, endDate)

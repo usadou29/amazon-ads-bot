@@ -218,6 +218,13 @@
         "summary": "{orders} vente(s), CTR {ctr}% (au-dessus de la moyenne) sur {periodDays}j ({dateRange})",
         "explanation": "Ce {entityLabel} a un CTR supérieur à la moyenne et convertit bien. Augmente l'enchère pour capter plus de trafic.",
         "nextStep": "Monte l'enchère pour maximiser le volume sur ce {entityLabel} performant."
+      },
+      "cooldown_active": {
+        "title": "En observation",
+
+        "summary": "Enchère modifiée récemment — en période d'observation",
+        "explanation": "L'enchère de ce {entityLabel} a été modifiée récemment. On attend que les données se stabilisent avant d'agir à nouveau.",
+        "nextStep": "Patiente jusqu'à la fin de la période d'observation avant de modifier l'enchère."
       }
     },
     "actions": {
@@ -295,7 +302,8 @@
       "insufficient_data": "Pas assez de données ({clicks} clics). Il faut au minimum 5 clics pour agir.",
       "observe_only": "Phase d'observation. {clicks} clics, 0 vente — patience recommandée.",
       "small_tweak_max": "Ajustement limité à ±10%. Données encore insuffisantes pour un calcul complet.",
-      "full_calculation": "Calcul complet basé sur {clicks} clics et {orders} vente(s)."
+      "full_calculation": "Calcul complet basé sur {clicks} clics et {orders} vente(s).",
+      "cooldown": "En observation (J+{daysSince}/{cooldownDays}). L'enchère a été modifiée le {lastChangeDate} — attends la fin du cooldown pour agir."
     },
     "confirmApply": "Confirmer le changement d'enchère de {currentBid}€ → {newBid}€ ?",
     "confirmPause": "Confirmer la mise en pause de « {entityName} » ?",

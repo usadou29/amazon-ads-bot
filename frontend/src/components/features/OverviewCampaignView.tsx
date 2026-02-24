@@ -34,6 +34,13 @@ interface TargetMetrics {
   trend?: TrendData;
 }
 
+interface CooldownInfo {
+  active: boolean;
+  daysSinceChange: number;
+  cooldownDays: number;
+  remainingDays: number;
+}
+
 interface KeywordItem {
   id: string;
   amazonKeywordId: string;
@@ -44,6 +51,7 @@ interface KeywordItem {
   bid: number | null;
   metrics: TargetMetrics;
   insight?: EntityInsight;
+  cooldown?: CooldownInfo;
 }
 
 interface ProductTargetItem {
@@ -55,6 +63,7 @@ interface ProductTargetItem {
   bid: number | null;
   metrics: TargetMetrics;
   insight?: EntityInsight;
+  cooldown?: CooldownInfo;
 }
 
 interface CampaignDetail {
@@ -691,6 +700,7 @@ function pickBestAction(
   insight: EntityInsight | undefined,
   rendered: ReturnType<typeof renderEntityInsight> | null,
   entityState?: string,
+  cooldown?: { active: boolean; daysSinceChange: number; cooldownDays: number; remainingDays: number },
 ): { label: string; execution: 'ads' | 'book' | 'none'; type: string } | null {
   // Si l'entité est en pause → proposer "Réactiver" comme action prioritaire
   if (entityState === 'paused') {
@@ -699,6 +709,15 @@ function pickBestAction(
   // Si l'entité est archivée → pas d'action
   if (entityState === 'archived') {
     return null;
+  }
+
+  // Si cooldown actif → afficher le badge observation (cliquable pour voir le popover)
+  if (cooldown?.active) {
+    return {
+      label: `Observation (J+${cooldown.daysSinceChange}/${cooldown.cooldownDays})`,
+      execution: 'none',
+      type: 'cooldown',
+    };
   }
 
   if (!insight || !rendered || !rendered.actions.length) return null;
@@ -924,21 +943,24 @@ function DirectActionConfirm({
 }
 
 function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: (e?: React.MouseEvent) => void }) {
-  const execColors = EXECUTION_COLORS[action.execution];
-  const categoryTag = action.execution === 'ads' ? '⚡' : action.execution === 'book' ? '📖' : '👁';
+  // Cooldown badge: indigo theme with timer icon
+  const isCooldown = action.type === 'cooldown';
+  const bgClass = isCooldown ? 'bg-indigo-50' : EXECUTION_COLORS[action.execution].bg;
+  const textClass = isCooldown ? 'text-indigo-600' : EXECUTION_COLORS[action.execution].text;
+  const categoryTag = isCooldown ? '\u23F3' : action.execution === 'ads' ? '⚡' : action.execution === 'book' ? '📖' : '👁';
 
   if (onClick) {
     return (
       <button
         onClick={(e) => onClick(e)}
-        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${execColors.bg} ${execColors.text}`}
+        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${bgClass} ${textClass}${isCooldown ? ' border border-indigo-200' : ''}`}
       >
         {categoryTag} {action.label}
       </button>
     );
   }
   return (
-    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${execColors.bg} ${execColors.text}`}>
+    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${bgClass} ${textClass}${isCooldown ? ' border border-indigo-200' : ''}`}>
       {categoryTag} {action.label}
     </span>
   );
@@ -1023,7 +1045,7 @@ function KeywordTableWithRecos({
               const entityKey = `keyword:${kw.amazonKeywordId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
               const kwRendered = kw.insight ? renderEntityInsight(kw.insight) : null;
-              const kwTopAction = pickBestAction(kw.insight, kwRendered, kw.state);
+              const kwTopAction = pickBestAction(kw.insight, kwRendered, kw.state, kw.cooldown);
               return (
                 <tr
                   key={kw.id}
@@ -1077,8 +1099,14 @@ function KeywordTableWithRecos({
                       <EntityActionBadge
                         action={kwTopAction}
                         onClick={
+                          // Cooldown → ouvrir le popover en mode observation (bid_down par défaut)
+                          kwTopAction.type === 'cooldown' && workspaceId && acosTarget != null
+                            ? (e?: React.MouseEvent) => {
+                                if (e) openBidPopover(kw, 'bid_down', e);
+                                else setActionKeyword(kw);
+                              }
                           // Bid actions → popover enchère
-                          (kwTopAction.type === 'bid_up' || kwTopAction.type === 'bid_down') && workspaceId && acosTarget != null
+                          : (kwTopAction.type === 'bid_up' || kwTopAction.type === 'bid_down') && workspaceId && acosTarget != null
                             ? (e?: React.MouseEvent) => {
                                 const bidActionType = kwTopAction.type === 'bid_down' ? 'bid_down' as const : 'bid_up' as const;
                                 if (e) openBidPopover(kw, bidActionType, e);
@@ -1268,7 +1296,7 @@ function ProductTargetTableWithRecos({
               const entityKey = `target:${tg.amazonTargetId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
               const tgRendered = tg.insight ? renderEntityInsight(tg.insight) : null;
-              const tgTopAction = pickBestAction(tg.insight, tgRendered, tg.state);
+              const tgTopAction = pickBestAction(tg.insight, tgRendered, tg.state, tg.cooldown);
               return (
                 <tr
                   key={tg.id}
@@ -1322,8 +1350,14 @@ function ProductTargetTableWithRecos({
                       <EntityActionBadge
                         action={tgTopAction}
                         onClick={
+                          // Cooldown → ouvrir le popover en mode observation (bid_down par défaut)
+                          tgTopAction.type === 'cooldown' && workspaceId && acosTarget != null
+                            ? (e?: React.MouseEvent) => {
+                                if (e) openBidPopoverTg(tg, 'bid_down', e);
+                                else setActionTarget(tg);
+                              }
                           // Bid actions → popover enchère
-                          (tgTopAction.type === 'bid_up' || tgTopAction.type === 'bid_down') && workspaceId && acosTarget != null
+                          : (tgTopAction.type === 'bid_up' || tgTopAction.type === 'bid_down') && workspaceId && acosTarget != null
                             ? (e?: React.MouseEvent) => {
                                 const bidActionType = tgTopAction.type === 'bid_down' ? 'bid_down' as const : 'bid_up' as const;
                                 if (e) openBidPopoverTg(tg, bidActionType, e);

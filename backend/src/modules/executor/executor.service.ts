@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, Logger, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DATABASE_CONNECTION } from '@/db/database.module';
 import {
@@ -414,11 +414,15 @@ export class ExecutorService {
         ctx.amazonAdGroupId,
       );
 
-      // Mettre a jour le keyword en base
+      // Mettre a jour le keyword en base + cooldown tracking
       await this.db
         .update(keywords)
         .set({
           bid: String(newBid),
+          lastBidChangeAt: new Date(),
+          lastBidChangeType: newBid > currentBid ? 'bid_up' : 'bid_down',
+          previousBid: String(currentBid),
+          newBid: String(newBid),
           updatedAt: new Date(),
         })
         .where(eq(keywords.id, keyword.id));
@@ -932,8 +936,9 @@ export class ExecutorService {
     newBid?: number;
     rationale?: string;
     dryRun?: boolean;
+    lifecyclePhase?: string;
   }): Promise<ExecuteActionResult> {
-    const { workspaceId, entityKey, entityType, actionType, newBid, rationale, dryRun = false } = dto;
+    const { workspaceId, entityKey, entityType, actionType, newBid, rationale, dryRun = false, lifecyclePhase } = dto;
 
     // 1. Kill switch check
     const killSwitch = await this.isKillSwitchActive();
@@ -964,9 +969,38 @@ export class ExecutorService {
     }
 
     if (entityType === 'keyword') {
-      return this.executeDirectKeywordAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun);
+      return this.executeDirectKeywordAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun, lifecyclePhase);
     } else {
-      return this.executeDirectTargetAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun);
+      return this.executeDirectTargetAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun, lifecyclePhase);
+    }
+  }
+
+  /**
+   * Vérifie le cooldown d'enchère. Lève une ConflictException (409) si actif.
+   * Ne bloque que les actions adjust_bid. Pause/enable restent autorisés.
+   */
+  private checkBidCooldown(
+    lastBidChangeAt: Date | null | undefined,
+    actionType: string,
+    lifecyclePhase?: string,
+  ): void {
+    if (actionType !== 'adjust_bid') return;
+    if (!lastBidChangeAt) return;
+
+    const phase = lifecyclePhase || 'evergreen';
+    const cooldownDays = GUARDS.COOLDOWN_DAYS_BY_PHASE[phase] ?? 7;
+    const diffMs = Date.now() - new Date(lastBidChangeAt).getTime();
+    const daysSinceChange = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (daysSinceChange < cooldownDays) {
+      const remaining = cooldownDays - daysSinceChange;
+      this.logger.warn(
+        `[COOLDOWN-BLOCK] Bid change rejected: phase=${phase}, daysSince=${daysSinceChange}, cooldown=${cooldownDays}d, remaining=${remaining}d`,
+      );
+      throw new ConflictException(
+        `Enchère en période d'observation (J+${daysSinceChange}/${cooldownDays}). ` +
+        `Encore ${remaining} jour${remaining > 1 ? 's' : ''} avant de pouvoir modifier l'enchère.`,
+      );
     }
   }
 
@@ -978,12 +1012,16 @@ export class ExecutorService {
     newBid: number | undefined,
     rationale: string | undefined,
     dryRun: boolean,
+    lifecyclePhase?: string,
   ): Promise<ExecuteActionResult> {
     const ctx = await this.getKeywordContextByEntityKey(workspaceId, amazonKeywordId);
     if (!ctx) {
       throw new NotFoundException(`Keyword not found: ${entityKey}`);
     }
     const { keyword } = ctx;
+
+    // COOLDOWN CHECK — bloque adjust_bid si cooldown actif (409)
+    this.checkBidCooldown(keyword.lastBidChangeAt, actionType, lifecyclePhase);
 
     if (actionType === 'adjust_bid') {
       if (newBid == null) throw new BadRequestException('newBid is required for adjust_bid');
@@ -1003,8 +1041,15 @@ export class ExecutorService {
           keyword.amazonKeywordId, { bid: finalBid },
           ctx.amazonCampaignId, ctx.amazonAdGroupId,
         );
-        await this.db.update(keywords).set({ bid: String(finalBid), updatedAt: new Date() })
-          .where(eq(keywords.id, keyword.id));
+        // Mettre à jour le bid + les champs de cooldown tracking
+        await this.db.update(keywords).set({
+          bid: String(finalBid),
+          lastBidChangeAt: new Date(),
+          lastBidChangeType: finalBid > currentBid ? 'bid_up' : 'bid_down',
+          previousBid: String(currentBid),
+          newBid: String(finalBid),
+          updatedAt: new Date(),
+        }).where(eq(keywords.id, keyword.id));
       }
 
       const actionLogEntry = await this.logAction({
@@ -1084,12 +1129,16 @@ export class ExecutorService {
     newBid: number | undefined,
     rationale: string | undefined,
     dryRun: boolean,
+    lifecyclePhase?: string,
   ): Promise<ExecuteActionResult> {
     const ctx = await this.getTargetContextByEntityKey(workspaceId, amazonTargetId);
     if (!ctx) {
       throw new NotFoundException(`Product target not found: ${entityKey}`);
     }
     const { target } = ctx;
+
+    // COOLDOWN CHECK — bloque adjust_bid si cooldown actif (409)
+    this.checkBidCooldown(target.lastBidChangeAt, actionType, lifecyclePhase);
 
     if (actionType === 'adjust_bid') {
       if (newBid == null) throw new BadRequestException('newBid is required for adjust_bid');
@@ -1109,8 +1158,15 @@ export class ExecutorService {
           target.amazonTargetId, { bid: finalBid },
           ctx.amazonCampaignId, ctx.amazonAdGroupId,
         );
-        await this.db.update(productTargets).set({ bid: String(finalBid), updatedAt: new Date() })
-          .where(eq(productTargets.id, target.id));
+        // Mettre à jour le bid + les champs de cooldown tracking
+        await this.db.update(productTargets).set({
+          bid: String(finalBid),
+          lastBidChangeAt: new Date(),
+          lastBidChangeType: finalBid > currentBid ? 'bid_up' : 'bid_down',
+          previousBid: String(currentBid),
+          newBid: String(finalBid),
+          updatedAt: new Date(),
+        }).where(eq(productTargets.id, target.id));
       }
 
       const actionLogEntry = await this.logAction({

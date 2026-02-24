@@ -49,4 +49,8 @@ export class ExecuteDirectActionDto {
 
   @IsOptional()
   dryRun?: boolean;
+
+  @IsOptional()
+  @IsString()
+  lifecyclePhase?: string;
 }

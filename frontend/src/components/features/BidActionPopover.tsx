@@ -35,6 +35,16 @@ interface SuggestionData {
     rangeMin: number;
     rangeMax: number;
   };
+  cooldown?: {
+    active: boolean;
+    daysSinceChange: number;
+    cooldownDays: number;
+    remainingDays: number;
+    lastChangeType: string;
+    previousBid: number;
+    newBid: number;
+    lastChangeAt: string;
+  };
 }
 
 // ── Composant ─────────────────────────────────────────
@@ -184,6 +194,23 @@ export function BidActionPopover({
         {/* Data */}
         {data && !loading && !success && (
           <div className="space-y-3">
+            {/* Cooldown block */}
+            {data.cooldown?.active && (
+              <div className="rounded-lg bg-indigo-50 border border-indigo-200 px-3 py-2.5">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-sm">&#9203;</span>
+                  <span className="text-xs font-semibold text-indigo-700">
+                    En observation (J+{data.cooldown.daysSinceChange}/{data.cooldown.cooldownDays})
+                  </span>
+                </div>
+                <p className="text-[11px] text-indigo-600 leading-relaxed">
+                  Enchère {data.cooldown.lastChangeType === 'bid_up' ? 'augmentée' : 'baissée'} le{' '}
+                  {new Date(data.cooldown.lastChangeAt).toLocaleDateString('fr-FR')}.
+                  Encore {data.cooldown.remainingDays}j avant de pouvoir modifier.
+                </p>
+              </div>
+            )}
+
             {/* Ligne: Enchère actuelle */}
             <div className="flex items-center justify-between">
               <span className="text-xs text-slate-500">Enchère actuelle</span>
@@ -193,7 +220,7 @@ export function BidActionPopover({
             </div>
 
             {/* Ligne: Enchère suggérée Amazon */}
-            {data.amazonBid && (
+            {!data.cooldown?.active && data.amazonBid && (
               <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-amber-700 font-medium">Amazon suggère</span>
@@ -210,14 +237,14 @@ export function BidActionPopover({
               </div>
             )}
 
-            {!data.amazonBid && (
+            {!data.cooldown?.active && !data.amazonBid && (
               <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
                 <span className="text-xs text-slate-400 italic">Enchère Amazon non disponible pour ce {entityType === 'keyword' ? 'mot-clé' : 'ciblage'}</span>
               </div>
             )}
 
             {/* Ligne: Notre recommandation */}
-            {data.bidCalculation.recommendedBid != null && (
+            {!data.cooldown?.active && data.bidCalculation.recommendedBid != null && (
               <div className="flex items-center justify-between">
                 <span className="text-xs text-slate-500">Notre recommandation</span>
                 <span className={`text-sm font-bold tabular-nums ${isUp ? 'text-emerald-600' : 'text-amber-600'}`}>
@@ -227,14 +254,14 @@ export function BidActionPopover({
             )}
 
             {/* Explication courte */}
-            {data.bidCalculation.explanation && (
+            {!data.cooldown?.active && data.bidCalculation.explanation && (
               <p className="text-[11px] text-slate-400 leading-relaxed">
                 {data.bidCalculation.explanation}
               </p>
             )}
 
-            {/* Bouton Appliquer */}
-            {data.bidCalculation.recommendedBid != null && (
+            {/* Bouton Appliquer — désactivé si cooldown */}
+            {!data.cooldown?.active && data.bidCalculation.recommendedBid != null && (
               <button
                 onClick={handleApply}
                 disabled={applying}
@@ -250,7 +277,7 @@ export function BidActionPopover({
               </button>
             )}
 
-            {data.bidCalculation.recommendedBid == null && (
+            {!data.cooldown?.active && data.bidCalculation.recommendedBid == null && (
               <div className="rounded-lg bg-blue-50 border border-blue-100 p-2 text-xs text-blue-600">
                 Pas assez de données pour calculer une enchère recommandée.
               </div>
