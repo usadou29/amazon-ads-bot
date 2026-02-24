@@ -1537,7 +1537,7 @@ function OverviewCampaignCard({
 
         {/* Campaign insight */}
         {campaign.insight && (
-          <CampaignInsightCard insight={campaign.insight} />
+          <CampaignInsightCard insight={campaign.insight} campaignName={campaign.name} />
         )}
 
         {/* Expanded content */}

@@ -72,6 +72,8 @@ export const fetchTopPerformers = (entityType = 'campaign', sortBy = 'sales', li
   api.get(`/metrics/top-performers?workspaceId=${getWorkspaceId()}&entityType=${entityType}&sortBy=${sortBy}&limit=${limit}`).then((r) => r.data);
 export const fetchMarketplaceBreakdown = () => api.get(`/metrics/by-marketplace?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
 export const fetchTrends = () => api.get(`/metrics/trends?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
+export const fetchEntityDiagnostic = (entityType: string, amazonId: string) =>
+  api.get(`/metrics/diagnostic/${entityType}/${amazonId}`).then((r) => r.data);
 
 // ─── Recommendations ───────────────────────────
 export const fetchRecommendations = (status = 'pending') => api.get(`/recommendations?workspaceId=${getWorkspaceId()}&status=${status}`).then((r) => r.data);

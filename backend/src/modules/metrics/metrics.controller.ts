@@ -280,17 +280,20 @@ export class MetricsController {
     const now = new Date();
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
-    const startDate30d = new Date(yesterday);
-    startDate30d.setDate(startDate30d.getDate() - 29);
-    const startDate14d = new Date(yesterday);
-    startDate14d.setDate(startDate14d.getDate() - 13);
-    const startDate7d = new Date(yesterday);
-    startDate7d.setDate(startDate7d.getDate() - 6);
+    const mkStart = (daysBack: number) => {
+      const d = new Date(yesterday);
+      d.setDate(d.getDate() - (daysBack - 1));
+      return d;
+    };
+    const startDate7d = mkStart(7);
+    const startDate14d = mkStart(14);
+    const startDate30d = mkStart(30);
+    const startDate60d = mkStart(60);
 
     const endDateStr = yesterday.toISOString().split('T')[0];
-    const start30dStr = startDate30d.toISOString().split('T')[0];
+    const start60dStr = startDate60d.toISOString().split('T')[0];
 
-    // Fetch ALL raw daily rows for the last 30 days
+    // Fetch ALL raw daily rows for the last 60 days
     const rawRows = await this.db
       .select({
         date: dailyMetrics.date,
@@ -310,7 +313,7 @@ export class MetricsController {
         and(
           eq(dailyMetrics.entityType, entityType),
           eq(dailyMetrics.entityKey, entityKey),
-          gte(dailyMetrics.date, start30dStr),
+          gte(dailyMetrics.date, start60dStr),
           lte(dailyMetrics.date, endDateStr),
         ),
       )
@@ -336,20 +339,23 @@ export class MetricsController {
       return { impressions, clicks, spend: Math.round(spend * 100) / 100, sales: Math.round(sales * 100) / 100, orders, units, acos, cvr, daysWithData: count };
     };
 
-    const window7d = aggregate(rawRows, startDate7d.toISOString().split('T')[0]);
-    const window14d = aggregate(rawRows, startDate14d.toISOString().split('T')[0]);
-    const window30d = aggregate(rawRows, start30dStr);
+    const fmt = (d: Date) => d.toISOString().split('T')[0];
+    const window7d = aggregate(rawRows, fmt(startDate7d));
+    const window14d = aggregate(rawRows, fmt(startDate14d));
+    const window30d = aggregate(rawRows, fmt(startDate30d));
+    const window60d = aggregate(rawRows, start60dStr);
 
     return {
       entityKey,
       entityType,
       amazonId,
       generatedAt: now.toISOString(),
-      dateRange: { start: start30dStr, end: endDateStr },
+      dateRange: { start: start60dStr, end: endDateStr },
       windows: {
-        '7d': { ...window7d, period: `${startDate7d.toISOString().split('T')[0]} → ${endDateStr}` },
-        '14d': { ...window14d, period: `${startDate14d.toISOString().split('T')[0]} → ${endDateStr}` },
-        '30d': { ...window30d, period: `${start30dStr} → ${endDateStr}` },
+        '7d': { ...window7d, period: `${fmt(startDate7d)} → ${endDateStr}` },
+        '14d': { ...window14d, period: `${fmt(startDate14d)} → ${endDateStr}` },
+        '30d': { ...window30d, period: `${fmt(startDate30d)} → ${endDateStr}` },
+        '60d': { ...window60d, period: `${start60dStr} → ${endDateStr}` },
       },
       rawDailyRows: rawRows.map((r: any) => ({
         date: r.date,
@@ -363,7 +369,6 @@ export class MetricsController {
         syncedAt: r.syncedAt,
       })),
       totalRowsInPeriod: rawRows.length,
-      _hint: 'Compare ces données avec Amazon Ads pour détecter les écarts. Vérifie aussi /api/metrics/diagnostic/target/{amazonId} si les données ne matchent pas.',
     };
   }
 }
