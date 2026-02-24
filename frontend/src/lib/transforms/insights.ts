@@ -114,6 +114,14 @@ export interface EntityInsight {
   // Lifecycle guardrail v2.1
   guardrailApplied?: boolean;
   guardrailExplanation?: string;
+  // Window divergence v2.2
+  longWindowFacts?: {
+    orders: number;
+    clicks: number;
+    sales: number;
+    acos: number | null;
+    periodDays: 30;
+  };
 }
 
 // ── Rendered Insight ────────────────────────────────────────

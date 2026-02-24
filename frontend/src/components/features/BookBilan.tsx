@@ -123,12 +123,14 @@ const ACTION_LABELS: Record<string, string> = {
   improve_cover: 'Revoir ta couverture',
   monitor: 'Surveiller',
   patience: 'Patienter',
+  enable: 'Réactiver',
 };
 
 const ACTION_COLORS: Record<string, { bg: string; text: string }> = {
   bid_up: { bg: 'bg-emerald-50', text: 'text-emerald-700' },
   bid_down: { bg: 'bg-amber-50', text: 'text-amber-700' },
   pause: { bg: 'bg-red-50', text: 'text-red-700' },
+  enable: { bg: 'bg-emerald-50', text: 'text-emerald-700' },
   harvest: { bg: 'bg-blue-50', text: 'text-blue-700' },
   add_negative: { bg: 'bg-red-50', text: 'text-red-600' },
   budget_increase: { bg: 'bg-blue-50', text: 'text-blue-700' },

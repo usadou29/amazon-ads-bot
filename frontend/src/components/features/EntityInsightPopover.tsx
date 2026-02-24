@@ -127,6 +127,28 @@ export function EntityInsightPopover({
               </div>
             )}
 
+            {/* Window divergence warning */}
+            {insight.longWindowFacts && insight.summaryFacts.orders === 0 && insight.longWindowFacts.orders > 0 && (
+              <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                <p className="text-[10px] font-medium text-amber-700 mb-1">
+                  ⚠️ Divergence de fenêtres
+                </p>
+                <p className="text-[10px] text-amber-600">
+                  Sur {insight.decisionPeriodDays}j : 0 commande — mais sur 30j : {insight.longWindowFacts.orders} commande{insight.longWindowFacts.orders > 1 ? 's' : ''}{insight.longWindowFacts.acos !== null ? ` (ACoS ${insight.longWindowFacts.acos.toFixed(1)}%)` : ''}.
+                  Ce mot-clé convertit sur la période longue.
+                </p>
+              </div>
+            )}
+
+            {/* Long window context (when orders exist on both windows but differ) */}
+            {insight.longWindowFacts && insight.summaryFacts.orders > 0 && insight.longWindowFacts.orders > insight.summaryFacts.orders && (
+              <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-[10px] text-slate-500">
+                  Sur 30j : {insight.longWindowFacts.clicks} clics, {insight.longWindowFacts.orders} cmd.{insight.longWindowFacts.acos !== null ? `, ACoS ${insight.longWindowFacts.acos.toFixed(1)}%` : ''}
+                </p>
+              </div>
+            )}
+
             {/* Mini metrics row */}
             <div className="mb-3 grid grid-cols-4 gap-2 border-t border-slate-100 pt-3">
               <MiniMetric label="Impr." value={insight.summaryFacts.impressions.toLocaleString('fr-FR')} />

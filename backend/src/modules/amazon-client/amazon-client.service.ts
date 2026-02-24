@@ -379,28 +379,43 @@ export class AmazonClientService {
     marketplace: Marketplace,
     keywordId: number,
     updates: { bid?: number; state?: string },
+    campaignId?: number,
+    adGroupId?: number,
   ): Promise<any> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const body = {
-      keywords: [
-        {
-          keywordId: keywordId.toString(),
-          ...updates,
-        },
-      ],
+    const normalizedUpdates = { ...updates };
+    if (normalizedUpdates.state) normalizedUpdates.state = normalizedUpdates.state.toUpperCase();
+
+    const keywordPayload: Record<string, any> = {
+      keywordId: keywordId.toString(),
+      ...normalizedUpdates,
     };
+    if (campaignId != null) keywordPayload.campaignId = campaignId.toString();
+    if (adGroupId != null) keywordPayload.adGroupId = adGroupId.toString();
 
-    const response = await retryWithBackoff(async () => {
-      return client.put('/sp/keywords', body, {
-        headers: {
-          Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
-          'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
-        },
+    const body = { keywords: [keywordPayload] };
+
+    this.logger.log(`[UPDATE-KW] Payload: ${JSON.stringify(body)}`);
+
+    try {
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/keywords', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
+          },
+        });
       });
-    });
 
-    return response.data;
+      this.logger.log(`[UPDATE-KW] Response: ${JSON.stringify(response.data)}`);
+      return response.data;
+    } catch (error) {
+      if (error instanceof AxiosError && error.response) {
+        this.logger.error(`[UPDATE-KW] Amazon API error ${error.response.status}: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -412,28 +427,43 @@ export class AmazonClientService {
     marketplace: Marketplace,
     targetId: number,
     updates: { bid?: number; state?: string },
+    campaignId?: number,
+    adGroupId?: number,
   ): Promise<any> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const body = {
-      targetingClauses: [
-        {
-          targetId: targetId.toString(),
-          ...updates,
-        },
-      ],
+    const normalizedUpdates = { ...updates };
+    if (normalizedUpdates.state) normalizedUpdates.state = normalizedUpdates.state.toUpperCase();
+
+    const targetPayload: Record<string, any> = {
+      targetId: targetId.toString(),
+      ...normalizedUpdates,
     };
+    if (campaignId != null) targetPayload.campaignId = campaignId.toString();
+    if (adGroupId != null) targetPayload.adGroupId = adGroupId.toString();
 
-    const response = await retryWithBackoff(async () => {
-      return client.put('/sp/targets', body, {
-        headers: {
-          Accept: AMAZON_CONFIG.API_VERSION.TARGETS,
-          'Content-Type': AMAZON_CONFIG.API_VERSION.TARGETS,
-        },
+    const body = { targetingClauses: [targetPayload] };
+
+    this.logger.log(`[UPDATE-TG] Payload: ${JSON.stringify(body)}`);
+
+    try {
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/targets', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.TARGETS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.TARGETS,
+          },
+        });
       });
-    });
 
-    return response.data;
+      this.logger.log(`[UPDATE-TG] Response: ${JSON.stringify(response.data)}`);
+      return response.data;
+    } catch (error) {
+      if (error instanceof AxiosError && error.response) {
+        this.logger.error(`[UPDATE-TG] Amazon API error ${error.response.status}: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
   }
 
   /**

@@ -223,7 +223,8 @@
       "improve_listing": "Améliorer ta fiche livre",
       "improve_cover": "Revoir ta couverture",
       "monitor": "Surveiller",
-      "patience": "Patienter"
+      "patience": "Patienter",
+      "enable": "Réactiver"
     },
     "execution": {
       "ads": "Action pub",

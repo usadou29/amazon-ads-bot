@@ -1670,6 +1670,20 @@ export class BooksService {
         // 3. Enrich with decision window info
         kw.insight.decisionPeriodDays = dwResult.chosenWindow;
 
+        // 3b. Ajouter les métriques 30j quand la fenêtre de décision est plus courte
+        //     → permet au frontend d'afficher un avertissement de divergence
+        if (dwResult.chosenWindow < 30) {
+          const w30 = kwMultiWindow.window_30d;
+          const longAcos30 = w30.sales > 0 ? Math.round((w30.spend / w30.sales) * 10000) / 100 : null;
+          kw.insight.longWindowFacts = {
+            orders: w30.orders,
+            clicks: w30.clicks,
+            sales: Math.round(w30.sales * 100) / 100,
+            acos: longAcos30,
+            periodDays: 30,
+          };
+        }
+
         // 4. Validation against long window (30d) for scale/evergreen/relaunch
         if (lifecyclePhase !== 'launch') {
           const primaryAction = kw.insight.suggestedActions[0]?.type;
@@ -1734,6 +1748,19 @@ export class BooksService {
         );
 
         tg.insight.decisionPeriodDays = dwResult.chosenWindow;
+
+        // Ajouter les métriques 30j quand la fenêtre de décision est plus courte
+        if (dwResult.chosenWindow < 30) {
+          const w30 = tgMultiWindow.window_30d;
+          const longAcos30 = w30.sales > 0 ? Math.round((w30.spend / w30.sales) * 10000) / 100 : null;
+          tg.insight.longWindowFacts = {
+            orders: w30.orders,
+            clicks: w30.clicks,
+            sales: Math.round(w30.sales * 100) / 100,
+            acos: longAcos30,
+            periodDays: 30,
+          };
+        }
 
         if (lifecyclePhase !== 'launch') {
           const primaryAction = tg.insight.suggestedActions[0]?.type;

@@ -18,6 +18,7 @@ export type ActionType =
   | 'bid_up'
   | 'bid_down'
   | 'pause'
+  | 'enable'
   | 'add_negative'
   | 'harvest_exact'
   | 'harvest'
@@ -54,6 +55,7 @@ export const ACTION_TYPE_TO_CATEGORY: Record<ActionType, ActionCategory> = {
   bid_up: 'ACTION_PUB',
   bid_down: 'ACTION_PUB',
   pause: 'ACTION_PUB',
+  enable: 'ACTION_PUB',
   add_negative: 'ACTION_PUB',
   harvest_exact: 'ACTION_PUB',
   harvest: 'ACTION_PUB',

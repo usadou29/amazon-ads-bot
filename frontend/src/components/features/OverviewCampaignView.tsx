@@ -528,11 +528,24 @@ function RecoBadge({ count, onClick }: { count: number; onClick: () => void }) {
 /**
  * Sélectionne la meilleure action pour une entité en utilisant le scoring.
  * Convertit les InsightAction rendus en ActionSuggestionItem, puis appelle selectDefaultAction.
+ *
+ * Si l'entité est en pause → override l'action vers "Réactiver".
+ * Si l'entité est archivée → pas d'action proposée.
  */
 function pickBestAction(
   insight: EntityInsight | undefined,
   rendered: ReturnType<typeof renderEntityInsight> | null,
+  entityState?: string,
 ): { label: string; execution: 'ads' | 'book' | 'none'; type: string } | null {
+  // Si l'entité est en pause → proposer "Réactiver" comme action prioritaire
+  if (entityState === 'paused') {
+    return { label: t('insights.actions.enable'), execution: 'ads', type: 'enable' };
+  }
+  // Si l'entité est archivée → pas d'action
+  if (entityState === 'archived') {
+    return null;
+  }
+
   if (!insight || !rendered || !rendered.actions.length) return null;
 
   const items: ActionSuggestionItem[] = rendered.actions.map((a, i) =>
@@ -551,8 +564,9 @@ function pickBestAction(
   return match || rendered.actions[0] || null;
 }
 
-// ── Direct Action Confirm (pause / add_negative) ──
+// ── Direct Action Confirm (pause / add_negative / enable) ──
 // Modale éducative : explique la différence pause vs bloquer, laisse le choix à l'utilisateur
+// Pour enable : modale simple de confirmation de réactivation
 function DirectActionConfirm({
   entityKey,
   entityType,
@@ -570,24 +584,31 @@ function DirectActionConfirm({
   onClose: () => void;
   onActionExecuted?: () => void;
 }) {
-  const [applying, setApplying] = useState<'pause' | 'block' | null>(null);
+  const [applying, setApplying] = useState<'pause' | 'block' | 'enable' | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleExecute = async (chosenAction: 'pause' | 'block') => {
+  const handleExecute = async (chosenAction: 'pause' | 'block' | 'enable') => {
     setApplying(chosenAction);
     setError(null);
     try {
+      const backendActionType = chosenAction === 'enable' ? 'enable' : 'pause';
       await executeDirectAction({
         workspaceId,
         entityKey,
         entityType,
-        actionType: 'pause', // Backend supporte adjust_bid|pause — le blocage négatif passera par pause pour l'instant
-        rationale: chosenAction === 'block'
-          ? `Blocage négatif demandé par l'utilisateur sur "${entityName}"`
-          : `Mise en pause demandée par l'utilisateur sur "${entityName}"`,
+        actionType: backendActionType as 'adjust_bid' | 'pause' | 'enable',
+        rationale: chosenAction === 'enable'
+          ? `Réactivation demandée par l'utilisateur sur "${entityName}"`
+          : chosenAction === 'block'
+            ? `Blocage négatif demandé par l'utilisateur sur "${entityName}"`
+            : `Mise en pause demandée par l'utilisateur sur "${entityName}"`,
       });
-      setSuccess(chosenAction === 'block' ? 'Terme bloqué' : 'Mis en pause');
+      setSuccess(
+        chosenAction === 'enable' ? 'Réactivé avec succès'
+        : chosenAction === 'block' ? 'Terme bloqué'
+        : 'Mis en pause',
+      );
       setTimeout(() => {
         onActionExecuted?.();
         onClose();
@@ -599,8 +620,9 @@ function DirectActionConfirm({
     }
   };
 
+  const isEnableAction = actionType === 'enable';
   const isPauseOrigin = actionType === 'pause';
-  const title = isPauseOrigin ? 'Mettre en pause' : 'Bloquer ce terme';
+  const title = isEnableAction ? 'Réactiver' : isPauseOrigin ? 'Mettre en pause' : 'Bloquer ce terme';
 
   return (
     <>
@@ -625,8 +647,51 @@ function DirectActionConfirm({
             <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-700 text-center font-medium">
               {success}
             </div>
+          ) : isEnableAction ? (
+            <>
+              {/* Mode Réactivation — modale simple */}
+              <p className="text-xs text-slate-500">
+                Ciblage : <span className="font-semibold text-slate-800">{entityName}</span>
+              </p>
+
+              <div className="rounded-lg border-2 border-emerald-300 bg-emerald-50 p-3">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-sm">▶️</span>
+                  <span className="text-xs font-bold text-emerald-800">Réactiver ce ciblage</span>
+                </div>
+                <p className="text-[11px] text-emerald-700 leading-relaxed mb-2">
+                  Remet ce {entityType === 'keyword' ? 'mot-clé' : 'produit ciblé'} en état actif. Amazon recommencera à enchérir dessus dans cette campagne.
+                </p>
+                <p className="text-[10px] text-emerald-600 italic mb-2.5">
+                  Utile si les conditions ont changé (nouvelle couverture, fiche améliorée, etc.) et que tu veux retester ce ciblage.
+                </p>
+                <button
+                  onClick={() => handleExecute('enable')}
+                  disabled={applying !== null}
+                  className={`w-full rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors ${
+                    applying === 'enable' ? 'bg-slate-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
+                >
+                  {applying === 'enable' ? 'Réactivation…' : 'Réactiver'}
+                </button>
+              </div>
+
+              {/* Error */}
+              {error && (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-2 text-xs text-red-600">{error}</div>
+              )}
+
+              {/* Annuler */}
+              <button
+                onClick={onClose}
+                className="w-full rounded-lg px-3 py-2 text-xs font-medium text-slate-500 bg-slate-50 hover:bg-slate-100 transition-colors"
+              >
+                Annuler
+              </button>
+            </>
           ) : (
             <>
+              {/* Mode Pause/Blocage — modale éducative existante */}
               {/* Nom de l'entité */}
               <p className="text-xs text-slate-500">
                 Ciblage : <span className="font-semibold text-slate-800">{entityName}</span>
@@ -803,7 +868,7 @@ function KeywordTableWithRecos({
               const entityKey = `keyword:${kw.amazonKeywordId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
               const kwRendered = kw.insight ? renderEntityInsight(kw.insight) : null;
-              const kwTopAction = pickBestAction(kw.insight, kwRendered);
+              const kwTopAction = pickBestAction(kw.insight, kwRendered, kw.state);
               return (
                 <tr
                   key={kw.id}
@@ -864,8 +929,8 @@ function KeywordTableWithRecos({
                                 if (e) openBidPopover(kw, bidActionType, e);
                                 else setActionKeyword(kw);
                               }
-                          // Direct actions (pause, add_negative) → confirmation
-                          : (kwTopAction.type === 'pause' || kwTopAction.type === 'add_negative') && workspaceId
+                          // Direct actions (pause, add_negative, enable) → confirmation
+                          : (kwTopAction.type === 'pause' || kwTopAction.type === 'add_negative' || kwTopAction.type === 'enable') && workspaceId
                             ? () => setDirectActionKw({ kw, actionType: kwTopAction.type })
                             : undefined
                         }
@@ -1048,7 +1113,7 @@ function ProductTargetTableWithRecos({
               const entityKey = `target:${tg.amazonTargetId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
               const tgRendered = tg.insight ? renderEntityInsight(tg.insight) : null;
-              const tgTopAction = pickBestAction(tg.insight, tgRendered);
+              const tgTopAction = pickBestAction(tg.insight, tgRendered, tg.state);
               return (
                 <tr
                   key={tg.id}
@@ -1109,8 +1174,8 @@ function ProductTargetTableWithRecos({
                                 if (e) openBidPopoverTg(tg, bidActionType, e);
                                 else setActionTarget(tg);
                               }
-                          // Direct actions (pause, add_negative) → confirmation
-                          : (tgTopAction.type === 'pause' || tgTopAction.type === 'add_negative') && workspaceId
+                          // Direct actions (pause, add_negative, enable) → confirmation
+                          : (tgTopAction.type === 'pause' || tgTopAction.type === 'add_negative' || tgTopAction.type === 'enable') && workspaceId
                             ? () => setDirectActionTg({ tg, actionType: tgTopAction.type })
                             : undefined
                         }

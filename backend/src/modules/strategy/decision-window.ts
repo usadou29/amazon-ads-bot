@@ -185,8 +185,14 @@ export function validateAgainstLongWindow(
     return { applied: false, reason: 'no_validation_for_launch' };
   }
 
-  // Relaunch: validation souple (uniquement pause)
+  // Relaunch: validation souple (uniquement pause + protection 0 commandes)
   if (lifecycle === 'relaunch') {
+    // Protection universelle : si la fenêtre courte a 0 ventes mais le 30j a des commandes,
+    // JAMAIS de pause/negative en relaunch
+    if ((actionCategory === 'pause' || actionCategory === 'add_negative') &&
+        decisionMetrics.orders === 0 && longMetrics30d.orders > 0) {
+      return { applied: true, reason: 'relaunch_zero_orders_but_30d_has_orders', downgradeLevel: 'soft_adjust' };
+    }
     if (actionCategory === 'pause') {
       const longAcos = computeAcos(longMetrics30d);
       if (longAcos <= breakEvenAcos) {
@@ -203,12 +209,28 @@ export function validateAgainstLongWindow(
   const longIsProfitable = longAcos <= breakEvenAcos;
   const decisionIsBad = decisionAcos > breakEvenAcos;
 
+  // ── Cas 0 (NOUVEAU) : la fenêtre courte montre 0 ventes MAIS le 30j a des commandes ──
+  // C'est une divergence critique : le keyword convertit sur la période longue.
+  // On ne doit JAMAIS bloquer/pauser un keyword qui a des ventes réelles sur 30j,
+  // même si la fenêtre courte est mauvaise. On downgrade vers soft_adjust (bid_down).
+  const decisionHasZeroOrders = decisionMetrics.orders === 0;
+  const longHasOrders = longMetrics30d.orders > 0;
+
+  if (isStrongAction && decisionHasZeroOrders && longHasOrders) {
+    return {
+      applied: true,
+      reason: 'decision_zero_orders_but_30d_has_orders',
+      downgradeLevel: 'soft_adjust',
+    };
+  }
+
   // Cas 1: action forte ET 30j encore rentable → downgrade
   if (isStrongAction && longIsProfitable) {
     return { applied: true, reason: 'strong_action_but_30d_profitable', downgradeLevel: 'soft_adjust' };
   }
 
   // Cas 2: les deux sont mauvais → action confirmée
+  // NOTE: On arrive ici seulement si le 30j a aussi 0 commandes OU si l'action n'est pas forte
   if (decisionIsBad && !longIsProfitable) {
     return { applied: false, reason: 'both_windows_bad_action_confirmed' };
   }

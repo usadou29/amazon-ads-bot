@@ -36,8 +36,8 @@ export class ExecuteDirectActionDto {
   entityType: 'keyword' | 'target';
 
   @IsString()
-  @IsIn(['adjust_bid', 'pause'])
-  actionType: 'adjust_bid' | 'pause';
+  @IsIn(['adjust_bid', 'pause', 'enable'])
+  actionType: 'adjust_bid' | 'pause' | 'enable';
 
   @IsOptional()
   @IsNumber()

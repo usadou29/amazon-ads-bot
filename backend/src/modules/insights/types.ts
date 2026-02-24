@@ -101,6 +101,14 @@ export interface EntityInsight {
   // Lifecycle guardrail v2.1
   guardrailApplied?: boolean;           // Si le guardrail lifecycle a downgradé l'action
   guardrailExplanation?: string;        // Message explicatif pour l'UI
+  // Window divergence v2.2
+  longWindowFacts?: {                   // Métriques 30j pour transparence quand les fenêtres divergent
+    orders: number;
+    clicks: number;
+    sales: number;
+    acos: number | null;
+    periodDays: 30;
+  };
 }
 
 // ── Macro Strategy (campaign-level, derived from entity insights) ─

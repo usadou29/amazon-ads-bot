@@ -98,7 +98,7 @@ export interface ExecuteDirectActionRequest {
   workspaceId: string;
   entityKey: string;
   entityType: 'keyword' | 'target';
-  actionType: 'adjust_bid' | 'pause';
+  actionType: 'adjust_bid' | 'pause' | 'enable';
   newBid?: number;
   rationale?: string;
   dryRun?: boolean;
