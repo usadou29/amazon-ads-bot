@@ -11,12 +11,16 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { BooksService, CreateBookDto, UpdateBookDto, MapCampaignDto } from './books.service';
+import { LifecycleService } from '@/modules/lifecycle/lifecycle.service';
 
 @Controller('api/books')
 export class BooksController {
   private readonly logger = new Logger(BooksController.name);
 
-  constructor(private readonly booksService: BooksService) {}
+  constructor(
+    private readonly booksService: BooksService,
+    private readonly lifecycleService: LifecycleService,
+  ) {}
 
   /**
    * GET /api/books
@@ -154,6 +158,59 @@ export class BooksController {
     this.logger.log(`Fetching daily metrics for book ${id} (${numDays} days)`);
 
     return this.booksService.getDailyMetrics(id, numDays);
+  }
+
+  /**
+   * GET /api/books/:id/lifecycle
+   * Retourne les infos de cycle de vie d'un livre
+   */
+  @Get(':id/lifecycle')
+  async getLifecycle(@Param('id') id: string) {
+    if (!id) throw new BadRequestException('Book ID is required');
+    this.logger.log(`Fetching lifecycle info for book ${id}`);
+    return this.lifecycleService.getPhaseInfo(id);
+  }
+
+  /**
+   * POST /api/books/:id/lifecycle/compute
+   * Force le recalcul du cycle de vie
+   */
+  @Post(':id/lifecycle/compute')
+  async computeLifecycle(@Param('id') id: string) {
+    if (!id) throw new BadRequestException('Book ID is required');
+    this.logger.log(`Computing lifecycle for book ${id}`);
+    return this.lifecycleService.computePhase(id);
+  }
+
+  /**
+   * POST /api/books/:id/lifecycle/override
+   * Override manuel du cycle de vie
+   */
+  @Post(':id/lifecycle/override')
+  async overrideLifecycle(
+    @Param('id') id: string,
+    @Body() body: { phase: string; reason?: string },
+  ) {
+    if (!id) throw new BadRequestException('Book ID is required');
+    if (!body.phase) throw new BadRequestException('phase is required');
+    const validPhases = ['launch', 'scale', 'evergreen', 'relaunch'];
+    if (!validPhases.includes(body.phase)) {
+      throw new BadRequestException(`Invalid phase. Must be one of: ${validPhases.join(', ')}`);
+    }
+    this.logger.log(`Overriding lifecycle for book ${id} to ${body.phase}`);
+    await this.lifecycleService.overridePhase(id, body.phase as any, body.reason);
+    return { success: true, phase: body.phase };
+  }
+
+  /**
+   * POST /api/books/:id/lifecycle/reset
+   * Réinitialise le cycle de vie en mode auto
+   */
+  @Post(':id/lifecycle/reset')
+  async resetLifecycle(@Param('id') id: string) {
+    if (!id) throw new BadRequestException('Book ID is required');
+    this.logger.log(`Resetting lifecycle to auto for book ${id}`);
+    return this.lifecycleService.resetToAuto(id);
   }
 
   /**

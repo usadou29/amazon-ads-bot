@@ -11,7 +11,9 @@ import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transform
 import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight, computeDateRange } from '@/lib/transforms/insights';
 import { selectDefaultAction, insightActionToSuggestionItem, type ActionSuggestionItem } from '@/lib/action-selection';
 import { t } from '@/lib/i18n';
-import { fetchBookCampaignDetails, executeDirectAction } from '@/lib/api/client';
+import { fetchBookCampaignDetails, executeDirectAction, fetchMacroSuggestions } from '@/lib/api/client';
+import { MacroSuggestionsBlock, type MacroSuggestionDTO } from '@/components/features/MacroSuggestionsBlock';
+import { BatchActionModal } from '@/components/features/BatchActionModal';
 
 // ── Types ──
 interface TrendData {
@@ -1494,12 +1496,22 @@ function OverviewCampaignCard({
   onActionExecuted?: () => void;
 }) {
   const [expanded, setExpanded] = useState(campaign.state === 'enabled');
+  const [macroSuggestions, setMacroSuggestions] = useState<MacroSuggestionDTO[]>([]);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
   const sc = stateConfig[campaign.state] || stateConfig.enabled;
   const typeLabel = typeLabels[campaign.campaignType] || campaign.campaignType;
 
   const hasKeywords = campaign.keywords.length > 0;
   const hasTargets = campaign.productTargets.length > 0;
   const hasData = hasKeywords || hasTargets;
+
+  // Fetch macro suggestions
+  useEffect(() => {
+    if (!campaign.id || !bookId || !lifecyclePhase) return;
+    fetchMacroSuggestions(campaign.id, bookId, lifecyclePhase)
+      .then(setMacroSuggestions)
+      .catch(() => setMacroSuggestions([]));
+  }, [campaign.id, bookId, lifecyclePhase]);
 
   // Count total recommendations for this campaign
   let totalRecos = 0;
@@ -1510,6 +1522,47 @@ function OverviewCampaignCard({
   for (const tg of campaign.productTargets) {
     const entityKey = `target:${tg.amazonTargetId}`;
     totalRecos += (recommendationMap.get(entityKey) || []).length;
+  }
+
+  // Count actionable entities (those with a bid action suggestion and not in cooldown)
+  const actionableEntities: Array<{
+    entityKey: string;
+    entityType: 'keyword' | 'target';
+    entityName: string;
+    currentBid: number | null;
+    insight?: EntityInsight;
+    cooldown?: { active: boolean };
+  }> = [];
+
+  for (const kw of campaign.keywords) {
+    if (kw.state !== 'enabled') continue;
+    const rendered = kw.insight ? renderEntityInsight(kw.insight) : null;
+    const bestAction = pickBestAction(kw.insight, rendered, kw.state, kw.cooldown);
+    if (bestAction && (bestAction.type === 'bid_up' || bestAction.type === 'bid_down' || bestAction.type === 'adjust_bid')) {
+      actionableEntities.push({
+        entityKey: `keyword:${kw.amazonKeywordId}`,
+        entityType: 'keyword',
+        entityName: kw.keywordText,
+        currentBid: kw.bid,
+        insight: kw.insight,
+        cooldown: kw.cooldown,
+      });
+    }
+  }
+  for (const tg of campaign.productTargets) {
+    if (tg.state !== 'enabled') continue;
+    const rendered = tg.insight ? renderEntityInsight(tg.insight) : null;
+    const bestAction = pickBestAction(tg.insight, rendered, tg.state, tg.cooldown);
+    if (bestAction && (bestAction.type === 'bid_up' || bestAction.type === 'bid_down' || bestAction.type === 'adjust_bid')) {
+      actionableEntities.push({
+        entityKey: `target:${tg.amazonTargetId}`,
+        entityType: 'target',
+        entityName: tg.expression,
+        currentBid: tg.bid,
+        insight: tg.insight,
+        cooldown: tg.cooldown,
+      });
+    }
   }
 
   return (
@@ -1543,6 +1596,15 @@ function OverviewCampaignCard({
                   {totalRecos} conseil{totalRecos > 1 ? 's' : ''}
                 </span>
               )}
+              {actionableEntities.length >= 2 && workspaceId && acosTarget && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setBatchModalOpen(true); }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors"
+                >
+                  ⚡ Tout appliquer ({actionableEntities.length})
+                </button>
+              )}
             </div>
             <h4 className="text-sm font-semibold text-slate-900 mt-1.5 truncate">
               {campaign.name}
@@ -1572,6 +1634,17 @@ function OverviewCampaignCard({
         {/* Campaign insight */}
         {campaign.insight && (
           <CampaignInsightCard insight={campaign.insight} campaignName={campaign.name} />
+        )}
+
+        {/* Macro suggestions block — affiché seulement si pertinent */}
+        {macroSuggestions.length > 0 && (
+          <div className="mt-3">
+            <MacroSuggestionsBlock
+              suggestions={macroSuggestions}
+              workspaceId={workspaceId}
+              onActionExecuted={onActionExecuted}
+            />
+          </div>
         )}
 
         {/* Expanded content */}
@@ -1618,6 +1691,20 @@ function OverviewCampaignCard({
                 : 'Aucun mot-clé ou ciblage produit trouvé pour cette campagne.'}
             </p>
           </div>
+        )}
+
+        {/* Batch Action Modal */}
+        {batchModalOpen && workspaceId && acosTarget && (
+          <BatchActionModal
+            open={batchModalOpen}
+            onClose={() => setBatchModalOpen(false)}
+            campaignName={campaign.name}
+            workspaceId={workspaceId}
+            acosTarget={acosTarget}
+            lifecyclePhase={lifecyclePhase}
+            entities={actionableEntities}
+            onActionExecuted={onActionExecuted}
+          />
         )}
       </CardContent>
     </Card>
@@ -1704,6 +1791,17 @@ export function OverviewCampaignView({
           ))}
         </div>
       </div>
+
+      {/* Strategic period indicator */}
+      {lifecyclePhase && (() => {
+        const strategicDaysMap: Record<string, number> = { launch: 7, scale: 14, evergreen: 30, relaunch: 14 };
+        const strategicDays = strategicDaysMap[lifecyclePhase] || 14;
+        return days !== strategicDays ? (
+          <p className="text-[10px] text-slate-400 -mt-2 mb-1">
+            Tu regardes {days}j — les décisions sont basées sur {strategicDays}j (période stratégique {lifecyclePhase === 'launch' ? 'lancement' : lifecyclePhase === 'scale' ? 'croissance' : lifecyclePhase === 'evergreen' ? 'croisière' : 'relance'})
+          </p>
+        ) : null;
+      })()}
 
       {/* Data freshness indicator */}
       {campaignDetails.lastSyncedAt && (

@@ -314,5 +314,58 @@
     "dryRunResult": "Simulation : {currentBid}€ → {newBid}€",
     "actionButton": "Agir",
     "noAction": "Aucune action disponible"
+  },
+  "macro": {
+    "sectionTitle": "Ajustements structurels recommandés",
+    "badge": "Macro",
+    "viewAdjust": "Voir / Ajuster",
+    "howTo": "Voir comment faire",
+    "whyNow": "Pourquoi maintenant",
+    "proposedChange": "Changement proposé",
+    "current": "Actuel",
+    "recommended": "Recommandé",
+    "checklist": "Checklist",
+    "apply": "Appliquer",
+    "applying": "Application...",
+    "applied": "Appliqué",
+    "close": "Fermer",
+    "cooldownNote": "Après application, une période d'observation de {days} jours sera appliquée.",
+    "riskLow": "Risque faible",
+    "riskMedium": "Risque modéré",
+    "riskHigh": "Risque élevé",
+    "impact": {
+      "stabiliser": "Stabiliser",
+      "accélérer": "Accélérer",
+      "réduireDépenses": "Réduire dépenses",
+      "protégerRentabilité": "Protéger rentabilité"
+    },
+    "strategy": {
+      "fixed": "Enchères fixes",
+      "down_only": "Baisses uniquement",
+      "up_and_down": "Hausse et baisse"
+    },
+    "evidence": {
+      "acosStrategic": "ACoS stratégique",
+      "acosTrend": "ACoS tendance",
+      "cvrStrategic": "CVR stratégique",
+      "spendImpacted": "du budget impacté",
+      "budgetUtilization": "Utilisation budget"
+    }
+  },
+  "lifecycle": {
+    "title": "Phase de cycle de vie",
+    "auto": "auto",
+    "manual": "manuel",
+    "why": "Pourquoi ?",
+    "resetToAuto": "Repasser en auto",
+    "override": "Changer la phase",
+    "phases": {
+      "launch": "Lancement",
+      "scale": "Croissance",
+      "evergreen": "Régime de croisière",
+      "relaunch": "Relance"
+    },
+    "strategicPeriod": "Analyse stratégique basée sur {days} jours",
+    "uiVsStrategic": "Tu regardes {uiDays} jours, les décisions sont basées sur {strategicDays} jours"
   }
 }

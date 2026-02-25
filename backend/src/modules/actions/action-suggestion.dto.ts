@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsOptional, IsIn } from 'class-validator';
+import { IsString, IsNumber, IsOptional, IsIn, IsArray } from 'class-validator';
 
 export class ActionSuggestionDto {
   @IsString()
@@ -46,6 +46,42 @@ export class ExecuteDirectActionDto {
   @IsOptional()
   @IsString()
   rationale?: string;
+
+  @IsOptional()
+  dryRun?: boolean;
+
+  @IsOptional()
+  @IsString()
+  lifecyclePhase?: string;
+}
+
+export class BatchSuggestionsDto {
+  @IsString()
+  workspaceId: string;
+
+  @IsArray()
+  entities: Array<{ entityKey: string; entityType: 'keyword' | 'target' }>;
+
+  @IsNumber()
+  acosTarget: number;
+
+  @IsOptional()
+  @IsString()
+  lifecyclePhase?: string;
+}
+
+export class BatchExecuteDirectDto {
+  @IsString()
+  workspaceId: string;
+
+  @IsArray()
+  actions: Array<{
+    entityKey: string;
+    entityType: 'keyword' | 'target';
+    actionType: 'adjust_bid' | 'pause' | 'enable';
+    newBid?: number;
+    rationale?: string;
+  }>;
 
   @IsOptional()
   dryRun?: boolean;

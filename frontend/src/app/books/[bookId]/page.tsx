@@ -429,9 +429,9 @@ export default function BookDetailPage() {
             <div>
               <p className={`text-sm font-semibold ${phaseColors.text}`}>
                 {phaseInfo.label}
-                {book.lifecyclePhaseOverride && (
-                  <span className="ml-2 text-xs font-normal opacity-70">(forcé manuellement)</span>
-                )}
+                <span className="ml-2 text-[10px] font-normal opacity-70">
+                  ({book.lifecyclePhaseOverride ? 'manuel' : 'auto'})
+                </span>
               </p>
               <p className="text-xs text-slate-600 mt-0.5">{phaseInfo.explanation}</p>
             </div>

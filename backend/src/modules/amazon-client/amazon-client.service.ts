@@ -701,4 +701,128 @@ export class AmazonClientService {
     const decompressed = zlib.gunzipSync(response.data);
     return JSON.parse(decompressed.toString());
   }
+
+  // ── Campaign-Level Mutations ──────────────────────
+
+  /**
+   * Update campaign daily budget via Amazon SP API
+   */
+  async updateCampaignBudget(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    amazonCampaignId: number,
+    newBudget: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        campaigns: [{
+          campaignId: amazonCampaignId.toString(),
+          budget: {
+            budget: newBudget,
+            budgetType: 'DAILY',
+          },
+        }],
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/campaigns', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+          },
+        });
+      });
+
+      this.logger.log(`[UPDATE-BUDGET] Campaign ${amazonCampaignId} budget updated to ${newBudget}`);
+      return { success: true };
+    } catch (err: any) {
+      this.logger.error(`[UPDATE-BUDGET] Failed to update campaign budget: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Update campaign bidding strategy via Amazon SP API
+   */
+  async updateCampaignBiddingStrategy(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    amazonCampaignId: number,
+    strategy: 'LEGACY_FOR_SALES' | 'AUTO_FOR_SALES' | 'MANUAL' | 'RULE_BASED',
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        campaigns: [{
+          campaignId: amazonCampaignId.toString(),
+          dynamicBidding: {
+            strategy,
+          },
+        }],
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/campaigns', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+          },
+        });
+      });
+
+      this.logger.log(`[UPDATE-STRATEGY] Campaign ${amazonCampaignId} bidding strategy updated to ${strategy}`);
+      return { success: true };
+    } catch (err: any) {
+      this.logger.error(`[UPDATE-STRATEGY] Failed to update bidding strategy: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Update campaign placement bid adjustments via Amazon SP API
+   */
+  async updateCampaignPlacements(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    amazonCampaignId: number,
+    placements: { topOfSearch: number; restOfSearch: number; productPages: number },
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        campaigns: [{
+          campaignId: amazonCampaignId.toString(),
+          dynamicBidding: {
+            placementBidding: [
+              { placement: 'PLACEMENT_TOP', percentage: placements.topOfSearch },
+              { placement: 'PLACEMENT_REST_OF_SEARCH', percentage: placements.restOfSearch },
+              { placement: 'PLACEMENT_PRODUCT_PAGE', percentage: placements.productPages },
+            ],
+          },
+        }],
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/campaigns', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+          },
+        });
+      });
+
+      this.logger.log(`[UPDATE-PLACEMENTS] Campaign ${amazonCampaignId} placements updated`);
+      return { success: true };
+    } catch (err: any) {
+      this.logger.error(`[UPDATE-PLACEMENTS] Failed to update placements: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
 }

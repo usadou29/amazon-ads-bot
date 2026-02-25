@@ -6,6 +6,7 @@ import { syncLogs } from '@/db/schema/sync-logs';
 import { eq, isNotNull, sql, and, inArray, desc, ne } from 'drizzle-orm';
 import { SyncService } from '@/modules/sync/sync.service';
 import { ReportsService } from '@/modules/reports/reports.service';
+import { LifecycleService } from '@/modules/lifecycle/lifecycle.service';
 
 /**
  * SchedulerService – SaaS-ready automatic sync
@@ -28,6 +29,7 @@ export class SchedulerService {
     @Inject(DATABASE_CONNECTION) private db: any,
     private syncService: SyncService,
     private reportsService: ReportsService,
+    private lifecycleService: LifecycleService,
   ) {}
 
   // ═══════════════════════════════════════════════
@@ -83,6 +85,27 @@ export class SchedulerService {
     } catch (err) {
       this.logger.error(
         `[CRON] Report processing failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  // ═══════════════════════════════════════════════
+  // CRON: Compute lifecycle phases — 05:00 UTC daily
+  // Runs after daily sync to use fresh data
+  // ═══════════════════════════════════════════════
+
+  @Cron('0 5 * * *', { name: 'compute-lifecycle-phases', timeZone: 'UTC' })
+  async handleLifecycleCompute(): Promise<void> {
+    this.logger.log('[CRON] Computing lifecycle phases for all books...');
+
+    try {
+      const result = await this.lifecycleService.computeAllBooks();
+      this.logger.log(
+        `[CRON] Lifecycle compute: ${result.processed} processed, ${result.changed} changed, ${result.errors} errors`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `[CRON] Lifecycle compute failed: ${err instanceof Error ? err.message : err}`,
       );
     }
   }

@@ -110,9 +110,89 @@ export const fetchActionSuggestion = (dto: ActionSuggestionRequest) =>
 export const executeDirectAction = (dto: ExecuteDirectActionRequest) =>
   api.post('/actions/execute-direct', dto).then((r) => r.data);
 
+// ─── Batch Actions ────────────────────────────
+export interface BatchSuggestionsRequest {
+  workspaceId: string;
+  entities: Array<{ entityKey: string; entityType: 'keyword' | 'target' }>;
+  acosTarget: number;
+  lifecyclePhase?: string;
+}
+export interface BatchSuggestionItem {
+  entityKey: string;
+  entityType: 'keyword' | 'target';
+  entityName: string;
+  diagnosisCode: string;
+  currentBid: number;
+  recommendedBid: number | null;
+  direction: 'bid_up' | 'bid_down' | null;
+  eligible: boolean;
+  reason?: string;
+  cooldownActive?: boolean;
+}
+export interface BatchSuggestionsResponse {
+  suggestions: BatchSuggestionItem[];
+  errors: Array<{ entityKey: string; error: string }>;
+}
+export interface BatchExecuteRequest {
+  workspaceId: string;
+  actions: Array<{
+    entityKey: string;
+    entityType: 'keyword' | 'target';
+    actionType: 'adjust_bid' | 'pause' | 'enable';
+    newBid?: number;
+    rationale?: string;
+  }>;
+  dryRun?: boolean;
+  lifecyclePhase?: string;
+}
+export interface BatchExecuteResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{
+    entityKey: string;
+    success: boolean;
+    actionId?: string;
+    error?: string;
+    beforeValue?: any;
+    afterValue?: any;
+  }>;
+}
+export const fetchBatchSuggestions = (dto: BatchSuggestionsRequest) =>
+  api.post('/actions/batch-suggestions', dto).then((r) => r.data);
+export const executeBatchDirect = (dto: BatchExecuteRequest) =>
+  api.post('/actions/batch-execute-direct', dto).then((r) => r.data);
+
 // ─── System ────────────────────────────────────
 export const fetchFeatureFlag = (name: string) => api.get(`/system/features/${name}`).then((r) => r.data);
 
 // ─── Scheduler / Sync ─────────────────────────
 export const triggerSync = () => api.post(`/scheduler/sync?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
 export const fetchSyncStatus = () => api.get(`/scheduler/status?workspaceId=${getWorkspaceId()}`).then((r) => r.data);
+
+// ── Macro Suggestions ────────────────────────────
+
+export const fetchMacroSuggestions = (campaignId: string, bookId: string, lifecyclePhase: string) =>
+  api.post(`/campaigns/${campaignId}/macro-suggestions`, { bookId, lifecyclePhase }).then((r) => r.data);
+
+export const executeMacroAction = (dto: {
+  workspaceId: string;
+  campaignId: string;
+  suggestionId: string;
+  actionType: string;
+  recommended: Record<string, any>;
+}) => api.post('/campaigns/macro-execute', dto).then((r) => r.data);
+
+// ── Lifecycle ────────────────────────────────────────
+
+export const fetchLifecycleInfo = (bookId: string) =>
+  api.get(`/books/${bookId}/lifecycle`).then((r) => r.data);
+
+export const computeLifecycle = (bookId: string) =>
+  api.post(`/books/${bookId}/lifecycle/compute`).then((r) => r.data);
+
+export const overrideLifecycle = (bookId: string, phase: string, reason?: string) =>
+  api.post(`/books/${bookId}/lifecycle/override`, { phase, reason }).then((r) => r.data);
+
+export const resetLifecycle = (bookId: string) =>
+  api.post(`/books/${bookId}/lifecycle/reset`).then((r) => r.data);
