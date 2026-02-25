@@ -70,66 +70,95 @@ export default function BookDetailPage() {
 
   const royaltyValuesRef = useRef<RoyaltyValues>({ royaltyRate: null, salePrice: null, royaltyPerUnit: null });
 
-  useEffect(() => {
-    if (!bookId) return;
-    setLoading(true);
-    fetchBookDashboard(bookId, includeInactive)
-      .then(setDashboard)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [bookId, includeInactive, syncCompletedCount]);
-
-  // Fetch campaign details for overview tab
-  useEffect(() => {
-    if (!bookId) return;
-    setOverviewLoading(true);
-    fetchBookCampaignDetails(bookId, overviewDays)
-      .then(setOverviewCampaignDetails)
-      .catch(() => setOverviewCampaignDetails(null))
-      .finally(() => setOverviewLoading(false));
-  }, [bookId, overviewDays, syncCompletedCount]);
-
-  // ── Simple sync: refresh bids from Amazon on page load, then reload data ──
+  // ── Sync + load unifié : charger les données en cache immédiatement,
+  // puis sync Amazon en arrière-plan, et recharger seulement si les bids ont changé ──
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
-  const dataRefreshedRef = useRef(false);
+  const initialLoadDoneRef = useRef(false);
+  const lastSyncedRef = useRef<string | null>(null);
 
+  // Phase 1 : chargement initial (données en cache DB, rapide)
   useEffect(() => {
-    if (!bookId || dataRefreshedRef.current) return;
-    dataRefreshedRef.current = true;
+    if (!bookId) return;
     let cancelled = false;
 
-    const doRefresh = async () => {
-      setSyncStatus('syncing');
+    const loadInitial = async () => {
+      setLoading(true);
+      setOverviewLoading(true);
       try {
-        // refreshBookData updates bids from Amazon API (instant)
-        // and requests new reports in background (for next cron cycle)
-        await refreshBookData(bookId);
-      } catch { /* best effort */ }
-
-      if (cancelled) return;
-
-      // Reload dashboard + campaign details with fresh bid data
-      try {
-        const [newDashboard, newDetails] = await Promise.all([
+        const [dash, details] = await Promise.all([
           fetchBookDashboard(bookId, includeInactive),
           fetchBookCampaignDetails(bookId, overviewDays),
         ]);
         if (!cancelled) {
-          setDashboard(newDashboard);
-          setOverviewCampaignDetails(newDetails);
+          setDashboard(dash);
+          setOverviewCampaignDetails(details);
+          lastSyncedRef.current = details?.lastSyncedAt || null;
         }
-      } catch { /* initial useEffects already loaded data */ }
+      } catch (e: any) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setOverviewLoading(false);
+        }
+      }
 
-      if (!cancelled) {
-        setSyncStatus('done');
-        setTimeout(() => { if (!cancelled) setSyncStatus('idle'); }, 5000);
+      // Phase 2 : sync Amazon en arrière-plan (seulement au 1er chargement)
+      if (!cancelled && !initialLoadDoneRef.current) {
+        initialLoadDoneRef.current = true;
+
+        // Skip sync si les données sont fraîches (< 5 min)
+        const lastSync = lastSyncedRef.current;
+        if (lastSync) {
+          const ageMs = Date.now() - new Date(lastSync).getTime();
+          if (ageMs < 5 * 60 * 1000) {
+            // Données fraîches, pas besoin de re-sync
+            return;
+          }
+        }
+
+        setSyncStatus('syncing');
+        try {
+          const result = await refreshBookData(bookId);
+          if (cancelled) return;
+
+          // Recharger seulement si des bids ont effectivement changé
+          const hasChanges = (result?.keywordsUpdated || 0) + (result?.targetsUpdated || 0) > 0;
+          if (hasChanges) {
+            const [newDash, newDetails] = await Promise.all([
+              fetchBookDashboard(bookId, includeInactive),
+              fetchBookCampaignDetails(bookId, overviewDays),
+            ]);
+            if (!cancelled) {
+              setDashboard(newDash);
+              setOverviewCampaignDetails(newDetails);
+            }
+          }
+        } catch { /* best effort */ }
+
+        if (!cancelled) {
+          setSyncStatus('done');
+          setTimeout(() => { if (!cancelled) setSyncStatus('idle'); }, 3000);
+        }
       }
     };
 
-    doRefresh();
-
+    loadInitial();
     return () => { cancelled = true; };
-  }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bookId, includeInactive, syncCompletedCount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Rechargement des campaign details quand l'utilisateur change la période
+  useEffect(() => {
+    // Skip le tout premier render (déjà chargé dans loadInitial)
+    if (!bookId || !initialLoadDoneRef.current) return;
+    let cancelled = false;
+    setOverviewLoading(true);
+    fetchBookCampaignDetails(bookId, overviewDays)
+      .then((details) => { if (!cancelled) setOverviewCampaignDetails(details); })
+      .catch(() => { if (!cancelled) setOverviewCampaignDetails(null); })
+      .finally(() => { if (!cancelled) setOverviewLoading(false); });
+    return () => { cancelled = true; };
+  }, [bookId, overviewDays]);
 
   const handleSaveRoyalty = async () => {
     setSavingRoyalty(true);
