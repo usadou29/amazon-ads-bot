@@ -20,6 +20,7 @@ import { InsightsModule } from '@/modules/insights/insights.module';
 import { ActionsModule } from '@/modules/actions/actions.module';
 import { LifecycleModule } from '@/modules/lifecycle/lifecycle.module';
 import { MacroModule } from '@/modules/macro/macro.module';
+import { CampaignEvolutionModule } from '@/modules/campaign-evolution/campaign-evolution.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { MacroModule } from '@/modules/macro/macro.module';
     ActionsModule,
     LifecycleModule,
     MacroModule,
+    CampaignEvolutionModule,
   ],
 })
 export class AppModule {}

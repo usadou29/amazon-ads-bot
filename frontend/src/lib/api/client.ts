@@ -196,3 +196,23 @@ export const overrideLifecycle = (bookId: string, phase: string, reason?: string
 
 export const resetLifecycle = (bookId: string) =>
   api.post(`/books/${bookId}/lifecycle/reset`).then((r) => r.data);
+
+// ── Campaign Evolution Engine ────────────────────
+
+export const analyzeCampaignEvolution = (bookId: string, workspaceId: string) =>
+  api.post(`/campaign-evolution/analyze/${bookId}?workspaceId=${workspaceId}`, {}, { timeout: 60000 }).then((r) => r.data);
+
+export const fetchMaturityScore = (bookId: string, workspaceId: string) =>
+  api.get(`/campaign-evolution/maturity-score/${bookId}?workspaceId=${workspaceId}`).then((r) => r.data);
+
+export interface CreateFromPlanDto {
+  workspaceId: string;
+  bookId: string;
+  planActionType: string;
+  planPayload: Record<string, any>;
+  lifecyclePhase?: string;
+  strategicPeriodDays?: number;
+}
+
+export const createCampaignFromPlan = (dto: CreateFromPlanDto) =>
+  api.post('/campaigns/create-from-plan', dto, { timeout: 60000 }).then((r) => r.data);

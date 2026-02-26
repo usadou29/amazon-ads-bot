@@ -27,6 +27,7 @@ import { computeStatus, StatusResult } from '@/lib/transforms/status';
 import { transformRecommendation, HumanRecommendation, groupRecommendationsByEntity, RecommendationGroup } from '@/lib/transforms/recommendations';
 import { t } from '@/lib/i18n';
 import { useSyncContext } from '@/lib/contexts/SyncContext';
+import { BookCampaignPlanPanel } from '@/components/features/BookCampaignPlanPanel';
 
 // ── Sync status types ──
 type SyncStatus = 'idle' | 'syncing' | 'done';
@@ -738,6 +739,20 @@ export default function BookDetailPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* ── Plan de croissance publicitaire (macro) ── */}
+          <BookCampaignPlanPanel
+            bookId={bookId}
+            lifecyclePhase={phaseInfo.phase}
+            onCampaignCreated={async () => {
+              const [dash, details] = await Promise.all([
+                fetchBookDashboard(bookId, includeInactive),
+                fetchBookCampaignDetails(bookId, overviewDays),
+              ]);
+              setDashboard(dash);
+              setOverviewCampaignDetails(details);
+            }}
+          />
 
           {/* ── Bilan : diagnostics & actions agrégés ── */}
           {overviewCampaignDetails?.campaigns && (
