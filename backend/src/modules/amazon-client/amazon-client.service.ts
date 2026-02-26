@@ -379,28 +379,43 @@ export class AmazonClientService {
     marketplace: Marketplace,
     keywordId: number,
     updates: { bid?: number; state?: string },
+    campaignId?: number,
+    adGroupId?: number,
   ): Promise<any> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const body = {
-      keywords: [
-        {
-          keywordId: keywordId.toString(),
-          ...updates,
-        },
-      ],
+    const normalizedUpdates = { ...updates };
+    if (normalizedUpdates.state) normalizedUpdates.state = normalizedUpdates.state.toUpperCase();
+
+    const keywordPayload: Record<string, any> = {
+      keywordId: keywordId.toString(),
+      ...normalizedUpdates,
     };
+    if (campaignId != null) keywordPayload.campaignId = campaignId.toString();
+    if (adGroupId != null) keywordPayload.adGroupId = adGroupId.toString();
 
-    const response = await retryWithBackoff(async () => {
-      return client.put('/sp/keywords', body, {
-        headers: {
-          Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
-          'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
-        },
+    const body = { keywords: [keywordPayload] };
+
+    this.logger.log(`[UPDATE-KW] Payload: ${JSON.stringify(body)}`);
+
+    try {
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/keywords', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
+          },
+        });
       });
-    });
 
-    return response.data;
+      this.logger.log(`[UPDATE-KW] Response: ${JSON.stringify(response.data)}`);
+      return response.data;
+    } catch (error) {
+      if (error instanceof AxiosError && error.response) {
+        this.logger.error(`[UPDATE-KW] Amazon API error ${error.response.status}: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -412,92 +427,28 @@ export class AmazonClientService {
     marketplace: Marketplace,
     targetId: number,
     updates: { bid?: number; state?: string },
+    campaignId?: number,
+    adGroupId?: number,
   ): Promise<any> {
     const client = await this.createApiClient(adAccountId, profileId, marketplace);
 
-    const body = {
-      targetingClauses: [
-        {
-          targetId: targetId.toString(),
-          ...updates,
-        },
-      ],
+    const normalizedUpdates = { ...updates };
+    if (normalizedUpdates.state) normalizedUpdates.state = normalizedUpdates.state.toUpperCase();
+
+    const targetPayload: Record<string, any> = {
+      targetId: targetId.toString(),
+      ...normalizedUpdates,
     };
+    if (campaignId != null) targetPayload.campaignId = campaignId.toString();
+    if (adGroupId != null) targetPayload.adGroupId = adGroupId.toString();
 
-    const response = await retryWithBackoff(async () => {
-      return client.put('/sp/targets', body, {
-        headers: {
-          Accept: AMAZON_CONFIG.API_VERSION.TARGETS,
-          'Content-Type': AMAZON_CONFIG.API_VERSION.TARGETS,
-        },
-      });
-    });
+    const body = { targetingClauses: [targetPayload] };
 
-    return response.data;
-  }
+    this.logger.log(`[UPDATE-TG] Payload: ${JSON.stringify(body)}`);
 
-  /**
-   * Récupère les bid recommendations Amazon pour un keyword
-   * Retourne null si l'API échoue (le calcul fonctionne sans)
-   */
-  async getBidRecommendations(
-    adAccountId: string,
-    profileId: number,
-    marketplace: Marketplace,
-    keywordId: number,
-  ): Promise<{ suggested: number; rangeMin: number; rangeMax: number } | null> {
     try {
-      const client = await this.createApiClient(adAccountId, profileId, marketplace);
-
-      const body = {
-        keywordId: keywordId.toString(),
-      };
-
       const response = await retryWithBackoff(async () => {
-        return client.post('/sp/keywords/bidRecommendations', body, {
-          headers: {
-            Accept: AMAZON_CONFIG.API_VERSION.KEYWORDS,
-            'Content-Type': AMAZON_CONFIG.API_VERSION.KEYWORDS,
-          },
-        });
-      });
-
-      const data = response.data;
-      if (data?.recommendations?.length > 0) {
-        const rec = data.recommendations[0];
-        return {
-          suggested: rec.suggestedBid?.suggested ?? rec.suggestedBid ?? 0,
-          rangeMin: rec.suggestedBid?.rangeStart ?? rec.rangeStart ?? 0,
-          rangeMax: rec.suggestedBid?.rangeEnd ?? rec.rangeEnd ?? 0,
-        };
-      }
-      return null;
-    } catch (error) {
-      this.logger.warn(`getBidRecommendations failed for keyword ${keywordId}: ${error.message}`);
-      return null;
-    }
-  }
-
-  /**
-   * Récupère les bid recommendations Amazon pour un product target.
-   * Utilise l'API SP /sp/targets/bidRecommendations.
-   * Retourne null si l'API échoue (le calcul fonctionne sans).
-   */
-  async getTargetBidRecommendations(
-    adAccountId: string,
-    profileId: number,
-    marketplace: Marketplace,
-    targetId: number,
-  ): Promise<{ suggested: number; rangeMin: number; rangeMax: number } | null> {
-    try {
-      const client = await this.createApiClient(adAccountId, profileId, marketplace);
-
-      const body = {
-        targetId: targetId.toString(),
-      };
-
-      const response = await retryWithBackoff(async () => {
-        return client.post('/sp/targets/bidRecommendations', body, {
+        return client.put('/sp/targets', body, {
           headers: {
             Accept: AMAZON_CONFIG.API_VERSION.TARGETS,
             'Content-Type': AMAZON_CONFIG.API_VERSION.TARGETS,
@@ -505,21 +456,125 @@ export class AmazonClientService {
         });
       });
 
-      const data = response.data;
-      if (data?.recommendations?.length > 0) {
-        const rec = data.recommendations[0];
-        return {
-          suggested: rec.suggestedBid?.suggested ?? rec.suggestedBid ?? 0,
-          rangeMin: rec.suggestedBid?.rangeStart ?? rec.rangeStart ?? 0,
-          rangeMax: rec.suggestedBid?.rangeEnd ?? rec.rangeEnd ?? 0,
-        };
+      this.logger.log(`[UPDATE-TG] Response: ${JSON.stringify(response.data)}`);
+      return response.data;
+    } catch (error) {
+      if (error instanceof AxiosError && error.response) {
+        this.logger.error(`[UPDATE-TG] Amazon API error ${error.response.status}: ${JSON.stringify(error.response.data)}`);
       }
+      throw error;
+    }
+  }
+
+  /**
+   * Récupère les bid recommendations Amazon pour un keyword
+   * Retourne null si l'API échoue (le calcul fonctionne sans)
+   */
+  /**
+   * Récupère les bid recommendations Amazon via l'endpoint unifié v4 theme-based.
+   * POST /sp/targets/bid/recommendations
+   * Fonctionne pour keywords ET targets via les targetingExpressions.
+   */
+  async getThemeBasedBidRecommendation(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    params: {
+      campaignId: number;
+      adGroupId: number;
+      targetingExpression: { type: string; value?: string };
+      strategy?: string;
+    },
+  ): Promise<{ suggested: number; rangeMin: number; rangeMax: number } | null> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      // Mapper la strategy DB vers le format Amazon API
+      const strategyMap: Record<string, string> = {
+        legacyforsales: 'LEGACY_FOR_SALES',
+        legacy_for_sales: 'LEGACY_FOR_SALES',
+        autoforsales: 'AUTO_FOR_SALES',
+        auto_for_sales: 'AUTO_FOR_SALES',
+        manual: 'MANUAL',
+        rule_based: 'RULE_BASED',
+      };
+      const rawStrategy = (params.strategy || 'LEGACY_FOR_SALES').toLowerCase().replace(/\s+/g, '');
+      const strategy = strategyMap[rawStrategy] || params.strategy?.toUpperCase() || 'LEGACY_FOR_SALES';
+
+      const body: Record<string, any> = {
+        campaignId: params.campaignId,
+        adGroupId: params.adGroupId,
+        recommendationType: 'BIDS_FOR_EXISTING_AD_GROUP',
+        targetingExpressions: [params.targetingExpression],
+        strategy,
+      };
+
+      this.logger.log(
+        `[BID-RECO] Requesting theme-based bid for campaign=${params.campaignId} ` +
+        `adGroup=${params.adGroupId} type=${params.targetingExpression.type} ` +
+        `value=${params.targetingExpression.value || 'N/A'} strategy=${strategy}`,
+      );
+      this.logger.log(`[BID-RECO] Full request body: ${JSON.stringify(body)}`);
+
+      const response = await retryWithBackoff(async () => {
+        return client.post('/sp/targets/bid/recommendations', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.BID_RECOMMENDATIONS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.BID_RECOMMENDATIONS,
+          },
+        });
+      });
+
+      const data = response.data;
+      this.logger.log(`[BID-RECO] Response: ${JSON.stringify(data).slice(0, 800)}`);
+
+      // Format v4 réel :
+      // {
+      //   bidRecommendations: [{
+      //     theme: "CONVERSION_OPPORTUNITIES",
+      //     bidRecommendationsForTargetingExpressions: [{
+      //       targetingExpression: {type, value},
+      //       bidValues: [
+      //         {suggestedBid: 0.22},  ← rangeMin
+      //         {suggestedBid: 0.41},  ← suggested (médian)
+      //         {suggestedBid: 0.51}   ← rangeMax
+      //       ]
+      //     }]
+      //   }]
+      // }
+
+      const themes = data?.bidRecommendations;
+      if (themes?.length > 0) {
+        const theme = themes[0];
+        const exprRecos = theme.bidRecommendationsForTargetingExpressions;
+        if (exprRecos?.length > 0) {
+          const bidValues = exprRecos[0].bidValues;
+          if (bidValues?.length > 0) {
+            // bidValues contient 3 entrées : [low, suggested, high]
+            const low = Number(bidValues[0]?.suggestedBid ?? 0);
+            const suggested = bidValues.length >= 2 ? Number(bidValues[1]?.suggestedBid ?? 0) : low;
+            const high = bidValues.length >= 3 ? Number(bidValues[2]?.suggestedBid ?? 0) : suggested;
+
+            this.logger.log(`[BID-RECO] Parsed: suggested=${suggested} range=[${low} - ${high}]`);
+            return {
+              suggested,
+              rangeMin: low,
+              rangeMax: high,
+            };
+          }
+        }
+      }
+
+      this.logger.warn(`[BID-RECO] No recommendations found in response`);
       return null;
     } catch (error) {
-      this.logger.warn(`getTargetBidRecommendations failed for target ${targetId}: ${error.message}`);
+      this.logger.warn(`[BID-RECO] Failed: ${error.message} (${error.response?.status || 'no status'} - ${JSON.stringify(error.response?.data || '').slice(0, 300)})`);
       return null;
     }
   }
+
+  // v3 endpoints supprimés - Amazon a déprécié /sp/targets/bidRecommendations en mai 2025
+  // Tout passe par le v4 theme-based endpoint maintenant
 
   /**
    * Demande un rapport async
@@ -645,5 +700,129 @@ export class AmazonClientService {
     const zlib = await import('zlib');
     const decompressed = zlib.gunzipSync(response.data);
     return JSON.parse(decompressed.toString());
+  }
+
+  // ── Campaign-Level Mutations ──────────────────────
+
+  /**
+   * Update campaign daily budget via Amazon SP API
+   */
+  async updateCampaignBudget(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    amazonCampaignId: number,
+    newBudget: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        campaigns: [{
+          campaignId: amazonCampaignId.toString(),
+          budget: {
+            budget: newBudget,
+            budgetType: 'DAILY',
+          },
+        }],
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/campaigns', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+          },
+        });
+      });
+
+      this.logger.log(`[UPDATE-BUDGET] Campaign ${amazonCampaignId} budget updated to ${newBudget}`);
+      return { success: true };
+    } catch (err: any) {
+      this.logger.error(`[UPDATE-BUDGET] Failed to update campaign budget: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Update campaign bidding strategy via Amazon SP API
+   */
+  async updateCampaignBiddingStrategy(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    amazonCampaignId: number,
+    strategy: 'LEGACY_FOR_SALES' | 'AUTO_FOR_SALES' | 'MANUAL' | 'RULE_BASED',
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        campaigns: [{
+          campaignId: amazonCampaignId.toString(),
+          dynamicBidding: {
+            strategy,
+          },
+        }],
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/campaigns', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+          },
+        });
+      });
+
+      this.logger.log(`[UPDATE-STRATEGY] Campaign ${amazonCampaignId} bidding strategy updated to ${strategy}`);
+      return { success: true };
+    } catch (err: any) {
+      this.logger.error(`[UPDATE-STRATEGY] Failed to update bidding strategy: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Update campaign placement bid adjustments via Amazon SP API
+   */
+  async updateCampaignPlacements(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    amazonCampaignId: number,
+    placements: { topOfSearch: number; restOfSearch: number; productPages: number },
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        campaigns: [{
+          campaignId: amazonCampaignId.toString(),
+          dynamicBidding: {
+            placementBidding: [
+              { placement: 'PLACEMENT_TOP', percentage: placements.topOfSearch },
+              { placement: 'PLACEMENT_REST_OF_SEARCH', percentage: placements.restOfSearch },
+              { placement: 'PLACEMENT_PRODUCT_PAGE', percentage: placements.productPages },
+            ],
+          },
+        }],
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/campaigns', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+          },
+        });
+      });
+
+      this.logger.log(`[UPDATE-PLACEMENTS] Campaign ${amazonCampaignId} placements updated`);
+      return { success: true };
+    } catch (err: any) {
+      this.logger.error(`[UPDATE-PLACEMENTS] Failed to update placements: ${err.message}`);
+      return { success: false, error: err.message };
+    }
   }
 }

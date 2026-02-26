@@ -16,7 +16,7 @@ import {
  *
  * Couvre :
  * - 7 Campaign Diagnosis Codes
- * - 9 Entity Diagnosis Codes (NO_IMPRESSIONS, ZERO_CLICKS_LOW_VOLUME, ZERO_CLICKS, VERY_LOW_CLICKS, LOW_CLICKS, CLICKS_NO_SALES, EXPENSIVE_BUT_VALID, WINNER, BOOST_CANDIDATE)
+ * - 10 Entity Diagnosis Codes (NO_IMPRESSIONS, ZERO_CLICKS_LOW_VOLUME, ZERO_CLICKS, VERY_LOW_CLICKS, LOW_CLICKS, CLICKS_NO_SALES, VERY_EXPENSIVE, EXPENSIVE_BUT_VALID, WINNER, BOOST_CANDIDATE)
  * - Eligibility (séparation diagnostic vs action)
  * - 3 Break-Even Guards
  * - 3 Lifecycle Variations
@@ -359,7 +359,7 @@ describe('InsightsService', () => {
       expect(insight.eligibility).toBe(true);
     });
 
-    it('CLICKS_NO_SALES via high ACoS: orders > 0 but ACoS > breakEven * 1.3', () => {
+    it('VERY_EXPENSIVE: orders > 0 but ACoS > breakEven * 1.3', () => {
       const insight = service.computeEntityInsight(
         makeEntity(),
         makeMetrics({ impressions: 500, clicks: 30, spend: 100, sales: 80, orders: 2 }),
@@ -367,7 +367,7 @@ describe('InsightsService', () => {
         BREAK_EVEN, // ACoS = 125% > 35*1.3=45.5%
         PERIOD_DAYS,
       );
-      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.CLICKS_NO_SALES);
+      expect(insight.diagnosisCode).toBe(EntityDiagnosisCode.VERY_EXPENSIVE);
       expect(insight.eligibility).toBe(true);
     });
   });

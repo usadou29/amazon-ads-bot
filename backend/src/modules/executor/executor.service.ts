@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, Logger, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DATABASE_CONNECTION } from '@/db/database.module';
 import {
@@ -410,13 +410,19 @@ export class ExecutorService {
         ctx.marketplace as Marketplace,
         keyword.amazonKeywordId,
         { bid: newBid },
+        ctx.amazonCampaignId,
+        ctx.amazonAdGroupId,
       );
 
-      // Mettre a jour le keyword en base
+      // Mettre a jour le keyword en base + cooldown tracking
       await this.db
         .update(keywords)
         .set({
           bid: String(newBid),
+          lastBidChangeAt: new Date(),
+          lastBidChangeType: newBid > currentBid ? 'bid_up' : 'bid_down',
+          previousBid: String(currentBid),
+          newBid: String(newBid),
           updatedAt: new Date(),
         })
         .where(eq(keywords.id, keyword.id));
@@ -491,6 +497,8 @@ export class ExecutorService {
         ctx.marketplace as Marketplace,
         keyword.amazonKeywordId,
         { state: 'paused' },
+        ctx.amazonCampaignId,
+        ctx.amazonAdGroupId,
       );
 
       // Mettre a jour le keyword en base
@@ -827,7 +835,7 @@ export class ExecutorService {
     workspaceId: string,
     amazonKeywordId: number,
   ): Promise<
-    | { keyword: typeof keywords.$inferSelect; adAccountId: string; profileId: number; marketplace: string }
+    | { keyword: typeof keywords.$inferSelect; adAccountId: string; profileId: number; marketplace: string; amazonAdGroupId: number; amazonCampaignId: number }
     | null
   > {
     const rows = await this.db
@@ -836,6 +844,8 @@ export class ExecutorService {
         adAccountId: adAccounts.id,
         profileId: marketplaceProfiles.profileId,
         marketplace: marketplaceProfiles.marketplace,
+        amazonAdGroupId: adGroups.amazonAdGroupId,
+        amazonCampaignId: campaigns.amazonCampaignId,
       })
       .from(keywords)
       .innerJoin(adGroups, eq(keywords.adGroupId, adGroups.id))
@@ -859,6 +869,8 @@ export class ExecutorService {
       adAccountId: row.adAccountId,
       profileId: isNaN(profileId) ? 0 : profileId,
       marketplace: row.marketplace ?? 'FR',
+      amazonAdGroupId: row.amazonAdGroupId,
+      amazonCampaignId: row.amazonCampaignId,
     };
   }
 
@@ -869,7 +881,7 @@ export class ExecutorService {
     workspaceId: string,
     amazonTargetId: number,
   ): Promise<
-    | { target: typeof productTargets.$inferSelect; adAccountId: string; profileId: number; marketplace: string }
+    | { target: typeof productTargets.$inferSelect; adAccountId: string; profileId: number; marketplace: string; amazonAdGroupId: number; amazonCampaignId: number }
     | null
   > {
     const rows = await this.db
@@ -878,6 +890,8 @@ export class ExecutorService {
         adAccountId: adAccounts.id,
         profileId: marketplaceProfiles.profileId,
         marketplace: marketplaceProfiles.marketplace,
+        amazonAdGroupId: adGroups.amazonAdGroupId,
+        amazonCampaignId: campaigns.amazonCampaignId,
       })
       .from(productTargets)
       .innerJoin(adGroups, eq(productTargets.adGroupId, adGroups.id))
@@ -901,6 +915,8 @@ export class ExecutorService {
       adAccountId: row.adAccountId,
       profileId: isNaN(profileId) ? 0 : profileId,
       marketplace: row.marketplace ?? 'FR',
+      amazonAdGroupId: row.amazonAdGroupId,
+      amazonCampaignId: row.amazonCampaignId,
     };
   }
 
@@ -916,12 +932,13 @@ export class ExecutorService {
     workspaceId: string;
     entityKey: string;
     entityType: 'keyword' | 'target';
-    actionType: 'adjust_bid' | 'pause';
+    actionType: 'adjust_bid' | 'pause' | 'enable';
     newBid?: number;
     rationale?: string;
     dryRun?: boolean;
+    lifecyclePhase?: string;
   }): Promise<ExecuteActionResult> {
-    const { workspaceId, entityKey, entityType, actionType, newBid, rationale, dryRun = false } = dto;
+    const { workspaceId, entityKey, entityType, actionType, newBid, rationale, dryRun = false, lifecyclePhase } = dto;
 
     // 1. Kill switch check
     const killSwitch = await this.isKillSwitchActive();
@@ -952,9 +969,38 @@ export class ExecutorService {
     }
 
     if (entityType === 'keyword') {
-      return this.executeDirectKeywordAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun);
+      return this.executeDirectKeywordAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun, lifecyclePhase);
     } else {
-      return this.executeDirectTargetAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun);
+      return this.executeDirectTargetAction(workspaceId, amazonId, entityKey, actionType, newBid, rationale, dryRun, lifecyclePhase);
+    }
+  }
+
+  /**
+   * Vérifie le cooldown d'enchère. Lève une ConflictException (409) si actif.
+   * Ne bloque que les actions adjust_bid. Pause/enable restent autorisés.
+   */
+  private checkBidCooldown(
+    lastBidChangeAt: Date | null | undefined,
+    actionType: string,
+    lifecyclePhase?: string,
+  ): void {
+    if (actionType !== 'adjust_bid') return;
+    if (!lastBidChangeAt) return;
+
+    const phase = lifecyclePhase || 'evergreen';
+    const cooldownDays = GUARDS.COOLDOWN_DAYS_BY_PHASE[phase] ?? 7;
+    const diffMs = Date.now() - new Date(lastBidChangeAt).getTime();
+    const daysSinceChange = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (daysSinceChange < cooldownDays) {
+      const remaining = cooldownDays - daysSinceChange;
+      this.logger.warn(
+        `[COOLDOWN-BLOCK] Bid change rejected: phase=${phase}, daysSince=${daysSinceChange}, cooldown=${cooldownDays}d, remaining=${remaining}d`,
+      );
+      throw new ConflictException(
+        `Enchère en période d'observation (J+${daysSinceChange}/${cooldownDays}). ` +
+        `Encore ${remaining} jour${remaining > 1 ? 's' : ''} avant de pouvoir modifier l'enchère.`,
+      );
     }
   }
 
@@ -962,16 +1008,20 @@ export class ExecutorService {
     workspaceId: string,
     amazonKeywordId: number,
     entityKey: string,
-    actionType: 'adjust_bid' | 'pause',
+    actionType: 'adjust_bid' | 'pause' | 'enable',
     newBid: number | undefined,
     rationale: string | undefined,
     dryRun: boolean,
+    lifecyclePhase?: string,
   ): Promise<ExecuteActionResult> {
     const ctx = await this.getKeywordContextByEntityKey(workspaceId, amazonKeywordId);
     if (!ctx) {
       throw new NotFoundException(`Keyword not found: ${entityKey}`);
     }
     const { keyword } = ctx;
+
+    // COOLDOWN CHECK — bloque adjust_bid si cooldown actif (409)
+    this.checkBidCooldown(keyword.lastBidChangeAt, actionType, lifecyclePhase);
 
     if (actionType === 'adjust_bid') {
       if (newBid == null) throw new BadRequestException('newBid is required for adjust_bid');
@@ -982,16 +1032,24 @@ export class ExecutorService {
 
       const beforeValue = { bid: currentBid };
       const afterValue = { bid: finalBid };
-      const apiRequest = { keywordId: keyword.amazonKeywordId, updates: { bid: finalBid } };
+      const apiRequest = { keywordId: keyword.amazonKeywordId, campaignId: ctx.amazonCampaignId, adGroupId: ctx.amazonAdGroupId, updates: { bid: finalBid } };
       let apiResponse: any;
 
       if (!dryRun) {
         apiResponse = await this.amazonClient.updateKeyword(
           ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
           keyword.amazonKeywordId, { bid: finalBid },
+          ctx.amazonCampaignId, ctx.amazonAdGroupId,
         );
-        await this.db.update(keywords).set({ bid: String(finalBid), updatedAt: new Date() })
-          .where(eq(keywords.id, keyword.id));
+        // Mettre à jour le bid + les champs de cooldown tracking
+        await this.db.update(keywords).set({
+          bid: String(finalBid),
+          lastBidChangeAt: new Date(),
+          lastBidChangeType: finalBid > currentBid ? 'bid_up' : 'bid_down',
+          previousBid: String(currentBid),
+          newBid: String(finalBid),
+          updatedAt: new Date(),
+        }).where(eq(keywords.id, keyword.id));
       }
 
       const actionLogEntry = await this.logAction({
@@ -1006,16 +1064,46 @@ export class ExecutorService {
       return { success: true, actionId: actionLogEntry.id, dryRun, beforeValue, afterValue, apiRequest, apiResponse };
     }
 
+    if (actionType === 'enable') {
+      // enable (réactiver un keyword en pause)
+      const beforeValue = { state: keyword.state };
+      const afterValue = { state: 'enabled' };
+      const apiRequest = { keywordId: keyword.amazonKeywordId, campaignId: ctx.amazonCampaignId, adGroupId: ctx.amazonAdGroupId, updates: { state: 'enabled' } };
+      let apiResponse: any;
+
+      if (!dryRun) {
+        apiResponse = await this.amazonClient.updateKeyword(
+          ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
+          keyword.amazonKeywordId, { state: 'enabled' },
+          ctx.amazonCampaignId, ctx.amazonAdGroupId,
+        );
+        await this.db.update(keywords).set({ state: 'enabled', updatedAt: new Date() })
+          .where(eq(keywords.id, keyword.id));
+      }
+
+      const actionLogEntry = await this.logAction({
+        workspaceId, entityType: 'keyword', entityKey,
+        amazonEntityId: keyword.amazonKeywordId,
+        actionType: 'enable', beforeValue, afterValue,
+        rationale: rationale || 'Direct enable from Action modal',
+        executedBy: 'user', status: dryRun ? 'simulated' : 'success',
+        apiRequest, apiResponse, isReversible: true, dryRun,
+      });
+
+      return { success: true, actionId: actionLogEntry.id, dryRun, beforeValue, afterValue, apiRequest, apiResponse };
+    }
+
     // pause
     const beforeValue = { state: keyword.state };
     const afterValue = { state: 'paused' };
-    const apiRequest = { keywordId: keyword.amazonKeywordId, updates: { state: 'paused' } };
+    const apiRequest = { keywordId: keyword.amazonKeywordId, campaignId: ctx.amazonCampaignId, adGroupId: ctx.amazonAdGroupId, updates: { state: 'paused' } };
     let apiResponse: any;
 
     if (!dryRun) {
       apiResponse = await this.amazonClient.updateKeyword(
         ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
         keyword.amazonKeywordId, { state: 'paused' },
+        ctx.amazonCampaignId, ctx.amazonAdGroupId,
       );
       await this.db.update(keywords).set({ state: 'paused', updatedAt: new Date() })
         .where(eq(keywords.id, keyword.id));
@@ -1037,16 +1125,20 @@ export class ExecutorService {
     workspaceId: string,
     amazonTargetId: number,
     entityKey: string,
-    actionType: 'adjust_bid' | 'pause',
+    actionType: 'adjust_bid' | 'pause' | 'enable',
     newBid: number | undefined,
     rationale: string | undefined,
     dryRun: boolean,
+    lifecyclePhase?: string,
   ): Promise<ExecuteActionResult> {
     const ctx = await this.getTargetContextByEntityKey(workspaceId, amazonTargetId);
     if (!ctx) {
       throw new NotFoundException(`Product target not found: ${entityKey}`);
     }
     const { target } = ctx;
+
+    // COOLDOWN CHECK — bloque adjust_bid si cooldown actif (409)
+    this.checkBidCooldown(target.lastBidChangeAt, actionType, lifecyclePhase);
 
     if (actionType === 'adjust_bid') {
       if (newBid == null) throw new BadRequestException('newBid is required for adjust_bid');
@@ -1057,16 +1149,24 @@ export class ExecutorService {
 
       const beforeValue = { bid: currentBid };
       const afterValue = { bid: finalBid };
-      const apiRequest = { targetId: target.amazonTargetId, updates: { bid: finalBid } };
+      const apiRequest = { targetId: target.amazonTargetId, campaignId: ctx.amazonCampaignId, adGroupId: ctx.amazonAdGroupId, updates: { bid: finalBid } };
       let apiResponse: any;
 
       if (!dryRun) {
         apiResponse = await this.amazonClient.updateProductTarget(
           ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
           target.amazonTargetId, { bid: finalBid },
+          ctx.amazonCampaignId, ctx.amazonAdGroupId,
         );
-        await this.db.update(productTargets).set({ bid: String(finalBid), updatedAt: new Date() })
-          .where(eq(productTargets.id, target.id));
+        // Mettre à jour le bid + les champs de cooldown tracking
+        await this.db.update(productTargets).set({
+          bid: String(finalBid),
+          lastBidChangeAt: new Date(),
+          lastBidChangeType: finalBid > currentBid ? 'bid_up' : 'bid_down',
+          previousBid: String(currentBid),
+          newBid: String(finalBid),
+          updatedAt: new Date(),
+        }).where(eq(productTargets.id, target.id));
       }
 
       const actionLogEntry = await this.logAction({
@@ -1081,16 +1181,46 @@ export class ExecutorService {
       return { success: true, actionId: actionLogEntry.id, dryRun, beforeValue, afterValue, apiRequest, apiResponse };
     }
 
+    if (actionType === 'enable') {
+      // enable (réactiver un target en pause)
+      const beforeValue = { state: target.state };
+      const afterValue = { state: 'enabled' };
+      const apiRequest = { targetId: target.amazonTargetId, campaignId: ctx.amazonCampaignId, adGroupId: ctx.amazonAdGroupId, updates: { state: 'enabled' } };
+      let apiResponse: any;
+
+      if (!dryRun) {
+        apiResponse = await this.amazonClient.updateProductTarget(
+          ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
+          target.amazonTargetId, { state: 'enabled' },
+          ctx.amazonCampaignId, ctx.amazonAdGroupId,
+        );
+        await this.db.update(productTargets).set({ state: 'enabled', updatedAt: new Date() })
+          .where(eq(productTargets.id, target.id));
+      }
+
+      const actionLogEntry = await this.logAction({
+        workspaceId, entityType: 'target', entityKey,
+        amazonEntityId: target.amazonTargetId,
+        actionType: 'enable', beforeValue, afterValue,
+        rationale: rationale || 'Direct enable from Action modal',
+        executedBy: 'user', status: dryRun ? 'simulated' : 'success',
+        apiRequest, apiResponse, isReversible: true, dryRun,
+      });
+
+      return { success: true, actionId: actionLogEntry.id, dryRun, beforeValue, afterValue, apiRequest, apiResponse };
+    }
+
     // pause
     const beforeValue = { state: target.state };
     const afterValue = { state: 'paused' };
-    const apiRequest = { targetId: target.amazonTargetId, updates: { state: 'paused' } };
+    const apiRequest = { targetId: target.amazonTargetId, campaignId: ctx.amazonCampaignId, adGroupId: ctx.amazonAdGroupId, updates: { state: 'paused' } };
     let apiResponse: any;
 
     if (!dryRun) {
       apiResponse = await this.amazonClient.updateProductTarget(
         ctx.adAccountId, ctx.profileId, ctx.marketplace as Marketplace,
         target.amazonTargetId, { state: 'paused' },
+        ctx.amazonCampaignId, ctx.amazonAdGroupId,
       );
       await this.db.update(productTargets).set({ state: 'paused', updatedAt: new Date() })
         .where(eq(productTargets.id, target.id));

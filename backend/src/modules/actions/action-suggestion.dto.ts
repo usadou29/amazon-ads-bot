@@ -1,4 +1,4 @@
-import { IsString, IsNumber, IsOptional, IsIn } from 'class-validator';
+import { IsString, IsNumber, IsOptional, IsIn, IsArray } from 'class-validator';
 
 export class ActionSuggestionDto {
   @IsString()
@@ -17,6 +17,11 @@ export class ActionSuggestionDto {
   @IsOptional()
   @IsString()
   lifecyclePhase?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['bid_up', 'bid_down'])
+  actionType?: 'bid_up' | 'bid_down';
 }
 
 export class ExecuteDirectActionDto {
@@ -31,8 +36,8 @@ export class ExecuteDirectActionDto {
   entityType: 'keyword' | 'target';
 
   @IsString()
-  @IsIn(['adjust_bid', 'pause'])
-  actionType: 'adjust_bid' | 'pause';
+  @IsIn(['adjust_bid', 'pause', 'enable'])
+  actionType: 'adjust_bid' | 'pause' | 'enable';
 
   @IsOptional()
   @IsNumber()
@@ -44,4 +49,44 @@ export class ExecuteDirectActionDto {
 
   @IsOptional()
   dryRun?: boolean;
+
+  @IsOptional()
+  @IsString()
+  lifecyclePhase?: string;
+}
+
+export class BatchSuggestionsDto {
+  @IsString()
+  workspaceId: string;
+
+  @IsArray()
+  entities: Array<{ entityKey: string; entityType: 'keyword' | 'target' }>;
+
+  @IsNumber()
+  acosTarget: number;
+
+  @IsOptional()
+  @IsString()
+  lifecyclePhase?: string;
+}
+
+export class BatchExecuteDirectDto {
+  @IsString()
+  workspaceId: string;
+
+  @IsArray()
+  actions: Array<{
+    entityKey: string;
+    entityType: 'keyword' | 'target';
+    actionType: 'adjust_bid' | 'pause' | 'enable';
+    newBid?: number;
+    rationale?: string;
+  }>;
+
+  @IsOptional()
+  dryRun?: boolean;
+
+  @IsOptional()
+  @IsString()
+  lifecyclePhase?: string;
 }

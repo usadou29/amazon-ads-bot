@@ -249,9 +249,18 @@ export class ReportsService {
       existing[0].ingestedAt &&
       (Date.now() - new Date(existing[0].ingestedAt).getTime()) > STALE_THRESHOLD_MS;
 
+    // Anti-boucle : si un rapport vide a été re-essayé récemment (< 30min), ne pas re-requester
+    const EMPTY_RETRY_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+    const isEmptyReport = existing.length > 0 &&
+      existing[0].status === 'ingested' &&
+      (existing[0].recordsProcessed ?? 0) === 0;
+    const emptyRetryCooldown = isEmptyReport &&
+      existing[0].ingestedAt &&
+      (Date.now() - new Date(existing[0].ingestedAt).getTime()) < EMPTY_RETRY_COOLDOWN_MS;
+
     const shouldReRequest = existing.length > 0 && (
       existing[0].status === 'failed' ||
-      (existing[0].status === 'ingested' && (existing[0].recordsProcessed ?? 0) === 0) ||
+      (isEmptyReport && !emptyRetryCooldown) ||
       isStale
     );
 
@@ -512,11 +521,18 @@ export class ReportsService {
     if (rows.length === 0) {
       this.logger.warn(
         `Report ${job.id} (${job.reportType}): EMPTY report — 0 rows returned by Amazon. ` +
-        `This means Amazon returned no data for this report type.`,
+        `This may indicate an API issue or genuinely no data for this report type/period.`,
       );
+      // Marquer comme 'ingested' avec 0 records — le shouldReRequest le reprendra
+      // mais on ajoute un délai via ingestedAt pour éviter un retry en boucle
       await this.db
         .update(reportJobs)
-        .set({ status: 'ingested', ingestedAt: new Date(), recordsProcessed: 0 })
+        .set({
+          status: 'ingested',
+          ingestedAt: new Date(),
+          recordsProcessed: 0,
+          errorMessage: 'Empty report — Amazon returned 0 rows',
+        })
         .where(eq(reportJobs.id, job.id));
       return;
     }
@@ -571,6 +587,21 @@ export class ReportsService {
       this.logger.log(`[INGEST] Sample row keys: ${Object.keys(sampleRow).join(', ')}`);
       this.logger.log(`[INGEST] Sample row[${idField}] = ${JSON.stringify(sampleRow[idField])}`);
       this.logger.log(`[INGEST] Sample: date=${sampleRow.date}, impressions=${sampleRow.impressions}, clicks=${sampleRow.clicks}`);
+      // Diagnostic : vérifier la présence et les valeurs des champs attribution
+      this.logger.log(
+        `[INGEST] Sample attribution fields: sales14d=${JSON.stringify(sampleRow.sales14d)}, ` +
+        `purchases14d=${JSON.stringify(sampleRow.purchases14d)}, ` +
+        `unitsSoldClicks14d=${JSON.stringify(sampleRow.unitsSoldClicks14d)}, ` +
+        `cost=${JSON.stringify(sampleRow.cost)}, spend=${JSON.stringify(sampleRow.spend)}`,
+      );
+      // Vérifier si des noms de champs alternatifs sont présents (détection de changement d'API Amazon)
+      const allKeys = Object.keys(sampleRow);
+      const salesKeys = allKeys.filter(k => k.toLowerCase().includes('sale') || k.toLowerCase().includes('purchase') || k.toLowerCase().includes('order'));
+      if (salesKeys.length > 0) {
+        this.logger.log(`[INGEST] Found sales/order related keys: ${salesKeys.join(', ')} → values: ${salesKeys.map(k => `${k}=${JSON.stringify(sampleRow[k])}`).join(', ')}`);
+      } else {
+        this.logger.warn(`[INGEST] ⚠️ NO sales/order related keys found in report! Available keys: ${allKeys.join(', ')}`);
+      }
     }
 
     // Charger les amazonCampaignId des campagnes enabled pour ce profil
@@ -631,9 +662,23 @@ export class ReportsService {
       });
     }
 
+    // Diagnostic : compteur pour détecter les anomalies d'attribution
+    const withOrders = metrics.filter(m => (m.orders ?? 0) > 0).length;
+    const withSales = metrics.filter(m => parseFloat(m.sales ?? '0') > 0).length;
+    const withClicks = metrics.filter(m => (m.clicks ?? 0) > 0).length;
+
     this.logger.log(
       `[INGEST] ${reportType}: ${metrics.length} metrics built, ${skippedNoId} skipped (no ID), ${skippedInactiveCampaign} skipped (inactive campaign)`,
     );
+    this.logger.log(
+      `[INGEST] ${reportType} attribution check: ${withClicks} rows with clicks, ${withOrders} with orders, ${withSales} with sales`,
+    );
+    if (withClicks > 0 && withOrders === 0) {
+      this.logger.warn(
+        `[INGEST] ⚠️ ${reportType}: ${withClicks} rows with clicks but 0 rows with orders! ` +
+        `Possible field name mismatch — check if Amazon API changed 'purchases14d' field name.`,
+      );
+    }
 
     if (metrics.length === 0) {
       this.logger.warn(`[INGEST] ${reportType}: NO metrics to upsert! All ${rows.length} rows were skipped.`);

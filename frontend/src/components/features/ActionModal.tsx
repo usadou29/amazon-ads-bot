@@ -67,6 +67,16 @@ interface SuggestionData {
     enabled: boolean;
     reason?: string;
   }>;
+  cooldown?: {
+    active: boolean;
+    daysSinceChange: number;
+    cooldownDays: number;
+    remainingDays: number;
+    lastChangeType: string;
+    previousBid: number;
+    newBid: number;
+    lastChangeAt: string;
+  };
 }
 
 // ── Component ───────────────────────────────────────
@@ -251,6 +261,27 @@ export function ActionModal({
               </span>
             </div>
           </div>
+
+          {/* Cooldown info block */}
+          {data.cooldown?.active && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="text-base">&#9203;</span>
+                <span className="text-xs font-semibold text-indigo-700">
+                  En observation (J+{data.cooldown.daysSinceChange}/{data.cooldown.cooldownDays})
+                </span>
+              </div>
+              <p className="text-xs text-indigo-600 leading-relaxed">
+                L'enchère a été {data.cooldown.lastChangeType === 'bid_up' ? 'augmentée' : 'baissée'} de{' '}
+                {data.cooldown.previousBid.toFixed(2)}€ → {data.cooldown.newBid.toFixed(2)}€ le{' '}
+                {new Date(data.cooldown.lastChangeAt).toLocaleDateString('fr-FR')}.
+              </p>
+              <p className="text-xs text-indigo-500 mt-1">
+                Encore {data.cooldown.remainingDays} jour{data.cooldown.remainingDays > 1 ? 's' : ''} avant de pouvoir modifier l'enchère.
+                Les actions pause et negative restent disponibles.
+              </p>
+            </div>
+          )}
 
           {/* Métriques */}
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">

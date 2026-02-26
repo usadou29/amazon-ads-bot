@@ -99,9 +99,11 @@ export class AuthorsService {
    * Retourne la date range 30 jours par defaut
    */
   private getDefaultDateRange(): { startDate: string; endDate: string } {
+    // Fin = hier (Amazon a 1 jour de retard, pas de données pour aujourd'hui)
     const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - 30);
+    end.setDate(end.getDate() - 1);
+    const start = new Date(end);
+    start.setDate(start.getDate() - 29); // 30 jours
     return {
       startDate: start.toISOString().split('T')[0],
       endDate: end.toISOString().split('T')[0],

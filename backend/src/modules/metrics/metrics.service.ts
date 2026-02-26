@@ -416,9 +416,11 @@ export class MetricsService {
    * Retourne la plage de dates par defaut (30 derniers jours)
    */
   private getDefaultDateRange(): DateRange {
+    // Fin = hier (Amazon a 1 jour de retard, pas de données pour aujourd'hui)
     const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 30);
+    endDate.setDate(endDate.getDate() - 1);
+    const startDate = new Date(endDate);
+    startDate.setDate(startDate.getDate() - 29); // 30 jours
 
     return {
       startDate: startDate.toISOString().split('T')[0],

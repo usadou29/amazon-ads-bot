@@ -18,6 +18,9 @@ import { CampaignsModule } from '@/modules/campaigns/campaigns.module';
 import { SchedulerModule } from '@/modules/scheduler/scheduler.module';
 import { InsightsModule } from '@/modules/insights/insights.module';
 import { ActionsModule } from '@/modules/actions/actions.module';
+import { LifecycleModule } from '@/modules/lifecycle/lifecycle.module';
+import { MacroModule } from '@/modules/macro/macro.module';
+import { CampaignEvolutionModule } from '@/modules/campaign-evolution/campaign-evolution.module';
 
 @Module({
   imports: [
@@ -43,6 +46,9 @@ import { ActionsModule } from '@/modules/actions/actions.module';
     SchedulerModule,
     InsightsModule,
     ActionsModule,
+    LifecycleModule,
+    MacroModule,
+    CampaignEvolutionModule,
   ],
 })
 export class AppModule {}

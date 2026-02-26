@@ -6,12 +6,21 @@ import { RecommendationCard } from '@/components/features/RecommendationCard';
 import { CampaignInsightCard } from '@/components/features/CampaignInsightCard';
 import { EntityInsightPopover } from '@/components/features/EntityInsightPopover';
 import { ActionModal } from '@/components/features/ActionModal';
+import { BidActionPopover } from '@/components/features/BidActionPopover';
 import { RecommendationGroup, refreshRecommendationTexts } from '@/lib/transforms/recommendations';
-import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight } from '@/lib/transforms/insights';
+import { type CampaignInsight, type EntityInsight, EXECUTION_COLORS, renderEntityInsight, computeDateRange } from '@/lib/transforms/insights';
+import { selectDefaultAction, insightActionToSuggestionItem, type ActionSuggestionItem } from '@/lib/action-selection';
 import { t } from '@/lib/i18n';
-import { fetchBookCampaignDetails } from '@/lib/api/client';
+import { fetchBookCampaignDetails, executeDirectAction, fetchMacroSuggestions } from '@/lib/api/client';
+import { MacroSuggestionsBlock, type MacroSuggestionDTO } from '@/components/features/MacroSuggestionsBlock';
+import { BatchActionModal } from '@/components/features/BatchActionModal';
 
 // ── Types ──
+interface TrendData {
+  direction: 'up' | 'down' | 'stable' | 'new' | 'insufficient';
+  percentChange: number;
+}
+
 interface TargetMetrics {
   impressions: number;
   clicks: number;
@@ -24,6 +33,14 @@ interface TargetMetrics {
   cvr: number;
   cpc: number;
   impressionShare: number | null;
+  trend?: TrendData;
+}
+
+interface CooldownInfo {
+  active: boolean;
+  daysSinceChange: number;
+  cooldownDays: number;
+  remainingDays: number;
 }
 
 interface KeywordItem {
@@ -36,6 +53,7 @@ interface KeywordItem {
   bid: number | null;
   metrics: TargetMetrics;
   insight?: EntityInsight;
+  cooldown?: CooldownInfo;
 }
 
 interface ProductTargetItem {
@@ -47,6 +65,7 @@ interface ProductTargetItem {
   bid: number | null;
   metrics: TargetMetrics;
   insight?: EntityInsight;
+  cooldown?: CooldownInfo;
 }
 
 interface CampaignDetail {
@@ -69,6 +88,7 @@ interface CampaignDetailsResponse {
   periodDays: number;
   lifecyclePhase?: 'launch' | 'scale' | 'evergreen' | 'relaunch';
   breakEvenAcos?: number;
+  lastSyncedAt?: string | null;
 }
 
 interface RecoHandlers {
@@ -188,6 +208,153 @@ function DemandBadge({ impressions, periodDays }: { impressions: number; periodD
     >
       {label}
     </span>
+  );
+}
+
+// ── Trend Badge (Rentabilité 7j) ──
+// Compare l'ACoS des 7 derniers jours vs les 7 jours précédents.
+// Cliquable : ouvre un popover explicatif en overlay fixe (visible même dans un overflow).
+function TrendBadge({ trend, entityName }: { trend?: TrendData; entityName?: string }) {
+  const [open, setOpen] = useState(false);
+
+  if (!trend || trend.direction === 'insufficient') {
+    return <span className="text-[10px] text-slate-300">—</span>;
+  }
+
+  if (trend.direction === 'new') {
+    return (
+      <>
+        <span
+          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 cursor-pointer hover:ring-2 hover:ring-blue-300 transition-all"
+          onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        >
+          <span>★</span>
+          <span>Nouveau</span>
+        </span>
+        {open && <TrendModal trend={trend} entityName={entityName} onClose={() => setOpen(false)} />}
+      </>
+    );
+  }
+
+  // down = ACoS baissé = rentabilité en hausse = vert ↑
+  // up = ACoS monté = rentabilité en baisse = rouge ↓
+  const config = {
+    down: { bg: 'bg-emerald-50', text: 'text-emerald-700', arrow: '↑', ring: 'hover:ring-emerald-300' },
+    up: { bg: 'bg-red-50', text: 'text-red-700', arrow: '↓', ring: 'hover:ring-red-300' },
+    stable: { bg: 'bg-amber-50', text: 'text-amber-600', arrow: '→', ring: 'hover:ring-amber-300' },
+  } as const;
+
+  const c = config[trend.direction];
+  const absChange = Math.round(Math.abs(trend.percentChange));
+
+  return (
+    <>
+      <span
+        className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium cursor-pointer hover:ring-2 transition-all ${c.bg} ${c.text} ${c.ring}`}
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+      >
+        <span>{c.arrow}</span>
+        <span>{absChange}%</span>
+      </span>
+      {open && <TrendModal trend={trend} entityName={entityName} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+// ── Trend Modal (overlay fixe, toujours visible) ──
+function TrendModal({ trend, entityName, onClose }: {
+  trend: TrendData;
+  entityName?: string;
+  onClose: () => void;
+}) {
+  const absChange = Math.round(Math.abs(trend.percentChange));
+  const name = entityName ? `« ${entityName} »` : 'ce mot-clé';
+
+  let icon = '';
+  let title = '';
+  let explanation = '';
+  let accentBorder = '';
+  let accentBg = '';
+  let iconBg = '';
+
+  if (trend.direction === 'new') {
+    icon = '★';
+    title = 'Nouveau mot-clé';
+    explanation = `${name} n'a pas assez d'historique pour calculer une tendance. Il faut au moins 2 semaines de données pour comparer.`;
+    accentBorder = 'border-l-blue-500';
+    accentBg = 'bg-blue-50';
+    iconBg = 'bg-blue-100 text-blue-600';
+  } else if (trend.direction === 'down') {
+    icon = '↗';
+    title = `Rentabilité en hausse`;
+    explanation = `L'ACoS de ${name} a baissé de ${absChange}% cette semaine par rapport à la semaine précédente.\n\nConcrètement, tu paies moins cher pour générer des ventes. C'est positif, ça veut dire que ce mot-clé devient plus rentable.`;
+    accentBorder = 'border-l-emerald-500';
+    accentBg = 'bg-emerald-50';
+    iconBg = 'bg-emerald-100 text-emerald-600';
+  } else if (trend.direction === 'up') {
+    icon = '↘';
+    title = `Rentabilité en baisse`;
+    explanation = `L'ACoS de ${name} a augmenté de ${absChange}% cette semaine par rapport à la semaine précédente.\n\nConcrètement, tu paies plus cher pour chaque euro de vente. Surveille ce mot-clé — si la tendance continue, une baisse d'enchère pourrait être nécessaire.`;
+    accentBorder = 'border-l-red-500';
+    accentBg = 'bg-red-50';
+    iconBg = 'bg-red-100 text-red-600';
+  } else {
+    icon = '→';
+    title = 'Rentabilité stable';
+    explanation = `L'ACoS de ${name} n'a pas bougé significativement entre cette semaine et la précédente (variation inférieure à 5%).\n\nPas de changement nécessaire pour le moment.`;
+    accentBorder = 'border-l-amber-500';
+    accentBg = 'bg-amber-50';
+    iconBg = 'bg-amber-100 text-amber-600';
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
+      {/* Fond semi-transparent */}
+      <div className="absolute inset-0 bg-black/20" />
+
+      {/* Carte modale */}
+      <div
+        className={`relative bg-white rounded-xl shadow-2xl border border-slate-200 w-[340px] max-w-[90vw] overflow-hidden border-l-4 ${accentBorder}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className={`flex items-center gap-3 px-5 py-4 ${accentBg}`}>
+          <div className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-lg font-bold ${iconBg}`}>
+            {icon}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+            {trend.direction !== 'new' && trend.direction !== 'stable' && (
+              <p className="text-xs text-slate-500 mt-0.5">
+                Variation ACoS : {trend.direction === 'up' ? '+' : ''}{Math.round(trend.percentChange)}%
+              </p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full hover:bg-black/10 text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Corps */}
+        <div className="px-5 py-4">
+          {explanation.split('\n\n').map((paragraph, i) => (
+            <p key={i} className={`text-[13px] leading-relaxed text-slate-600 ${i > 0 ? 'mt-3' : ''}`}>
+              {paragraph}
+            </p>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-3 bg-slate-50 border-t border-slate-100">
+          <p className="text-[11px] text-slate-400">
+            Comparaison de l'ACoS des 7 derniers jours vs les 7 jours précédents.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -418,7 +585,7 @@ function RecommendationsModal({
             Métriques actuelles ({modalDays === 1 ? "aujourd'hui" : `${modalDays}j`})
             {metricsLoading && <span className="ml-2 text-slate-400">Chargement...</span>}
           </p>
-          <MetricChips m={currentMetrics} />
+          <MetricChips m={currentMetrics} periodDays={modalDays} />
         </div>
       )}
 
@@ -443,13 +610,58 @@ function RecommendationsModal({
   );
 }
 
+// ── Data Freshness Indicator ──
+function DataFreshnessIndicator({ lastSyncedAt }: { lastSyncedAt: string }) {
+  const syncDate = new Date(lastSyncedAt);
+  const now = new Date();
+  const diffMs = now.getTime() - syncDate.getTime();
+  const diffMinutes = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMinutes / 60);
+
+  let timeAgo: string;
+  if (diffMinutes < 1) timeAgo = "à l'instant";
+  else if (diffMinutes < 60) timeAgo = `il y a ${diffMinutes} min`;
+  else if (diffHours < 24) timeAgo = `il y a ${diffHours}h${diffMinutes % 60 > 0 ? String(diffMinutes % 60).padStart(2, '0') : ''}`;
+  else timeAgo = `il y a ${Math.floor(diffHours / 24)}j`;
+
+  // Stale = more than 6 hours
+  const isStale = diffHours >= 6;
+  // Warning = more than 2 hours
+  const isWarning = diffHours >= 2;
+
+  const color = isStale
+    ? 'text-red-500'
+    : isWarning
+      ? 'text-amber-500'
+      : 'text-slate-400';
+
+  const dotColor = isStale
+    ? 'bg-red-400'
+    : isWarning
+      ? 'bg-amber-400'
+      : 'bg-emerald-400';
+
+  return (
+    <div className={`flex items-center gap-1.5 text-[11px] ${color}`}>
+      <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotColor}`} />
+      <span>
+        Données Amazon synchronisées {timeAgo}
+        {isStale && ' — les données peuvent être obsolètes'}
+      </span>
+    </div>
+  );
+}
+
 // ── Metric Mini Row ──
-function MetricChips({ m }: { m: TargetMetrics }) {
+function MetricChips({ m, periodDays }: { m: TargetMetrics; periodDays?: number }) {
   if (m.impressions === 0 && m.clicks === 0 && m.spend === 0) {
     return <span className="text-xs text-slate-300 italic">Aucune donnée</span>;
   }
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+      {periodDays && (
+        <span className="text-slate-400 italic">{periodDays}j ({computeDateRange(periodDays)})</span>
+      )}
       <span><span className="text-slate-400">Impr.</span> <span className="font-medium text-slate-700">{formatInt(m.impressions)}</span></span>
       <span><span className="text-slate-400">Clics</span> <span className="font-medium text-slate-700">{formatInt(m.clicks)}</span></span>
       <span><span className="text-slate-400">Dépensé</span> <span className="font-medium text-slate-700">{formatEur(m.spend)}</span></span>
@@ -479,21 +691,279 @@ function RecoBadge({ count, onClick }: { count: number; onClick: () => void }) {
   );
 }
 
-function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: () => void }) {
-  const execColors = EXECUTION_COLORS[action.execution];
+/**
+ * Sélectionne la meilleure action pour une entité en utilisant le scoring.
+ * Convertit les InsightAction rendus en ActionSuggestionItem, puis appelle selectDefaultAction.
+ *
+ * Si l'entité est en pause → override l'action vers "Réactiver".
+ * Si l'entité est archivée → pas d'action proposée.
+ */
+function pickBestAction(
+  insight: EntityInsight | undefined,
+  rendered: ReturnType<typeof renderEntityInsight> | null,
+  entityState?: string,
+  cooldown?: { active: boolean; daysSinceChange: number; cooldownDays: number; remainingDays: number },
+): { label: string; execution: 'ads' | 'book' | 'none'; type: string } | null {
+  // Si l'entité est en pause → proposer "Réactiver" comme action prioritaire
+  if (entityState === 'paused') {
+    return { label: t('insights.actions.enable'), execution: 'ads', type: 'enable' };
+  }
+  // Si l'entité est archivée → pas d'action
+  if (entityState === 'archived') {
+    return null;
+  }
+
+  // Si cooldown actif → afficher le badge observation (cliquable pour voir le popover)
+  if (cooldown?.active) {
+    return {
+      label: `Observation (J+${cooldown.daysSinceChange}/${cooldown.cooldownDays})`,
+      execution: 'none',
+      type: 'cooldown',
+    };
+  }
+
+  if (!insight || !rendered || !rendered.actions.length) return null;
+
+  const items: ActionSuggestionItem[] = rendered.actions.map((a, i) =>
+    insightActionToSuggestionItem(a, insight, i),
+  );
+
+  const best = selectDefaultAction(items, {
+    diagnosisCode: insight.diagnosisCode,
+    clicks: insight.summaryFacts.clicks,
+  });
+
+  if (!best) return rendered.actions[0] || null;
+
+  // Retrouver l'action rendue correspondante
+  const match = rendered.actions.find(a => a.type === best.actionType);
+  return match || rendered.actions[0] || null;
+}
+
+// ── Direct Action Confirm (pause / add_negative / enable) ──
+// Modale éducative : explique la différence pause vs bloquer, laisse le choix à l'utilisateur
+// Pour enable : modale simple de confirmation de réactivation
+function DirectActionConfirm({
+  entityKey,
+  entityType,
+  entityName,
+  actionType,
+  workspaceId,
+  onClose,
+  onActionExecuted,
+}: {
+  entityKey: string;
+  entityType: 'keyword' | 'target';
+  entityName: string;
+  actionType: string;
+  workspaceId: string;
+  onClose: () => void;
+  onActionExecuted?: () => void;
+}) {
+  const [applying, setApplying] = useState<'pause' | 'block' | 'enable' | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleExecute = async (chosenAction: 'pause' | 'block' | 'enable') => {
+    setApplying(chosenAction);
+    setError(null);
+    try {
+      const backendActionType = chosenAction === 'enable' ? 'enable' : 'pause';
+      await executeDirectAction({
+        workspaceId,
+        entityKey,
+        entityType,
+        actionType: backendActionType as 'adjust_bid' | 'pause' | 'enable',
+        rationale: chosenAction === 'enable'
+          ? `Réactivation demandée par l'utilisateur sur "${entityName}"`
+          : chosenAction === 'block'
+            ? `Blocage négatif demandé par l'utilisateur sur "${entityName}"`
+            : `Mise en pause demandée par l'utilisateur sur "${entityName}"`,
+      });
+      setSuccess(
+        chosenAction === 'enable' ? 'Réactivé avec succès'
+        : chosenAction === 'block' ? 'Terme bloqué'
+        : 'Mis en pause',
+      );
+      setTimeout(() => {
+        onActionExecuted?.();
+        onClose();
+      }, 1200);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || err.message || 'Erreur');
+    } finally {
+      setApplying(null);
+    }
+  };
+
+  const isEnableAction = actionType === 'enable';
+  const isPauseOrigin = actionType === 'pause';
+  const title = isEnableAction ? 'Réactiver' : isPauseOrigin ? 'Mettre en pause' : 'Bloquer ce terme';
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/20" onClick={onClose} />
+      <div
+        className="fixed z-50 w-[400px] max-h-[90vh] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-2xl"
+        style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+          <h4 className="text-sm font-semibold text-slate-800">{title}</h4>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-0.5">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="px-4 py-3 space-y-3">
+          {/* Success */}
+          {success ? (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-700 text-center font-medium">
+              {success}
+            </div>
+          ) : isEnableAction ? (
+            <>
+              {/* Mode Réactivation — modale simple */}
+              <p className="text-xs text-slate-500">
+                Ciblage : <span className="font-semibold text-slate-800">{entityName}</span>
+              </p>
+
+              <div className="rounded-lg border-2 border-emerald-300 bg-emerald-50 p-3">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-sm">▶️</span>
+                  <span className="text-xs font-bold text-emerald-800">Réactiver ce ciblage</span>
+                </div>
+                <p className="text-[11px] text-emerald-700 leading-relaxed mb-2">
+                  Remet ce {entityType === 'keyword' ? 'mot-clé' : 'produit ciblé'} en état actif. Amazon recommencera à enchérir dessus dans cette campagne.
+                </p>
+                <p className="text-[10px] text-emerald-600 italic mb-2.5">
+                  Utile si les conditions ont changé (nouvelle couverture, fiche améliorée, etc.) et que tu veux retester ce ciblage.
+                </p>
+                <button
+                  onClick={() => handleExecute('enable')}
+                  disabled={applying !== null}
+                  className={`w-full rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors ${
+                    applying === 'enable' ? 'bg-slate-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700'
+                  }`}
+                >
+                  {applying === 'enable' ? 'Réactivation…' : 'Réactiver'}
+                </button>
+              </div>
+
+              {/* Error */}
+              {error && (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-2 text-xs text-red-600">{error}</div>
+              )}
+
+              {/* Annuler */}
+              <button
+                onClick={onClose}
+                className="w-full rounded-lg px-3 py-2 text-xs font-medium text-slate-500 bg-slate-50 hover:bg-slate-100 transition-colors"
+              >
+                Annuler
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Mode Pause/Blocage — modale éducative existante */}
+              {/* Nom de l'entité */}
+              <p className="text-xs text-slate-500">
+                Ciblage : <span className="font-semibold text-slate-800">{entityName}</span>
+              </p>
+
+              {/* Option 1 : Mettre en pause (recommandée si actionType = add_negative) */}
+              <div className={`rounded-lg border-2 p-3 ${actionType === 'add_negative' ? 'border-amber-300 bg-amber-50' : 'border-amber-200 bg-amber-50'}`}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-sm">⏸️</span>
+                  <span className="text-xs font-bold text-amber-800">Mettre en pause</span>
+                  {actionType === 'add_negative' && (
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-200 text-amber-700">Recommandé</span>
+                  )}
+                </div>
+                <p className="text-[11px] text-amber-700 leading-relaxed mb-2">
+                  Désactive ce mot-clé dans cette campagne. Amazon ne misera plus dessus ici, mais le mot-clé reste présent et réactivable.
+                  Il peut encore être déclenché par d'autres campagnes (auto, broad, etc.).
+                </p>
+                <p className="text-[10px] text-amber-600 italic mb-2.5">
+                  Idéal quand le mot-clé est pertinent mais trop cher ou instable — tu gardes la possibilité de revenir.
+                </p>
+                <button
+                  onClick={() => handleExecute('pause')}
+                  disabled={applying !== null}
+                  className={`w-full rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors ${
+                    applying === 'pause' ? 'bg-slate-300 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-700'
+                  }`}
+                >
+                  {applying === 'pause' ? 'Application…' : 'Mettre en pause'}
+                </button>
+              </div>
+
+              {/* Option 2 : Bloquer (négatif) */}
+              <div className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-sm">🚫</span>
+                  <span className="text-xs font-bold text-red-700">Bloquer (mot-clé négatif)</span>
+                </div>
+                <p className="text-[11px] text-slate-600 leading-relaxed mb-2">
+                  Ajoute ce terme en négatif : tes annonces ne seront plus diffusées quand un client cherche ce mot-clé, y compris dans les campagnes auto.
+                  C'est un blocage structurel — Amazon ne montrera plus tes annonces pour ce terme.
+                </p>
+                <p className="text-[10px] text-slate-500 italic mb-2.5">
+                  Réserve le blocage aux cas de trafic hors cible : beaucoup de clics, zéro vente, ou requête clairement non pertinente pour ton livre.
+                </p>
+                <button
+                  onClick={() => handleExecute('block')}
+                  disabled={applying !== null}
+                  className={`w-full rounded-lg px-3 py-2 text-xs font-semibold text-white transition-colors ${
+                    applying === 'block' ? 'bg-slate-300 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'
+                  }`}
+                >
+                  {applying === 'block' ? 'Application…' : 'Bloquer ce terme'}
+                </button>
+              </div>
+
+              {/* Error */}
+              {error && (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-2 text-xs text-red-600">{error}</div>
+              )}
+
+              {/* Annuler */}
+              <button
+                onClick={onClose}
+                className="w-full rounded-lg px-3 py-2 text-xs font-medium text-slate-500 bg-slate-50 hover:bg-slate-100 transition-colors"
+              >
+                Annuler
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function EntityActionBadge({ action, onClick }: { action: { label: string; execution: 'ads' | 'book' | 'none'; type: string }; onClick?: (e?: React.MouseEvent) => void }) {
+  // Cooldown badge: indigo theme with timer icon
+  const isCooldown = action.type === 'cooldown';
+  const bgClass = isCooldown ? 'bg-indigo-50' : EXECUTION_COLORS[action.execution].bg;
+  const textClass = isCooldown ? 'text-indigo-600' : EXECUTION_COLORS[action.execution].text;
+  const categoryTag = isCooldown ? '\u23F3' : action.execution === 'ads' ? '⚡' : action.execution === 'book' ? '📖' : '👁';
+
   if (onClick) {
     return (
       <button
-        onClick={onClick}
-        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${execColors.bg} ${execColors.text}`}
+        onClick={(e) => onClick(e)}
+        className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity ${bgClass} ${textClass}${isCooldown ? ' border border-indigo-200' : ''}`}
       >
-        {execColors.icon} {action.label}
+        {categoryTag} {action.label}
       </button>
     );
   }
   return (
-    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${execColors.bg} ${execColors.text}`}>
-      {execColors.icon} {action.label}
+    <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${bgClass} ${textClass}${isCooldown ? ' border border-indigo-200' : ''}`}>
+      {categoryTag} {action.label}
     </span>
   );
 }
@@ -527,6 +997,8 @@ function KeywordTableWithRecos({
   const [modalKeyword, setModalKeyword] = useState<KeywordItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
   const [actionKeyword, setActionKeyword] = useState<KeywordItem | null>(null);
+  const [actionKwType, setActionKwType] = useState<'bid_up' | 'bid_down'>('bid_up');
+  const [directActionKw, setDirectActionKw] = useState<{ kw: KeywordItem; actionType: string } | null>(null);
 
   if (keywords.length === 0) return null;
 
@@ -535,6 +1007,11 @@ function KeywordTableWithRecos({
     const recos = recommendationMap.get(entityKey) || [];
     setModalKeyword(kw);
     setModalRecos(recos);
+  };
+
+  const openBidPopover = (kw: KeywordItem, actionType: 'bid_up' | 'bid_down', _e: React.MouseEvent) => {
+    setActionKeyword(kw);
+    setActionKwType(actionType);
   };
 
   return (
@@ -558,6 +1035,7 @@ function KeywordTableWithRecos({
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Rent. 7j</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
@@ -569,7 +1047,7 @@ function KeywordTableWithRecos({
               const entityKey = `keyword:${kw.amazonKeywordId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
               const kwRendered = kw.insight ? renderEntityInsight(kw.insight) : null;
-              const kwTopAction = kwRendered?.actions?.[0];
+              const kwTopAction = pickBestAction(kw.insight, kwRendered, kw.state, kw.cooldown);
               return (
                 <tr
                   key={kw.id}
@@ -608,6 +1086,9 @@ function KeywordTableWithRecos({
                   }`}>
                     {kw.metrics.acos > 0 ? formatPct(kw.metrics.acos) : '—'}
                   </td>
+                  <td className="py-2 px-2 text-center">
+                    <TrendBadge trend={kw.metrics.trend} entityName={kw.keywordText} />
+                  </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {kw.insight ? (
                       <EntityInsightPopover insight={kw.insight} entityName={kw.keywordText} />
@@ -619,7 +1100,25 @@ function KeywordTableWithRecos({
                     {kwTopAction ? (
                       <EntityActionBadge
                         action={kwTopAction}
-                        onClick={kwTopAction.execution === 'ads' && workspaceId && acosTarget != null ? () => setActionKeyword(kw) : undefined}
+                        onClick={
+                          // Cooldown → ouvrir le popover en mode observation (bid_down par défaut)
+                          kwTopAction.type === 'cooldown' && workspaceId && acosTarget != null
+                            ? (e?: React.MouseEvent) => {
+                                if (e) openBidPopover(kw, 'bid_down', e);
+                                else setActionKeyword(kw);
+                              }
+                          // Bid actions → popover enchère
+                          : (kwTopAction.type === 'bid_up' || kwTopAction.type === 'bid_down') && workspaceId && acosTarget != null
+                            ? (e?: React.MouseEvent) => {
+                                const bidActionType = kwTopAction.type === 'bid_down' ? 'bid_down' as const : 'bid_up' as const;
+                                if (e) openBidPopover(kw, bidActionType, e);
+                                else setActionKeyword(kw);
+                              }
+                          // Direct actions (pause, add_negative, enable) → confirmation
+                          : (kwTopAction.type === 'pause' || kwTopAction.type === 'add_negative' || kwTopAction.type === 'enable') && workspaceId
+                            ? () => setDirectActionKw({ kw, actionType: kwTopAction.type })
+                            : undefined
+                        }
                       />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
@@ -688,17 +1187,31 @@ function KeywordTableWithRecos({
         />
       )}
 
-      {/* Action Modal for keyword bid adjustment */}
+      {/* Bid Action Popover for keyword */}
       {actionKeyword && workspaceId && acosTarget != null && (
-        <ActionModal
-          open={!!actionKeyword}
-          onClose={() => setActionKeyword(null)}
+        <BidActionPopover
           entityKey={`keyword:${actionKeyword.amazonKeywordId}`}
           entityType="keyword"
           entityName={actionKeyword.keywordText}
+          currentBid={actionKeyword.bid}
           workspaceId={workspaceId}
           acosTarget={acosTarget}
           lifecyclePhase={lifecyclePhase}
+          actionType={actionKwType}
+          onClose={() => setActionKeyword(null)}
+          onActionExecuted={onActionExecuted}
+        />
+      )}
+
+      {/* Direct Action Confirm for keyword (pause / add_negative) */}
+      {directActionKw && workspaceId && (
+        <DirectActionConfirm
+          entityKey={`keyword:${directActionKw.kw.amazonKeywordId}`}
+          entityType="keyword"
+          entityName={directActionKw.kw.keywordText}
+          actionType={directActionKw.actionType}
+          workspaceId={workspaceId}
+          onClose={() => setDirectActionKw(null)}
           onActionExecuted={onActionExecuted}
         />
       )}
@@ -735,6 +1248,8 @@ function ProductTargetTableWithRecos({
   const [modalTarget, setModalTarget] = useState<ProductTargetItem | null>(null);
   const [modalRecos, setModalRecos] = useState<RecommendationGroup[]>([]);
   const [actionTarget, setActionTarget] = useState<ProductTargetItem | null>(null);
+  const [actionTgType, setActionTgType] = useState<'bid_up' | 'bid_down'>('bid_up');
+  const [directActionTg, setDirectActionTg] = useState<{ tg: ProductTargetItem; actionType: string } | null>(null);
 
   if (targets.length === 0) return null;
 
@@ -743,6 +1258,11 @@ function ProductTargetTableWithRecos({
     const recos = recommendationMap.get(entityKey) || [];
     setModalTarget(tg);
     setModalRecos(recos);
+  };
+
+  const openBidPopoverTg = (tg: ProductTargetItem, actionType: 'bid_up' | 'bid_down', _e: React.MouseEvent) => {
+    setActionTarget(tg);
+    setActionTgType(actionType);
   };
 
   return (
@@ -766,6 +1286,7 @@ function ProductTargetTableWithRecos({
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium min-w-[80px]">Ventes</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">Cmd.</th>
               <th className="text-right py-1.5 px-2 text-slate-400 font-medium">ACoS</th>
+              <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Rent. 7j</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[120px]">Pourquoi ?</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium min-w-[110px]">Action</th>
               <th className="text-center py-1.5 px-2 text-slate-400 font-medium">Conseils</th>
@@ -777,7 +1298,7 @@ function ProductTargetTableWithRecos({
               const entityKey = `target:${tg.amazonTargetId}`;
               const recoCount = (recommendationMap.get(entityKey) || []).length;
               const tgRendered = tg.insight ? renderEntityInsight(tg.insight) : null;
-              const tgTopAction = tgRendered?.actions?.[0];
+              const tgTopAction = pickBestAction(tg.insight, tgRendered, tg.state, tg.cooldown);
               return (
                 <tr
                   key={tg.id}
@@ -816,6 +1337,9 @@ function ProductTargetTableWithRecos({
                   }`}>
                     {tg.metrics.acos > 0 ? formatPct(tg.metrics.acos) : '—'}
                   </td>
+                  <td className="py-2 px-2 text-center">
+                    <TrendBadge trend={tg.metrics.trend} entityName={tg.expression} />
+                  </td>
                   <td className="py-2 px-2 text-center" onClick={(e) => e.stopPropagation()}>
                     {tg.insight ? (
                       <EntityInsightPopover insight={tg.insight} entityName={tg.expression} />
@@ -827,7 +1351,25 @@ function ProductTargetTableWithRecos({
                     {tgTopAction ? (
                       <EntityActionBadge
                         action={tgTopAction}
-                        onClick={tgTopAction.execution === 'ads' && workspaceId && acosTarget != null ? () => setActionTarget(tg) : undefined}
+                        onClick={
+                          // Cooldown → ouvrir le popover en mode observation (bid_down par défaut)
+                          tgTopAction.type === 'cooldown' && workspaceId && acosTarget != null
+                            ? (e?: React.MouseEvent) => {
+                                if (e) openBidPopoverTg(tg, 'bid_down', e);
+                                else setActionTarget(tg);
+                              }
+                          // Bid actions → popover enchère
+                          : (tgTopAction.type === 'bid_up' || tgTopAction.type === 'bid_down') && workspaceId && acosTarget != null
+                            ? (e?: React.MouseEvent) => {
+                                const bidActionType = tgTopAction.type === 'bid_down' ? 'bid_down' as const : 'bid_up' as const;
+                                if (e) openBidPopoverTg(tg, bidActionType, e);
+                                else setActionTarget(tg);
+                              }
+                          // Direct actions (pause, add_negative, enable) → confirmation
+                          : (tgTopAction.type === 'pause' || tgTopAction.type === 'add_negative' || tgTopAction.type === 'enable') && workspaceId
+                            ? () => setDirectActionTg({ tg, actionType: tgTopAction.type })
+                            : undefined
+                        }
                       />
                     ) : (
                       <span className="text-[10px] text-slate-300">—</span>
@@ -895,17 +1437,31 @@ function ProductTargetTableWithRecos({
         />
       )}
 
-      {/* Action Modal for target bid adjustment */}
+      {/* Bid Action Popover for target */}
       {actionTarget && workspaceId && acosTarget != null && (
-        <ActionModal
-          open={!!actionTarget}
-          onClose={() => setActionTarget(null)}
+        <BidActionPopover
           entityKey={`target:${actionTarget.amazonTargetId}`}
           entityType="target"
           entityName={actionTarget.expression}
+          currentBid={actionTarget.bid}
           workspaceId={workspaceId}
           acosTarget={acosTarget}
           lifecyclePhase={lifecyclePhase}
+          actionType={actionTgType}
+          onClose={() => setActionTarget(null)}
+          onActionExecuted={onActionExecuted}
+        />
+      )}
+
+      {/* Direct Action Confirm for target (pause / add_negative) */}
+      {directActionTg && workspaceId && (
+        <DirectActionConfirm
+          entityKey={`target:${directActionTg.tg.amazonTargetId}`}
+          entityType="target"
+          entityName={directActionTg.tg.expression}
+          actionType={directActionTg.actionType}
+          workspaceId={workspaceId}
+          onClose={() => setDirectActionTg(null)}
           onActionExecuted={onActionExecuted}
         />
       )}
@@ -940,12 +1496,22 @@ function OverviewCampaignCard({
   onActionExecuted?: () => void;
 }) {
   const [expanded, setExpanded] = useState(campaign.state === 'enabled');
+  const [macroSuggestions, setMacroSuggestions] = useState<MacroSuggestionDTO[]>([]);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
   const sc = stateConfig[campaign.state] || stateConfig.enabled;
   const typeLabel = typeLabels[campaign.campaignType] || campaign.campaignType;
 
   const hasKeywords = campaign.keywords.length > 0;
   const hasTargets = campaign.productTargets.length > 0;
   const hasData = hasKeywords || hasTargets;
+
+  // Fetch macro suggestions
+  useEffect(() => {
+    if (!campaign.id || !bookId || !lifecyclePhase) return;
+    fetchMacroSuggestions(campaign.id, bookId, lifecyclePhase)
+      .then(setMacroSuggestions)
+      .catch(() => setMacroSuggestions([]));
+  }, [campaign.id, bookId, lifecyclePhase]);
 
   // Count total recommendations for this campaign
   let totalRecos = 0;
@@ -956,6 +1522,47 @@ function OverviewCampaignCard({
   for (const tg of campaign.productTargets) {
     const entityKey = `target:${tg.amazonTargetId}`;
     totalRecos += (recommendationMap.get(entityKey) || []).length;
+  }
+
+  // Count actionable entities (those with a bid action suggestion and not in cooldown)
+  const actionableEntities: Array<{
+    entityKey: string;
+    entityType: 'keyword' | 'target';
+    entityName: string;
+    currentBid: number | null;
+    insight?: EntityInsight;
+    cooldown?: { active: boolean };
+  }> = [];
+
+  for (const kw of campaign.keywords) {
+    if (kw.state !== 'enabled') continue;
+    const rendered = kw.insight ? renderEntityInsight(kw.insight) : null;
+    const bestAction = pickBestAction(kw.insight, rendered, kw.state, kw.cooldown);
+    if (bestAction && (bestAction.type === 'bid_up' || bestAction.type === 'bid_down' || bestAction.type === 'adjust_bid')) {
+      actionableEntities.push({
+        entityKey: `keyword:${kw.amazonKeywordId}`,
+        entityType: 'keyword',
+        entityName: kw.keywordText,
+        currentBid: kw.bid,
+        insight: kw.insight,
+        cooldown: kw.cooldown,
+      });
+    }
+  }
+  for (const tg of campaign.productTargets) {
+    if (tg.state !== 'enabled') continue;
+    const rendered = tg.insight ? renderEntityInsight(tg.insight) : null;
+    const bestAction = pickBestAction(tg.insight, rendered, tg.state, tg.cooldown);
+    if (bestAction && (bestAction.type === 'bid_up' || bestAction.type === 'bid_down' || bestAction.type === 'adjust_bid')) {
+      actionableEntities.push({
+        entityKey: `target:${tg.amazonTargetId}`,
+        entityType: 'target',
+        entityName: tg.expression,
+        currentBid: tg.bid,
+        insight: tg.insight,
+        cooldown: tg.cooldown,
+      });
+    }
   }
 
   return (
@@ -989,6 +1596,15 @@ function OverviewCampaignCard({
                   {totalRecos} conseil{totalRecos > 1 ? 's' : ''}
                 </span>
               )}
+              {actionableEntities.length >= 2 && workspaceId && acosTarget && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setBatchModalOpen(true); }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors"
+                >
+                  ⚡ Tout appliquer ({actionableEntities.length})
+                </button>
+              )}
             </div>
             <h4 className="text-sm font-semibold text-slate-900 mt-1.5 truncate">
               {campaign.name}
@@ -1012,12 +1628,23 @@ function OverviewCampaignCard({
 
         {/* Campaign-level metrics summary */}
         <div className="mt-3 p-2.5 bg-slate-50 rounded-lg">
-          <MetricChips m={campaign.metrics} />
+          <MetricChips m={campaign.metrics} periodDays={parentDays} />
         </div>
 
         {/* Campaign insight */}
         {campaign.insight && (
-          <CampaignInsightCard insight={campaign.insight} />
+          <CampaignInsightCard insight={campaign.insight} campaignName={campaign.name} />
+        )}
+
+        {/* Macro suggestions block — affiché seulement si pertinent */}
+        {macroSuggestions.length > 0 && (
+          <div className="mt-3">
+            <MacroSuggestionsBlock
+              suggestions={macroSuggestions}
+              workspaceId={workspaceId}
+              onActionExecuted={onActionExecuted}
+            />
+          </div>
         )}
 
         {/* Expanded content */}
@@ -1065,6 +1692,20 @@ function OverviewCampaignCard({
             </p>
           </div>
         )}
+
+        {/* Batch Action Modal */}
+        {batchModalOpen && workspaceId && acosTarget && (
+          <BatchActionModal
+            open={batchModalOpen}
+            onClose={() => setBatchModalOpen(false)}
+            campaignName={campaign.name}
+            workspaceId={workspaceId}
+            acosTarget={acosTarget}
+            lifecyclePhase={lifecyclePhase}
+            entities={actionableEntities}
+            onActionExecuted={onActionExecuted}
+          />
+        )}
       </CardContent>
     </Card>
   );
@@ -1111,13 +1752,13 @@ export function OverviewCampaignView({
     );
   }
 
-  // Sort campaigns: manual first, then auto, then by spend descending
+  // Sort campaigns: manual first, then auto, then by name (stable order across period changes)
   const sortedCampaigns = [...campaignDetails.campaigns].sort((a, b) => {
     // manual targeting first
     if (a.targetingType === 'manual' && b.targetingType !== 'manual') return -1;
     if (a.targetingType !== 'manual' && b.targetingType === 'manual') return 1;
-    // then by total spend descending
-    return b.metrics.spend - a.metrics.spend;
+    // then alphabetically by name (stable across period changes)
+    return a.name.localeCompare(b.name);
   });
 
   return (
@@ -1150,6 +1791,22 @@ export function OverviewCampaignView({
           ))}
         </div>
       </div>
+
+      {/* Strategic period indicator */}
+      {lifecyclePhase && (() => {
+        const strategicDaysMap: Record<string, number> = { launch: 7, scale: 14, evergreen: 30, relaunch: 14 };
+        const strategicDays = strategicDaysMap[lifecyclePhase] || 14;
+        return days !== strategicDays ? (
+          <p className="text-[10px] text-slate-400 -mt-2 mb-1">
+            Tu regardes {days}j — les décisions sont basées sur {strategicDays}j (période stratégique {lifecyclePhase === 'launch' ? 'lancement' : lifecyclePhase === 'scale' ? 'croissance' : lifecyclePhase === 'evergreen' ? 'croisière' : 'relance'})
+          </p>
+        ) : null;
+      })()}
+
+      {/* Data freshness indicator */}
+      {campaignDetails.lastSyncedAt && (
+        <DataFreshnessIndicator lastSyncedAt={campaignDetails.lastSyncedAt} />
+      )}
 
       {/* Campaign cards */}
       {sortedCampaigns.map((campaign) => (

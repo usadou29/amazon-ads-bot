@@ -21,11 +21,16 @@ import {
   refreshBookData,
 } from '@/lib/api/client';
 import { OverviewCampaignView } from '@/components/features/OverviewCampaignView';
+import { BookBilan } from '@/components/features/BookBilan';
 import { transformKPIs, generateVerbalSummary, formatCurrency, computeRevenue, interpretAdsDependency, DEFAULT_ROYALTY_RATE } from '@/lib/transforms/metrics';
 import { computeStatus, StatusResult } from '@/lib/transforms/status';
 import { transformRecommendation, HumanRecommendation, groupRecommendationsByEntity, RecommendationGroup } from '@/lib/transforms/recommendations';
 import { t } from '@/lib/i18n';
 import { useSyncContext } from '@/lib/contexts/SyncContext';
+import { BookCampaignPlanPanel } from '@/components/features/BookCampaignPlanPanel';
+
+// ── Sync status types ──
+type SyncStatus = 'idle' | 'syncing' | 'done';
 
 export default function BookDetailPage() {
   const params = useParams();
@@ -66,42 +71,95 @@ export default function BookDetailPage() {
 
   const royaltyValuesRef = useRef<RoyaltyValues>({ royaltyRate: null, salePrice: null, royaltyPerUnit: null });
 
-  useEffect(() => {
-    if (!bookId) return;
-    setLoading(true);
-    fetchBookDashboard(bookId, includeInactive)
-      .then(setDashboard)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [bookId, includeInactive, syncCompletedCount]);
+  // ── Sync + load unifié : charger les données en cache immédiatement,
+  // puis sync Amazon en arrière-plan, et recharger seulement si les bids ont changé ──
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const initialLoadDoneRef = useRef(false);
+  const lastSyncedRef = useRef<string | null>(null);
 
-  // Fetch campaign details for overview tab
+  // Phase 1 : chargement initial (données en cache DB, rapide)
   useEffect(() => {
     if (!bookId) return;
+    let cancelled = false;
+
+    const loadInitial = async () => {
+      setLoading(true);
+      setOverviewLoading(true);
+      try {
+        const [dash, details] = await Promise.all([
+          fetchBookDashboard(bookId, includeInactive),
+          fetchBookCampaignDetails(bookId, overviewDays),
+        ]);
+        if (!cancelled) {
+          setDashboard(dash);
+          setOverviewCampaignDetails(details);
+          lastSyncedRef.current = details?.lastSyncedAt || null;
+        }
+      } catch (e: any) {
+        if (!cancelled) setError(e.message);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setOverviewLoading(false);
+        }
+      }
+
+      // Phase 2 : sync Amazon en arrière-plan (seulement au 1er chargement)
+      if (!cancelled && !initialLoadDoneRef.current) {
+        initialLoadDoneRef.current = true;
+
+        // Skip sync si les données sont fraîches (< 5 min)
+        const lastSync = lastSyncedRef.current;
+        if (lastSync) {
+          const ageMs = Date.now() - new Date(lastSync).getTime();
+          if (ageMs < 5 * 60 * 1000) {
+            // Données fraîches, pas besoin de re-sync
+            return;
+          }
+        }
+
+        setSyncStatus('syncing');
+        try {
+          const result = await refreshBookData(bookId);
+          if (cancelled) return;
+
+          // Recharger seulement si des bids ont effectivement changé
+          const hasChanges = (result?.keywordsUpdated || 0) + (result?.targetsUpdated || 0) > 0;
+          if (hasChanges) {
+            const [newDash, newDetails] = await Promise.all([
+              fetchBookDashboard(bookId, includeInactive),
+              fetchBookCampaignDetails(bookId, overviewDays),
+            ]);
+            if (!cancelled) {
+              setDashboard(newDash);
+              setOverviewCampaignDetails(newDetails);
+            }
+          }
+        } catch { /* best effort */ }
+
+        if (!cancelled) {
+          setSyncStatus('done');
+          setTimeout(() => { if (!cancelled) setSyncStatus('idle'); }, 3000);
+        }
+      }
+    };
+
+    loadInitial();
+    return () => { cancelled = true; };
+  }, [bookId, includeInactive, syncCompletedCount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Rechargement des campaign details quand l'utilisateur change la période
+  useEffect(() => {
+    // Skip le tout premier render (déjà chargé dans loadInitial)
+    if (!bookId || !initialLoadDoneRef.current) return;
+    let cancelled = false;
     setOverviewLoading(true);
     fetchBookCampaignDetails(bookId, overviewDays)
-      .then(setOverviewCampaignDetails)
-      .catch(() => setOverviewCampaignDetails(null))
-      .finally(() => setOverviewLoading(false));
-  }, [bookId, overviewDays, syncCompletedCount]);
-
-  // Refresh all data from Amazon API on page load (background)
-  // Ensures displayed bids, metrics (impressions, clicks, spend, sales) match current Amazon values
-  const dataRefreshedRef = useRef(false);
-  useEffect(() => {
-    if (!bookId || dataRefreshedRef.current) return;
-    dataRefreshedRef.current = true;
-    refreshBookData(bookId).then((result) => {
-      // Toujours recharger les données après refresh pour garantir la conformité avec Amazon
-      // Les enchères sont mises à jour de manière synchrone, les rapports en arrière-plan
-      fetchBookCampaignDetails(bookId, overviewDays)
-        .then(setOverviewCampaignDetails)
-        .catch(() => {});
-      fetchBookDashboard(bookId, includeInactive)
-        .then(setDashboard)
-        .catch(() => {});
-    }).catch(() => {});
-  }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
+      .then((details) => { if (!cancelled) setOverviewCampaignDetails(details); })
+      .catch(() => { if (!cancelled) setOverviewCampaignDetails(null); })
+      .finally(() => { if (!cancelled) setOverviewLoading(false); });
+    return () => { cancelled = true; };
+  }, [bookId, overviewDays]);
 
   const handleSaveRoyalty = async () => {
     setSavingRoyalty(true);
@@ -293,6 +351,19 @@ export default function BookDetailPage() {
                 Prix : {Number(book.salePrice).toFixed(2)}€ · Redevance : {Number(book.royaltyPerUnit).toFixed(2)}€/livre
               </p>
             )}
+            {/* ── Badge de synchronisation Amazon ── */}
+            {syncStatus === 'syncing' && (
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                <span className="text-[11px] text-amber-600">Synchronisation Amazon en cours...</span>
+              </div>
+            )}
+            {syncStatus === 'done' && (
+              <div className="flex items-center gap-1.5 mt-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span className="text-[11px] text-emerald-600">Données Amazon à jour</span>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -388,9 +459,9 @@ export default function BookDetailPage() {
             <div>
               <p className={`text-sm font-semibold ${phaseColors.text}`}>
                 {phaseInfo.label}
-                {book.lifecyclePhaseOverride && (
-                  <span className="ml-2 text-xs font-normal opacity-70">(forcé manuellement)</span>
-                )}
+                <span className="ml-2 text-[10px] font-normal opacity-70">
+                  ({book.lifecyclePhaseOverride ? 'manuel' : 'auto'})
+                </span>
               </p>
               <p className="text-xs text-slate-600 mt-0.5">{phaseInfo.explanation}</p>
             </div>
@@ -667,6 +738,25 @@ export default function BookDetailPage() {
                 })()}
               </CardContent>
             </Card>
+          )}
+
+          {/* ── Plan de croissance publicitaire (macro) ── */}
+          <BookCampaignPlanPanel
+            bookId={bookId}
+            lifecyclePhase={phaseInfo.phase}
+            onCampaignCreated={async () => {
+              const [dash, details] = await Promise.all([
+                fetchBookDashboard(bookId, includeInactive),
+                fetchBookCampaignDetails(bookId, overviewDays),
+              ]);
+              setDashboard(dash);
+              setOverviewCampaignDetails(details);
+            }}
+          />
+
+          {/* ── Bilan : diagnostics & actions agrégés ── */}
+          {overviewCampaignDetails?.campaigns && (
+            <BookBilan campaigns={overviewCampaignDetails.campaigns} />
           )}
 
           {/* ── Campagnes avec recommandations intégrées ── */}

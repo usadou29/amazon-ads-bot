@@ -51,6 +51,17 @@ export interface ActionSuggestionResponse {
     enabled: boolean;
     reason?: string;
   }>;
+  // Cooldown fields
+  cooldown?: {
+    active: boolean;
+    daysSinceChange: number;
+    cooldownDays: number;
+    remainingDays: number;
+    lastChangeType: string;
+    previousBid: number;
+    newBid: number;
+    lastChangeAt: string; // ISO date string
+  };
 }
 
 // ── Service ─────────────────────────────────────────────
@@ -67,7 +78,7 @@ export class ActionSuggestionService {
   ) {}
 
   async getActionSuggestion(dto: ActionSuggestionDto): Promise<ActionSuggestionResponse> {
-    const { workspaceId, entityKey, entityType, acosTarget, lifecyclePhase } = dto;
+    const { workspaceId, entityKey, entityType, acosTarget, lifecyclePhase, actionType } = dto;
 
     // 1. Charger l'entité depuis la DB
     const entity = await this.loadEntity(workspaceId, entityKey, entityType);
@@ -77,6 +88,9 @@ export class ActionSuggestionService {
 
     // 2. Calculer la période stratégique + multi-window
     const phase: LifecyclePhase = (lifecyclePhase || 'evergreen') as LifecyclePhase;
+
+    // 2b. CHECK COOLDOWN — si une enchère a été modifiée récemment, on bloque les actions bid
+    const cooldownInfo = this.checkCooldown(entity, phase);
 
     // 3. Charger les métriques sur 30j (max window) et slicer en mémoire
     const metrics30d = await this.loadEntityMetrics(workspaceId, entityKey, entityType, 30);
@@ -98,29 +112,43 @@ export class ActionSuggestionService {
     const breakEvenAcos = acosTarget; // ACoS cible = break-even dans ce contexte
     const diagnosisCode = this.insightsService.diagnoseEntity(metrics, breakEvenAcos);
 
-    // 5. Fetch Amazon bid recommendations (keywords ET targets)
+    // 5. Fetch Amazon bid recommendations via v4 theme-based endpoint (seul endpoint actif depuis mai 2025)
+    // Keywords → {type: "KEYWORD_EXACT_MATCH", value: "mot clé"}
+    // Product targets → {type: "asinSameAs", value: "B0..."} (camelCase natif Amazon)
     let amazonBid: ActionSuggestionResponse['amazonBid'] | undefined;
-    if (entity.adAccountId && entity.profileId) {
+    if (entity.adAccountId && entity.profileId && entity.amazonCampaignId && entity.amazonAdGroupId) {
       try {
-        const rec = entityType === 'keyword'
-          ? await this.amazonClient.getBidRecommendations(
-              entity.adAccountId,
-              entity.profileId,
-              entity.marketplace as Marketplace,
-              entity.amazonEntityId,
-            )
-          : await this.amazonClient.getTargetBidRecommendations(
-              entity.adAccountId,
-              entity.profileId,
-              entity.marketplace as Marketplace,
-              entity.amazonEntityId,
-            );
-        if (rec) {
-          amazonBid = rec;
+        const targetingExpression = entityType === 'keyword'
+          ? this.buildKeywordTargetingExpression(entity)
+          : this.buildProductTargetExpression(entity);
+
+        if (targetingExpression) {
+          this.logger.log(
+            `[BID-RECO] Will request bid for ${entityType}: ` +
+            `campaign=${entity.amazonCampaignId} adGroup=${entity.amazonAdGroupId} ` +
+            `expression=${JSON.stringify(targetingExpression)} strategy=${entity.biddingStrategy || 'LEGACY_FOR_SALES'}`,
+          );
+
+          const rec = await this.amazonClient.getThemeBasedBidRecommendation(
+            entity.adAccountId,
+            entity.profileId,
+            entity.marketplace as Marketplace,
+            {
+              campaignId: entity.amazonCampaignId,
+              adGroupId: entity.amazonAdGroupId,
+              targetingExpression,
+              strategy: entity.biddingStrategy || 'LEGACY_FOR_SALES',
+            },
+          );
+          if (rec) amazonBid = rec;
+        } else {
+          this.logger.warn(`[BID-RECO] Could not build targeting expression for ${entityType}: ${JSON.stringify({ matchType: entity.matchType, keywordText: entity.keywordText, expressionType: entity.expressionType })}`);
         }
       } catch (err) {
         this.logger.warn(`Amazon bid recommendations failed: ${err.message}`);
       }
+    } else {
+      this.logger.warn(`[BID-RECO] Missing required fields: adAccountId=${entity.adAccountId} profileId=${entity.profileId} campaignId=${entity.amazonCampaignId} adGroupId=${entity.amazonAdGroupId}`);
     }
 
     // 6. Calculer le bid recommandé
@@ -128,8 +156,14 @@ export class ActionSuggestionService {
     const aov = metrics.orders > 0 ? metrics.sales / metrics.orders : 0;
     const acosDecimal = acosTarget / 100; // convertir % → décimal
 
-    // Déterminer la direction forcée basée sur le diagnostic
-    const bidDirection = this.diagnosisToBidDirection(diagnosisCode);
+    // Déterminer la direction forcée :
+    // 1. Si le frontend envoie un actionType explicite (bid_up/bid_down), il prime
+    // 2. Sinon, on déduit du diagnostic
+    const bidDirection: BidDirection = actionType === 'bid_up'
+      ? 'up'
+      : actionType === 'bid_down'
+        ? 'down'
+        : this.diagnosisToBidDirection(diagnosisCode);
 
     const bidCalculation = calculateRecommendedBid({
       currentBid: entity.bid,
@@ -149,19 +183,22 @@ export class ActionSuggestionService {
 
     // 7. Déterminer les actions disponibles
     const isProfitable = metrics.orders >= 1 && metrics.sales > metrics.spend;
-    const availableActions = this.buildAvailableActions(bidCalculation.eligibility, isProfitable, diagnosisCode);
+    const availableActions = this.buildAvailableActions(bidCalculation.eligibility, isProfitable, diagnosisCode, cooldownInfo);
 
     // 8. Construire les métriques de sortie
     const acos = metrics.sales > 0 ? (metrics.spend / metrics.sales) * 100 : null;
     const ctr = metrics.impressions > 0 ? (metrics.clicks / metrics.impressions) * 100 : null;
     const cvrPercent = metrics.clicks > 0 ? (metrics.orders / metrics.clicks) * 100 : null;
 
+    // Si cooldown actif, overrider le diagnostic
+    const finalDiagnosisCode = cooldownInfo?.active ? 'cooldown_active' as EntityDiagnosisCode : diagnosisCode;
+
     return {
       entityKey,
       entityType,
       entityName: entity.name,
-      diagnosisCode,
-      eligibility: bidCalculation.eligibility,
+      diagnosisCode: finalDiagnosisCode,
+      eligibility: cooldownInfo?.active ? 'cooldown' as BidEligibility : bidCalculation.eligibility,
       metrics: {
         impressions: metrics.impressions,
         clicks: metrics.clicks,
@@ -177,6 +214,7 @@ export class ActionSuggestionService {
       bidCalculation,
       amazonBid,
       availableActions,
+      cooldown: cooldownInfo || undefined,
     };
   }
 
@@ -186,11 +224,18 @@ export class ActionSuggestionService {
     eligibility: BidEligibility,
     isProfitable: boolean,
     diagnosisCode: EntityDiagnosisCode,
+    cooldownInfo?: ActionSuggestionResponse['cooldown'] | null,
   ): ActionSuggestionResponse['availableActions'] {
     const actions: ActionSuggestionResponse['availableActions'] = [];
 
-    // adjust_bid
-    if (eligibility === 'insufficient_data') {
+    // adjust_bid — bloqué si cooldown actif
+    if (cooldownInfo?.active) {
+      actions.push({
+        type: 'adjust_bid',
+        enabled: false,
+        reason: `En observation (J+${cooldownInfo.daysSinceChange}/${cooldownInfo.cooldownDays}) — enchère modifiée le ${new Date(cooldownInfo.lastChangeAt).toLocaleDateString('fr-FR')}`,
+      });
+    } else if (eligibility === 'insufficient_data') {
       actions.push({ type: 'adjust_bid', enabled: false, reason: 'Pas assez de données (< 5 clics)' });
     } else if (eligibility === 'observe_only') {
       actions.push({ type: 'adjust_bid', enabled: false, reason: 'Phase d\'observation' });
@@ -198,7 +243,7 @@ export class ActionSuggestionService {
       actions.push({ type: 'adjust_bid', enabled: true });
     }
 
-    // pause
+    // pause — TOUJOURS autorisé pendant le cooldown (sauf si insuffisant data / rentable)
     if (isProfitable) {
       actions.push({ type: 'pause', enabled: false, reason: 'Entité rentable — pause déconseillée' });
     } else if (eligibility === 'insufficient_data') {
@@ -208,6 +253,47 @@ export class ActionSuggestionService {
     }
 
     return actions;
+  }
+
+  /**
+   * Vérifie si l'entité est en période de cooldown après une modification d'enchère.
+   * Retourne null si pas de cooldown, sinon les détails du cooldown.
+   */
+  private checkCooldown(
+    entity: {
+      lastBidChangeAt?: Date | null;
+      lastBidChangeType?: string | null;
+      previousBid?: number | null;
+      newBid?: number | null;
+    },
+    phase: LifecyclePhase,
+  ): ActionSuggestionResponse['cooldown'] | null {
+    if (!entity.lastBidChangeAt) return null;
+
+    const cooldownDays = GUARDS.COOLDOWN_DAYS_BY_PHASE[phase] ?? 7;
+    const lastChangeAt = new Date(entity.lastBidChangeAt);
+    const now = new Date();
+    const diffMs = now.getTime() - lastChangeAt.getTime();
+    const daysSinceChange = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const remainingDays = Math.max(0, cooldownDays - daysSinceChange);
+    const active = daysSinceChange < cooldownDays;
+
+    if (!active) return null;
+
+    this.logger.log(
+      `[COOLDOWN] Entity has active cooldown: phase=${phase}, daysSince=${daysSinceChange}, cooldownDays=${cooldownDays}, remaining=${remainingDays}`,
+    );
+
+    return {
+      active: true,
+      daysSinceChange,
+      cooldownDays,
+      remainingDays,
+      lastChangeType: entity.lastBidChangeType || 'unknown',
+      previousBid: entity.previousBid ?? 0,
+      newBid: entity.newBid ?? 0,
+      lastChangeAt: lastChangeAt.toISOString(),
+    };
   }
 
   private async loadEntity(
@@ -222,6 +308,18 @@ export class ActionSuggestionService {
     adAccountId?: string;
     profileId?: number;
     marketplace?: string;
+    amazonCampaignId?: number;
+    amazonAdGroupId?: number;
+    biddingStrategy?: string;
+    matchType?: string;
+    keywordText?: string;
+    expressionType?: string;
+    expression?: any;
+    // Cooldown fields
+    lastBidChangeAt?: Date | null;
+    lastBidChangeType?: string | null;
+    previousBid?: number | null;
+    newBid?: number | null;
   } | null> {
     const amazonId = this.extractAmazonId(entityKey);
     if (amazonId === null) return null;
@@ -233,9 +331,17 @@ export class ActionSuggestionService {
           bid: keywords.bid,
           state: keywords.state,
           amazonEntityId: keywords.amazonKeywordId,
+          matchType: keywords.matchType,
           adAccountId: marketplaceProfiles.adAccountId,
           profileId: marketplaceProfiles.profileId,
           marketplace: marketplaceProfiles.marketplace,
+          amazonCampaignId: campaigns.amazonCampaignId,
+          amazonAdGroupId: adGroups.amazonAdGroupId,
+          biddingStrategy: campaigns.biddingStrategy,
+          lastBidChangeAt: keywords.lastBidChangeAt,
+          lastBidChangeType: keywords.lastBidChangeType,
+          previousBid: keywords.previousBid,
+          newBid: keywords.newBid,
         })
         .from(keywords)
         .innerJoin(adGroups, eq(keywords.adGroupId, adGroups.id))
@@ -254,6 +360,15 @@ export class ActionSuggestionService {
         adAccountId: r.adAccountId,
         profileId: r.profileId,
         marketplace: r.marketplace,
+        amazonCampaignId: r.amazonCampaignId,
+        amazonAdGroupId: r.amazonAdGroupId,
+        biddingStrategy: r.biddingStrategy ?? undefined,
+        matchType: r.matchType,
+        keywordText: r.name,
+        lastBidChangeAt: r.lastBidChangeAt,
+        lastBidChangeType: r.lastBidChangeType,
+        previousBid: r.previousBid ? Number(r.previousBid) : null,
+        newBid: r.newBid ? Number(r.newBid) : null,
       };
     }
 
@@ -268,6 +383,13 @@ export class ActionSuggestionService {
         adAccountId: marketplaceProfiles.adAccountId,
         profileId: marketplaceProfiles.profileId,
         marketplace: marketplaceProfiles.marketplace,
+        amazonCampaignId: campaigns.amazonCampaignId,
+        amazonAdGroupId: adGroups.amazonAdGroupId,
+        biddingStrategy: campaigns.biddingStrategy,
+        lastBidChangeAt: productTargets.lastBidChangeAt,
+        lastBidChangeType: productTargets.lastBidChangeType,
+        previousBid: productTargets.previousBid,
+        newBid: productTargets.newBid,
       })
       .from(productTargets)
       .innerJoin(adGroups, eq(productTargets.adGroupId, adGroups.id))
@@ -290,6 +412,15 @@ export class ActionSuggestionService {
       adAccountId: r.adAccountId,
       profileId: r.profileId,
       marketplace: r.marketplace,
+      amazonCampaignId: r.amazonCampaignId,
+      amazonAdGroupId: r.amazonAdGroupId,
+      biddingStrategy: r.biddingStrategy ?? undefined,
+      expressionType: r.expressionType,
+      expression: r.expression,
+      lastBidChangeAt: r.lastBidChangeAt,
+      lastBidChangeType: r.lastBidChangeType,
+      previousBid: r.previousBid ? Number(r.previousBid) : null,
+      newBid: r.newBid ? Number(r.newBid) : null,
     };
   }
 
@@ -346,6 +477,7 @@ export class ActionSuggestionService {
   private diagnosisToBidDirection(diagnosisCode: EntityDiagnosisCode): BidDirection {
     switch (diagnosisCode) {
       case 'clicks_no_sales':
+      case 'very_expensive':
       case 'expensive_but_valid':
         return 'down';
       case 'winner':
@@ -354,6 +486,58 @@ export class ActionSuggestionService {
       default:
         return null;
     }
+  }
+
+  /**
+   * Construit la targetingExpression pour l'API v4 theme-based (keywords).
+   * Format: {type: "KEYWORD_EXACT_MATCH", value: "mot clé"}
+   */
+  private buildKeywordTargetingExpression(
+    entity: { matchType?: string; keywordText?: string },
+  ): { type: string; value?: string } | null {
+    if (!entity.matchType || !entity.keywordText) return null;
+
+    const matchTypeMap: Record<string, string> = {
+      exact: 'KEYWORD_EXACT_MATCH',
+      phrase: 'KEYWORD_PHRASE_MATCH',
+      broad: 'KEYWORD_BROAD_MATCH',
+    };
+    const amazonType = matchTypeMap[entity.matchType.toLowerCase()];
+    if (!amazonType) {
+      this.logger.warn(`Unknown keyword matchType: ${entity.matchType}`);
+      return null;
+    }
+
+    return { type: amazonType, value: entity.keywordText };
+  }
+
+  /**
+   * Construit la targetingExpression pour l'API v4 theme-based (product targets).
+   * Format camelCase natif Amazon: {type: "asinSameAs", value: "B0DPVHT7Y3"}
+   * Le v4 accepte les types camelCase pour product targeting.
+   */
+  private buildProductTargetExpression(
+    entity: { expressionType?: string; expression?: any },
+  ): { type: string; value?: string } | null {
+    // Le champ expression en DB est le format brut Amazon : [{type: "asinSameAs", value: "B0..."}]
+    if (Array.isArray(entity.expression) && entity.expression.length > 0) {
+      const expr = entity.expression[0];
+      if (expr && expr.type) {
+        return { type: expr.type, value: expr.value };
+      }
+    }
+
+    // Fallback: si expression est une string (ex: un ASIN brut)
+    if (typeof entity.expression === 'string' && entity.expression.length > 0) {
+      return { type: 'asinSameAs', value: entity.expression };
+    }
+
+    // Dernier recours: utiliser expressionType s'il existe
+    if (entity.expressionType && entity.expressionType !== 'manual') {
+      return { type: entity.expressionType };
+    }
+
+    return null;
   }
 
   private extractAmazonId(entityKey: string): number | null {

@@ -26,9 +26,11 @@ export enum EntityDiagnosisCode {
   VERY_LOW_CLICKS = 'very_low_clicks',
   LOW_CLICKS = 'low_clicks',
   CLICKS_NO_SALES = 'clicks_no_sales',
+  VERY_EXPENSIVE = 'very_expensive',
   EXPENSIVE_BUT_VALID = 'expensive_but_valid',
   WINNER = 'winner',
   BOOST_CANDIDATE = 'boost_candidate',
+  COOLDOWN_ACTIVE = 'cooldown_active',
 }
 
 export type ActionExecution = 'ads' | 'book' | 'none';
@@ -114,6 +116,14 @@ export interface EntityInsight {
   // Lifecycle guardrail v2.1
   guardrailApplied?: boolean;
   guardrailExplanation?: string;
+  // Window divergence v2.2
+  longWindowFacts?: {
+    orders: number;
+    clicks: number;
+    sales: number;
+    acos: number | null;
+    periodDays: 30;
+  };
 }
 
 // ── Rendered Insight ────────────────────────────────────────
@@ -242,6 +252,13 @@ const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
     summaryKey: 'insights.entity.clicks_no_sales.summary',
     nextStepKey: 'insights.entity.clicks_no_sales.nextStep',
   },
+  [EntityDiagnosisCode.VERY_EXPENSIVE]: {
+    titleKey: 'insights.entity.very_expensive.title',
+
+    explanationKey: 'insights.entity.very_expensive.explanation',
+    summaryKey: 'insights.entity.very_expensive.summary',
+    nextStepKey: 'insights.entity.very_expensive.nextStep',
+  },
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: {
     titleKey: 'insights.entity.expensive_but_valid.title',
 
@@ -262,6 +279,13 @@ const ENTITY_INSIGHT_TEMPLATES: Record<string, InsightTemplate> = {
     explanationKey: 'insights.entity.boost_candidate.explanation',
     summaryKey: 'insights.entity.boost_candidate.summary',
     nextStepKey: 'insights.entity.boost_candidate.nextStep',
+  },
+  [EntityDiagnosisCode.COOLDOWN_ACTIVE]: {
+    titleKey: 'insights.entity.cooldown_active.title',
+
+    explanationKey: 'insights.entity.cooldown_active.explanation',
+    summaryKey: 'insights.entity.cooldown_active.summary',
+    nextStepKey: 'insights.entity.cooldown_active.nextStep',
   },
 };
 
@@ -285,9 +309,11 @@ export const ENTITY_DIAGNOSIS_COLORS: Record<string, { bg: string; text: string;
   [EntityDiagnosisCode.VERY_LOW_CLICKS]: { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200' },
   [EntityDiagnosisCode.LOW_CLICKS]: { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200' },
   [EntityDiagnosisCode.CLICKS_NO_SALES]: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-300' },
+  [EntityDiagnosisCode.VERY_EXPENSIVE]: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-300' },
   [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300' },
   [EntityDiagnosisCode.WINNER]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300' },
   [EntityDiagnosisCode.BOOST_CANDIDATE]: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-300' },
+  [EntityDiagnosisCode.COOLDOWN_ACTIVE]: { bg: 'bg-indigo-50', text: 'text-indigo-600', border: 'border-indigo-200' },
 };
 
 // ── Macro strategy colors ───────────────────────────────────
@@ -335,6 +361,21 @@ function getConfidenceInfo(score: number): { label: string; level: 'high' | 'med
   return { label: t('insights.confidence.low'), level: 'low' };
 }
 
+/**
+ * Calcule la plage de dates au format "10 fév – 24 fév" à partir du nombre de jours.
+ * Les données Amazon ont typiquement 1 jour de retard, donc la date de fin = hier.
+ */
+export function computeDateRange(periodDays: number): string {
+  const MONTHS_FR = ['jan', 'fév', 'mar', 'avr', 'mai', 'jun', 'jul', 'aoû', 'sep', 'oct', 'nov', 'déc'];
+  const end = new Date();
+  end.setDate(end.getDate() - 1); // hier (dernier jour complet de data Amazon)
+  const start = new Date(end);
+  start.setDate(start.getDate() - periodDays + 1);
+
+  const fmt = (d: Date) => `${d.getDate()} ${MONTHS_FR[d.getMonth()]}`;
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
 function buildParams(facts: SummaryFacts): Record<string, string | number> {
   const remaining = Math.max(0, 15 - facts.clicks);
   return {
@@ -347,6 +388,7 @@ function buildParams(facts: SummaryFacts): Record<string, string | number> {
     sales: facts.sales.toFixed(2),
     acos: facts.acos !== null ? facts.acos.toFixed(1) : '—',
     periodDays: facts.periodDays.toString(),
+    dateRange: computeDateRange(facts.periodDays),
     minClicks: '15',
     remainingClicks: remaining.toString(),
     breakEven: '35',

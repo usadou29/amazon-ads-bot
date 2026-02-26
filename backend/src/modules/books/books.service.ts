@@ -578,10 +578,11 @@ export class BooksService {
   }
 
   private getDefaultDateRange(): { startDate: string; endDate: string } {
-    // 30 derniers jours incluant aujourd'hui (cohérent avec Amazon Ads)
+    // 30 derniers jours se terminant hier (Amazon a 1 jour de retard)
     const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - 29); // 30 jours = aujourd'hui - 29
+    end.setDate(end.getDate() - 1); // hier = dernier jour complet de data Amazon
+    const start = new Date(end);
+    start.setDate(start.getDate() - 29); // 30 jours
     return {
       startDate: start.toISOString().split('T')[0],
       endDate: end.toISOString().split('T')[0],
@@ -1265,6 +1266,11 @@ export class BooksService {
     const { startDate: startDate14d } = this.computeDateRange(14);
     const { startDate: startDate30d } = this.computeDateRange(30);
 
+    // Trend: previous 7-day window = [startDate14d .. startDate7d - 1 day]
+    const prev7dEndDate = new Date(startDate7d + 'T00:00:00Z');
+    prev7dEndDate.setUTCDate(prev7dEndDate.getUTCDate() - 1);
+    const previous7dEndStr = prev7dEndDate.toISOString().split('T')[0];
+
     this.logger.log(
       `[CAMPAIGN-DETAIL] Multi-window fetch: display=${displayDays}d (${displayStartDate}), ` +
       `strategic=${strategicDays}d (${strategicStartDate}), trend=${trendDays}d (${trendStartDate}), ` +
@@ -1279,6 +1285,7 @@ export class BooksService {
         isPrimary: campaignBookMapping.isPrimary,
         campaign: {
           id: campaigns.id,
+          profileId: campaigns.profileId,
           name: campaigns.name,
           campaignType: campaigns.campaignType,
           state: campaigns.state,
@@ -1297,212 +1304,100 @@ export class BooksService {
       return { campaigns: [] };
     }
 
+    // ── Dernière date de sync des métriques pour ce livre ──
+    // On prend le MAX(ingested_at) des report_jobs du même profil
+    const profileIdSet = new Set<string>();
+    for (const m of mappings) {
+      const pid = (m.campaign as any).profileId;
+      if (pid) profileIdSet.add(String(pid));
+    }
+    const profileIds = Array.from(profileIdSet);
+    let lastSyncedAt: string | null = null;
+    if (profileIds.length > 0) {
+      const [syncInfo] = await this.db
+        .select({
+          lastIngestedAt: sql<string>`MAX(${reportJobs.ingestedAt})`,
+        })
+        .from(reportJobs)
+        .where(
+          and(
+            inArray(reportJobs.profileId, profileIds),
+            sql`${reportJobs.status} = 'ingested'`,
+            sql`${reportJobs.recordsProcessed} > 0`,
+          ),
+        );
+      lastSyncedAt = syncInfo?.lastIngestedAt ? new Date(syncInfo.lastIngestedAt).toISOString() : null;
+    }
+
     // Use maxStartDate for all queries (fetch the widest window, aggregate in-memory)
     const startDate = maxStartDate;
 
-    // 4. Pour chaque campagne, récupérer ad_groups → keywords + product_targets
-    const campaignDetails = [];
+    // ═══════════════════════════════════════════════════════════════════
+    // 4. BATCH FETCH : toutes les données en 5 requêtes au lieu de N×5
+    // ═══════════════════════════════════════════════════════════════════
+    const allCampaignIds = mappings.map((m: any) => m.campaign.id);
 
-    for (const mapping of mappings) {
-      const camp = mapping.campaign;
+    // 4a. Tous les ad groups
+    const allAdGroupsData = allCampaignIds.length > 0 ? await this.db
+      .select({
+        id: adGroups.id,
+        name: adGroups.name,
+        amazonAdGroupId: adGroups.amazonAdGroupId,
+        state: adGroups.state,
+        defaultBid: adGroups.defaultBid,
+        campaignId: adGroups.campaignId,
+      })
+      .from(adGroups)
+      .where(inArray(adGroups.campaignId, allCampaignIds)) : [];
 
-      // Récupérer les ad groups de cette campagne
-      const adGroupsData = await this.db
+    const allAdGroupIds = allAdGroupsData.map((ag: any) => ag.id);
+
+    // 4b. Tous les keywords + targets en parallèle
+    const [allKeywordsData, allTargetsData] = await Promise.all([
+      allAdGroupIds.length > 0
+        ? this.db.select({
+            id: keywords.id,
+            amazonKeywordId: keywords.amazonKeywordId,
+            keywordText: keywords.keywordText,
+            matchType: keywords.matchType,
+            state: keywords.state,
+            bid: keywords.bid,
+            adGroupId: keywords.adGroupId,
+            lastBidChangeAt: keywords.lastBidChangeAt,
+            lastBidChangeType: keywords.lastBidChangeType,
+            previousBid: keywords.previousBid,
+            newBid: keywords.newBid,
+          }).from(keywords).where(inArray(keywords.adGroupId, allAdGroupIds))
+        : Promise.resolve([]),
+      allAdGroupIds.length > 0
+        ? this.db.select({
+            id: productTargets.id,
+            amazonTargetId: productTargets.amazonTargetId,
+            expressionType: productTargets.expressionType,
+            expression: productTargets.expression,
+            state: productTargets.state,
+            bid: productTargets.bid,
+            adGroupId: productTargets.adGroupId,
+            lastBidChangeAt: productTargets.lastBidChangeAt,
+            lastBidChangeType: productTargets.lastBidChangeType,
+            previousBid: productTargets.previousBid,
+            newBid: productTargets.newBid,
+          }).from(productTargets).where(inArray(productTargets.adGroupId, allAdGroupIds))
+        : Promise.resolve([]),
+    ]);
+
+    // 4c. Toutes les daily_metrics en une seule requête (keywords + targets + campaigns)
+    const allKwEntityKeys = allKeywordsData.map((k: any) => `keyword:${k.amazonKeywordId}`);
+    const allTgEntityKeys = allTargetsData.map((t: any) => `target:${t.amazonTargetId}`);
+    const allCampEntityKeys = mappings.map((m: any) => `campaign:${m.campaign.amazonCampaignId}`);
+    const allEntityKeys = [...allKwEntityKeys, ...allTgEntityKeys, ...allCampEntityKeys];
+
+    let allRawRows: any[] = [];
+    if (allEntityKeys.length > 0) {
+      allRawRows = await this.db
         .select({
-          id: adGroups.id,
-          name: adGroups.name,
-          amazonAdGroupId: adGroups.amazonAdGroupId,
-          state: adGroups.state,
-          defaultBid: adGroups.defaultBid,
-        })
-        .from(adGroups)
-        .where(eq(adGroups.campaignId, camp.id));
-
-      if (adGroupsData.length === 0) {
-        // Campagne sans ad group → métriques campagne seulement (raw rows)
-        const campaignEntityKey = `campaign:${camp.amazonCampaignId}`;
-        const noAdGroupRawRows = await this.db
-          .select({
-            date: dailyMetrics.date,
-            impressions: dailyMetrics.impressions,
-            clicks: dailyMetrics.clicks,
-            spend: dailyMetrics.spend,
-            sales: dailyMetrics.sales,
-            orders: dailyMetrics.orders,
-            units: dailyMetrics.units,
-            impressionShare: dailyMetrics.impressionShare,
-          })
-          .from(dailyMetrics)
-          .where(
-            and(
-              eq(dailyMetrics.entityType, 'campaign'),
-              eq(dailyMetrics.entityKey, campaignEntityKey),
-              gte(dailyMetrics.date, startDate),
-              lte(dailyMetrics.date, endDate),
-            ),
-          );
-
-        campaignDetails.push({
-          id: camp.id,
-          name: camp.name,
-          campaignType: camp.campaignType,
-          state: camp.state,
-          targetingType: camp.targetingType,
-          dailyBudget: camp.dailyBudget ? Number(camp.dailyBudget) : null,
-          biddingStrategy: camp.biddingStrategy,
-          isPrimary: mapping.isPrimary ?? false,
-          metrics: noAdGroupRawRows.length > 0
-            ? this.aggregateRawRows(noAdGroupRawRows, displayStartDate, endDate)
-            : this.emptyMetrics(),
-          _campRawRows: noAdGroupRawRows,
-          keywords: [],
-          productTargets: [],
-          adGroups: [],
-        });
-        continue;
-      }
-
-      const adGroupIds = adGroupsData.map((ag: any) => ag.id);
-
-      // ── Récupérer les mots-clés ──
-      const keywordsData = await this.db
-        .select({
-          id: keywords.id,
-          amazonKeywordId: keywords.amazonKeywordId,
-          keywordText: keywords.keywordText,
-          matchType: keywords.matchType,
-          state: keywords.state,
-          bid: keywords.bid,
-          adGroupId: keywords.adGroupId,
-        })
-        .from(keywords)
-        .where(inArray(keywords.adGroupId, adGroupIds));
-
-      // ── Récupérer les product targets ──
-      const targetsData = await this.db
-        .select({
-          id: productTargets.id,
-          amazonTargetId: productTargets.amazonTargetId,
-          expressionType: productTargets.expressionType,
-          expression: productTargets.expression,
-          state: productTargets.state,
-          bid: productTargets.bid,
-          adGroupId: productTargets.adGroupId,
-        })
-        .from(productTargets)
-        .where(inArray(productTargets.adGroupId, adGroupIds));
-
-      // ── Récupérer les métriques pour tous les keywords ──
-      const keywordEntityKeys = keywordsData.map((k: any) => `keyword:${k.amazonKeywordId}`);
-      const targetEntityKeys = targetsData.map((t: any) => `target:${t.amazonTargetId}`);
-      const campaignEntityKey = `campaign:${camp.amazonCampaignId}`;
-
-      // Batch : raw daily rows for keywords (fetch maxDays, aggregate in-memory)
-      let keywordRawRowsMap: Record<string, any[]> = {};
-      if (keywordEntityKeys.length > 0) {
-        const kwRawRows = await this.db
-          .select({
-            entityKey: dailyMetrics.entityKey,
-            date: dailyMetrics.date,
-            impressions: dailyMetrics.impressions,
-            clicks: dailyMetrics.clicks,
-            spend: dailyMetrics.spend,
-            sales: dailyMetrics.sales,
-            orders: dailyMetrics.orders,
-            units: dailyMetrics.units,
-            impressionShare: dailyMetrics.impressionShare,
-          })
-          .from(dailyMetrics)
-          .where(
-            and(
-              eq(dailyMetrics.entityType, 'keyword'),
-              inArray(dailyMetrics.entityKey, keywordEntityKeys),
-              gte(dailyMetrics.date, startDate),
-              lte(dailyMetrics.date, endDate),
-            ),
-          );
-
-        for (const row of kwRawRows) {
-          if (!keywordRawRowsMap[row.entityKey]) keywordRawRowsMap[row.entityKey] = [];
-          keywordRawRowsMap[row.entityKey].push(row);
-        }
-        this.logger.log(
-          `[CAMPAIGN-DETAIL] Keywords: ${keywordEntityKeys.length} entity keys, ` +
-          `${kwRawRows.length} raw daily rows (${startDate} → ${endDate}).`,
-        );
-      } else {
-        this.logger.log(`[CAMPAIGN-DETAIL] No keyword entity keys to query`);
-      }
-
-      // Batch : raw daily rows for targets
-      let targetRawRowsMap: Record<string, any[]> = {};
-      if (targetEntityKeys.length > 0) {
-        const tgRawRows = await this.db
-          .select({
-            entityKey: dailyMetrics.entityKey,
-            date: dailyMetrics.date,
-            impressions: dailyMetrics.impressions,
-            clicks: dailyMetrics.clicks,
-            spend: dailyMetrics.spend,
-            sales: dailyMetrics.sales,
-            orders: dailyMetrics.orders,
-            units: dailyMetrics.units,
-            impressionShare: dailyMetrics.impressionShare,
-          })
-          .from(dailyMetrics)
-          .where(
-            and(
-              eq(dailyMetrics.entityType, 'target'),
-              inArray(dailyMetrics.entityKey, targetEntityKeys),
-              gte(dailyMetrics.date, startDate),
-              lte(dailyMetrics.date, endDate),
-            ),
-          );
-
-        for (const row of tgRawRows) {
-          if (!targetRawRowsMap[row.entityKey]) targetRawRowsMap[row.entityKey] = [];
-          targetRawRowsMap[row.entityKey].push(row);
-        }
-        this.logger.log(
-          `[CAMPAIGN-DETAIL] Targets: ${targetEntityKeys.length} entity keys, ` +
-          `${tgRawRows.length} raw daily rows (${startDate} → ${endDate}).`,
-        );
-
-        // Diagnostic : no data found
-        if (tgRawRows.length === 0) {
-          const [anyTargetData] = await this.db
-            .select({
-              cnt: sql<number>`COUNT(*)`,
-              sampleKey: sql<string>`MIN(${dailyMetrics.entityKey})`,
-            })
-            .from(dailyMetrics)
-            .where(eq(dailyMetrics.entityType, 'target'));
-
-          const recentTargetJobs = await this.db
-            .select({
-              status: reportJobs.status,
-              recordsProcessed: reportJobs.recordsProcessed,
-              errorMessage: reportJobs.errorMessage,
-              requestedAt: reportJobs.requestedAt,
-            })
-            .from(reportJobs)
-            .where(eq(reportJobs.reportType, 'targets'))
-            .orderBy(desc(reportJobs.requestedAt))
-            .limit(3);
-
-          this.logger.warn(
-            `[CAMPAIGN-DETAIL] DIAGNOSTIC: Total target rows: ${anyTargetData?.cnt || 0}. ` +
-            `Expected keys: ${targetEntityKeys.slice(0, 3).join(', ')}. ` +
-            `Recent jobs: ${JSON.stringify(recentTargetJobs.map((j: any) => ({ status: j.status, records: j.recordsProcessed, error: j.errorMessage?.slice(0, 100), at: j.requestedAt })))}`,
-          );
-        }
-      } else {
-        this.logger.log(`[CAMPAIGN-DETAIL] No target entity keys to query`);
-      }
-
-      // Raw daily rows for campaign-level metrics
-      const campRawRows = await this.db
-        .select({
+          entityType: dailyMetrics.entityType,
+          entityKey: dailyMetrics.entityKey,
           date: dailyMetrics.date,
           impressions: dailyMetrics.impressions,
           clicks: dailyMetrics.clicks,
@@ -1515,12 +1410,96 @@ export class BooksService {
         .from(dailyMetrics)
         .where(
           and(
-            eq(dailyMetrics.entityType, 'campaign'),
-            eq(dailyMetrics.entityKey, campaignEntityKey),
+            inArray(dailyMetrics.entityKey, allEntityKeys),
             gte(dailyMetrics.date, startDate),
             lte(dailyMetrics.date, endDate),
           ),
         );
+    }
+
+    // Indexer les raw rows par entityKey
+    const rawRowsByEntityKey: Record<string, any[]> = {};
+    for (const row of allRawRows) {
+      if (!rawRowsByEntityKey[row.entityKey]) rawRowsByEntityKey[row.entityKey] = [];
+      rawRowsByEntityKey[row.entityKey].push(row);
+    }
+
+    this.logger.log(
+      `[CAMPAIGN-DETAIL] Batch fetch: ${allAdGroupsData.length} ad groups, ` +
+      `${allKeywordsData.length} keywords, ${allTargetsData.length} targets, ` +
+      `${allRawRows.length} daily metric rows (${startDate} → ${endDate}).`,
+    );
+
+    // Indexer ad groups, keywords, targets par campaignId
+    const adGroupsByCampaign: Record<string, any[]> = {};
+    for (const ag of allAdGroupsData) {
+      if (!adGroupsByCampaign[ag.campaignId]) adGroupsByCampaign[ag.campaignId] = [];
+      adGroupsByCampaign[ag.campaignId].push(ag);
+    }
+    const kwByAdGroup: Record<string, any[]> = {};
+    for (const kw of allKeywordsData) {
+      if (!kwByAdGroup[kw.adGroupId]) kwByAdGroup[kw.adGroupId] = [];
+      kwByAdGroup[kw.adGroupId].push(kw);
+    }
+    const tgByAdGroup: Record<string, any[]> = {};
+    for (const tg of allTargetsData) {
+      if (!tgByAdGroup[tg.adGroupId]) tgByAdGroup[tg.adGroupId] = [];
+      tgByAdGroup[tg.adGroupId].push(tg);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 5. Construire les campaign details (in-memory, pas de requêtes DB)
+    // ═══════════════════════════════════════════════════════════════════
+    const campaignDetails = [];
+
+    for (const mapping of mappings) {
+      const camp = mapping.campaign;
+      const campAdGroups = adGroupsByCampaign[camp.id] || [];
+      const campaignEntityKey = `campaign:${camp.amazonCampaignId}`;
+      const campRawRows = rawRowsByEntityKey[campaignEntityKey] || [];
+
+      if (campAdGroups.length === 0) {
+        campaignDetails.push({
+          id: camp.id,
+          name: camp.name,
+          campaignType: camp.campaignType,
+          state: camp.state,
+          targetingType: camp.targetingType,
+          dailyBudget: camp.dailyBudget ? Number(camp.dailyBudget) : null,
+          biddingStrategy: camp.biddingStrategy,
+          isPrimary: mapping.isPrimary ?? false,
+          metrics: campRawRows.length > 0
+            ? this.aggregateRawRows(campRawRows, displayStartDate, endDate)
+            : this.emptyMetrics(),
+          _campRawRows: campRawRows,
+          keywords: [],
+          productTargets: [],
+          adGroups: [],
+        });
+        continue;
+      }
+
+      const adGroupIds = campAdGroups.map((ag: any) => ag.id);
+
+      // Récupérer keywords et targets de cette campagne via les index en mémoire
+      const keywordsData: any[] = [];
+      const targetsData: any[] = [];
+      for (const agId of adGroupIds) {
+        keywordsData.push(...(kwByAdGroup[agId] || []));
+        targetsData.push(...(tgByAdGroup[agId] || []));
+      }
+
+      // Raw rows indexés par entityKey (déjà en mémoire)
+      const keywordRawRowsMap: Record<string, any[]> = {};
+      for (const k of keywordsData) {
+        const ek = `keyword:${k.amazonKeywordId}`;
+        keywordRawRowsMap[ek] = rawRowsByEntityKey[ek] || [];
+      }
+      const targetRawRowsMap: Record<string, any[]> = {};
+      for (const t of targetsData) {
+        const ek = `target:${t.amazonTargetId}`;
+        targetRawRowsMap[ek] = rawRowsByEntityKey[ek] || [];
+      }
 
       // Traduction match types
       const matchTypeLabels: Record<string, string> = {
@@ -1536,6 +1515,23 @@ export class BooksService {
         const matchLabel = k.matchType
           ? (matchTypeLabels[k.matchType.toLowerCase()] || k.matchType)
           : '';
+
+        // Trend 7j : comparer ACoS [J1-J7] vs [J8-J14]
+        const current7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate7d, endDate) : null;
+        const previous7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate14d, previous7dEndStr) : null;
+        const trend = current7d && previous7d ? this.computeTrend(current7d, previous7d) : undefined;
+
+        // Compute cooldown info if lastBidChangeAt exists
+        let cooldown: { active: boolean; daysSinceChange: number; cooldownDays: number; remainingDays: number } | undefined;
+        if (k.lastBidChangeAt) {
+          const cooldownDays = (GUARDS.COOLDOWN_DAYS_BY_PHASE as Record<string, number>)[lifecyclePhase] ?? 7;
+          const diffMs = Date.now() - new Date(k.lastBidChangeAt).getTime();
+          const daysSinceChange = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+          if (daysSinceChange < cooldownDays) {
+            cooldown = { active: true, daysSinceChange, cooldownDays, remainingDays: cooldownDays - daysSinceChange };
+          }
+        }
+
         return {
           id: k.id,
           amazonKeywordId: String(k.amazonKeywordId),
@@ -1544,9 +1540,13 @@ export class BooksService {
           matchTypeRaw: k.matchType,
           state: k.state,
           bid: k.bid ? Number(k.bid) : null,
-          metrics: rows.length > 0
-            ? this.aggregateRawRows(rows, displayStartDate, endDate)
-            : this.emptyMetrics(),
+          cooldown,
+          metrics: {
+            ...(rows.length > 0
+              ? this.aggregateRawRows(rows, displayStartDate, endDate)
+              : this.emptyMetrics()),
+            trend,
+          },
           _rawRows: rows, // keep for strategic aggregation
         };
       });
@@ -1570,6 +1570,23 @@ export class BooksService {
         } else if (typeof t.expression === 'string') {
           label = t.expression;
         }
+
+        // Trend 7j : comparer ACoS [J1-J7] vs [J8-J14]
+        const current7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate7d, endDate) : null;
+        const previous7d = rows.length > 0 ? this.aggregateRawRows(rows, startDate14d, previous7dEndStr) : null;
+        const trend = current7d && previous7d ? this.computeTrend(current7d, previous7d) : undefined;
+
+        // Compute cooldown info if lastBidChangeAt exists
+        let cooldown: { active: boolean; daysSinceChange: number; cooldownDays: number; remainingDays: number } | undefined;
+        if (t.lastBidChangeAt) {
+          const cooldownDays = (GUARDS.COOLDOWN_DAYS_BY_PHASE as Record<string, number>)[lifecyclePhase] ?? 7;
+          const diffMs = Date.now() - new Date(t.lastBidChangeAt).getTime();
+          const daysSinceChange = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+          if (daysSinceChange < cooldownDays) {
+            cooldown = { active: true, daysSinceChange, cooldownDays, remainingDays: cooldownDays - daysSinceChange };
+          }
+        }
+
         return {
           id: t.id,
           amazonTargetId: String(t.amazonTargetId),
@@ -1577,9 +1594,13 @@ export class BooksService {
           expression: label || t.expressionType || 'Cible produit',
           state: t.state,
           bid: t.bid ? Number(t.bid) : null,
-          metrics: rows.length > 0
-            ? this.aggregateRawRows(rows, displayStartDate, endDate)
-            : this.emptyMetrics(),
+          cooldown,
+          metrics: {
+            ...(rows.length > 0
+              ? this.aggregateRawRows(rows, displayStartDate, endDate)
+              : this.emptyMetrics()),
+            trend,
+          },
           _rawRows: rows, // keep for strategic aggregation
         };
       });
@@ -1647,6 +1668,20 @@ export class BooksService {
         // 3. Enrich with decision window info
         kw.insight.decisionPeriodDays = dwResult.chosenWindow;
 
+        // 3b. Ajouter les métriques 30j quand la fenêtre de décision est plus courte
+        //     → permet au frontend d'afficher un avertissement de divergence
+        if (dwResult.chosenWindow < 30) {
+          const w30 = kwMultiWindow.window_30d;
+          const longAcos30 = w30.sales > 0 ? Math.round((w30.spend / w30.sales) * 10000) / 100 : null;
+          kw.insight.longWindowFacts = {
+            orders: w30.orders,
+            clicks: w30.clicks,
+            sales: Math.round(w30.sales * 100) / 100,
+            acos: longAcos30,
+            periodDays: 30,
+          };
+        }
+
         // 4. Validation against long window (30d) for scale/evergreen/relaunch
         if (lifecyclePhase !== 'launch') {
           const primaryAction = kw.insight.suggestedActions[0]?.type;
@@ -1711,6 +1746,19 @@ export class BooksService {
         );
 
         tg.insight.decisionPeriodDays = dwResult.chosenWindow;
+
+        // Ajouter les métriques 30j quand la fenêtre de décision est plus courte
+        if (dwResult.chosenWindow < 30) {
+          const w30 = tgMultiWindow.window_30d;
+          const longAcos30 = w30.sales > 0 ? Math.round((w30.spend / w30.sales) * 10000) / 100 : null;
+          tg.insight.longWindowFacts = {
+            orders: w30.orders,
+            clicks: w30.clicks,
+            sales: Math.round(w30.sales * 100) / 100,
+            acos: longAcos30,
+            periodDays: 30,
+          };
+        }
 
         if (lifecyclePhase !== 'launch') {
           const primaryAction = tg.insight.suggestedActions[0]?.type;
@@ -1791,6 +1839,7 @@ export class BooksService {
       strategicPeriodDays: strategicDays,
       lifecyclePhase,
       breakEvenAcos,
+      lastSyncedAt,
     };
   }
 
@@ -1938,16 +1987,67 @@ export class BooksService {
   }
 
   /**
-   * Compute date string for "N days ago including today".
+   * Compute date range for "N days ending yesterday".
+   * Amazon data has a 1-day lag — today's data doesn't exist yet.
+   * This matches the frontend computeDateRange() which also uses yesterday as end.
    */
   private computeDateRange(days: number): { startDate: string; endDate: string } {
     const end = new Date();
-    const start = new Date();
+    end.setDate(end.getDate() - 1); // hier = dernier jour complet de data Amazon
+    const start = new Date(end);
     start.setDate(start.getDate() - (days - 1));
     return {
       startDate: start.toISOString().split('T')[0],
       endDate: end.toISOString().split('T')[0],
     };
+  }
+
+  /**
+   * Compare l'ACoS de la fenêtre courante (7j) vs la fenêtre précédente (7j)
+   * pour déterminer la tendance de rentabilité.
+   * ACoS en baisse = amélioration (down/vert), ACoS en hausse = dégradation (up/rouge).
+   */
+  private computeTrend(
+    current: { spend: number; sales: number; clicks: number; impressions: number },
+    previous: { spend: number; sales: number; clicks: number; impressions: number },
+  ): { direction: 'up' | 'down' | 'stable' | 'new' | 'insufficient'; percentChange: number } {
+    const cAcos = current.sales > 0 ? (current.spend / current.sales) * 100 : null;
+    const pAcos = previous.sales > 0 ? (previous.spend / previous.sales) * 100 : null;
+
+    // Pas assez de données sur les 2 fenêtres
+    if (current.impressions < 10 && previous.impressions < 10) {
+      return { direction: 'insufficient', percentChange: 0 };
+    }
+
+    // Mot-clé nouveau (pas de données sur la fenêtre précédente)
+    if (previous.impressions < 10) {
+      return { direction: 'new', percentChange: 0 };
+    }
+
+    // Ni la période courante ni la précédente n'ont de ventes
+    if (cAcos === null && pAcos === null) {
+      return { direction: 'insufficient', percentChange: 0 };
+    }
+
+    // Période précédente avait des ventes, pas la courante → dégradation
+    if (cAcos === null && pAcos !== null) {
+      return { direction: 'up', percentChange: 100 };
+    }
+
+    // Période courante a des ventes, pas la précédente → amélioration
+    if (cAcos !== null && pAcos === null) {
+      return { direction: 'down', percentChange: -100 };
+    }
+
+    // Les deux ont des ventes → comparer ACoS
+    const delta = ((cAcos! - pAcos!) / pAcos!) * 100;
+    const rounded = Math.round(delta * 10) / 10;
+
+    if (Math.abs(rounded) < 5) {
+      return { direction: 'stable', percentChange: rounded };
+    }
+    // ACoS baissé = amélioration (vert ↓), ACoS monté = dégradation (rouge ↑)
+    return { direction: rounded < 0 ? 'down' : 'up', percentChange: rounded };
   }
 
   /**
@@ -1995,10 +2095,46 @@ export class BooksService {
       .from(marketplaceProfiles)
       .where(inArray(marketplaceProfiles.id, profileDbIds));
 
-    // 3. For each profile, fetch keywords and targets from Amazon, then update DB
-    for (const profile of profiles) {
-      try {
-        // Get adAccount ID for API calls
+    // 3. For each profile, fetch keywords and targets from Amazon IN PARALLEL, then update DB
+    // Pré-fetch tous les ad_groups et entités DB en une seule requête batch
+    const allCampaignIds = mappings.map((m: any) => m.campaignId);
+    const allAdGroups = allCampaignIds.length > 0 ? await this.db
+      .select({
+        id: adGroups.id,
+        amazonAdGroupId: adGroups.amazonAdGroupId,
+        campaignId: adGroups.campaignId,
+        defaultBid: adGroups.defaultBid,
+      })
+      .from(adGroups)
+      .where(inArray(adGroups.campaignId, allCampaignIds)) : [];
+
+    const allAdGroupIds = allAdGroups.map((ag: any) => ag.id);
+
+    // Batch fetch toutes les entités DB en parallèle
+    const [allDbKeywords, allDbTargets] = await Promise.all([
+      allAdGroupIds.length > 0
+        ? this.db.select({
+            id: keywords.id,
+            amazonKeywordId: keywords.amazonKeywordId,
+            bid: keywords.bid,
+            state: keywords.state,
+            adGroupId: keywords.adGroupId,
+          }).from(keywords).where(inArray(keywords.adGroupId, allAdGroupIds))
+        : Promise.resolve([]),
+      allAdGroupIds.length > 0
+        ? this.db.select({
+            id: productTargets.id,
+            amazonTargetId: productTargets.amazonTargetId,
+            bid: productTargets.bid,
+            state: productTargets.state,
+            adGroupId: productTargets.adGroupId,
+          }).from(productTargets).where(inArray(productTargets.adGroupId, allAdGroupIds))
+        : Promise.resolve([]),
+    ]);
+
+    // Appels Amazon API en parallèle par profil (keywords + targets simultanés)
+    const profileResults = await Promise.allSettled(
+      profiles.map(async (profile: any) => {
         const [adAccount] = await this.db
           .select({ id: adAccounts.id })
           .from(adAccounts)
@@ -2006,116 +2142,160 @@ export class BooksService {
           .limit(1);
 
         if (!adAccount) {
-          errors.push(`AdAccount not found for profile ${profile.id}`);
-          continue;
+          throw new Error(`AdAccount not found for profile ${profile.id}`);
         }
 
-        // Build campaign → adGroup maps for this profile
+        // Appels Amazon en parallèle : keywords ET targets en même temps
+        const [amazonKeywords, amazonTargets] = await Promise.all([
+          this.amazonClient.getKeywords(adAccount.id, profile.profileId, profile.marketplace as Marketplace),
+          this.amazonClient.getProductTargets(adAccount.id, profile.profileId, profile.marketplace as Marketplace),
+        ]);
+
+        return { profile, amazonKeywords, amazonTargets };
+      }),
+    );
+
+    // Traiter les résultats et mettre à jour la DB
+    for (const result of profileResults) {
+      if (result.status === 'rejected') {
+        errors.push(result.reason?.message || String(result.reason));
+        continue;
+      }
+
+      const { profile, amazonKeywords, amazonTargets } = result.value;
+
+      try {
         const profileCampaignIds = mappings
           .filter((m: any) => m.profileDbId === profile.id)
           .map((m: any) => m.campaignId);
-
-        const ags = await this.db
-          .select({
-            id: adGroups.id,
-            amazonAdGroupId: adGroups.amazonAdGroupId,
-            campaignId: adGroups.campaignId,
-            defaultBid: adGroups.defaultBid,
-          })
-          .from(adGroups)
-          .where(inArray(adGroups.campaignId, profileCampaignIds));
-
-        const agDbIds = ags.map((ag: any) => ag.id);
-
-        // ── Refresh Keywords ──
-        const amazonKeywords = await this.amazonClient.getKeywords(
-          adAccount.id,
-          profile.profileId,
-          profile.marketplace as Marketplace,
+        const profileAgIds = new Set(
+          allAdGroups.filter((ag: any) => profileCampaignIds.includes(ag.campaignId)).map((ag: any) => ag.id),
         );
 
-        // Map amazonKeywordId → fresh Amazon data
-        // IMPORTANT: l'API Amazon retourne keywordId comme STRING, la DB stocke en NUMBER (bigint)
-        // On normalise en Number pour que le Map.get() fonctionne
+        // ── Map amazonAdGroupId → DB UUID pour pouvoir insérer les nouveaux ──
+        const amazonAgToDbId = new Map<number, string>();
+        for (const ag of allAdGroups.filter((a: any) => profileAgIds.has(a.id))) {
+          amazonAgToDbId.set(Number(ag.amazonAdGroupId), ag.id);
+        }
+
+        // ── Update + Insert Keywords ──
         const amazonKwMap = new Map<number, any>();
         for (const kw of amazonKeywords) {
           amazonKwMap.set(Number(kw.keywordId), kw);
         }
 
-        // Get existing keywords in DB for these ad groups
-        if (agDbIds.length > 0) {
-          const existingKws = await this.db
-            .select({
-              id: keywords.id,
-              amazonKeywordId: keywords.amazonKeywordId,
-              bid: keywords.bid,
-              state: keywords.state,
-            })
-            .from(keywords)
-            .where(inArray(keywords.adGroupId, agDbIds));
+        const profileKws = allDbKeywords.filter((k: any) => profileAgIds.has(k.adGroupId));
+        const existingKwIds = new Set(profileKws.map((k: any) => k.amazonKeywordId));
+        const kwUpdates: Promise<any>[] = [];
 
-          for (const dbKw of existingKws) {
-            const fresh = amazonKwMap.get(dbKw.amazonKeywordId);
-            if (!fresh) continue;
-
-            const freshBid = fresh.bid ? String(fresh.bid) : null;
-            const freshState = fresh.state?.toLowerCase() || 'enabled';
-
-            if (dbKw.bid !== freshBid || dbKw.state !== freshState) {
-              await this.db.update(keywords).set({
+        // Update existing
+        for (const dbKw of profileKws) {
+          const fresh = amazonKwMap.get(dbKw.amazonKeywordId);
+          if (!fresh) continue;
+          const freshBid = fresh.bid ? String(fresh.bid) : null;
+          const freshState = fresh.state?.toLowerCase() || 'enabled';
+          if (dbKw.bid !== freshBid || dbKw.state !== freshState) {
+            kwUpdates.push(
+              this.db.update(keywords).set({
                 bid: freshBid,
                 state: freshState,
                 rawData: fresh,
                 lastSyncedAt: new Date(),
                 updatedAt: new Date(),
-              }).where(eq(keywords.id, dbKw.id));
-              keywordsUpdated++;
-            }
+              }).where(eq(keywords.id, dbKw.id)),
+            );
           }
         }
 
-        // ── Refresh Product Targets ──
-        const amazonTargets = await this.amazonClient.getProductTargets(
-          adAccount.id,
-          profile.profileId,
-          profile.marketplace as Marketplace,
-        );
+        // Insert new keywords not yet in DB
+        let kwInserted = 0;
+        for (const [amazonKwId, fresh] of amazonKwMap) {
+          if (existingKwIds.has(amazonKwId)) continue;
+          const adGroupDbId = amazonAgToDbId.get(Number(fresh.adGroupId));
+          if (!adGroupDbId) continue; // ad group non lié à ce livre
+          const freshState = fresh.state?.toLowerCase() || 'enabled';
+          if (freshState === 'archived') continue; // skip archived
+          kwUpdates.push(
+            this.db.insert(keywords).values({
+              adGroupId: adGroupDbId,
+              amazonKeywordId: amazonKwId,
+              keywordText: fresh.keywordText || '',
+              matchType: fresh.matchType?.toLowerCase() || 'broad',
+              state: freshState,
+              bid: fresh.bid ? String(fresh.bid) : null,
+              rawData: fresh,
+              lastSyncedAt: new Date(),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            }).onConflictDoNothing(),
+          );
+          kwInserted++;
+        }
 
-        // IMPORTANT: même normalisation String → Number pour les targets
+        await Promise.all(kwUpdates);
+        keywordsUpdated += kwUpdates.length;
+        if (kwInserted > 0) {
+          this.logger.log(`[REFRESH] Inserted ${kwInserted} new keywords for profile ${profile.marketplace}`);
+        }
+
+        // ── Update + Insert Product Targets ──
         const amazonTgMap = new Map<number, any>();
         for (const tg of amazonTargets) {
           amazonTgMap.set(Number(tg.targetId), tg);
         }
 
-        if (agDbIds.length > 0) {
-          const existingTgs = await this.db
-            .select({
-              id: productTargets.id,
-              amazonTargetId: productTargets.amazonTargetId,
-              bid: productTargets.bid,
-              state: productTargets.state,
-            })
-            .from(productTargets)
-            .where(inArray(productTargets.adGroupId, agDbIds));
+        const profileTgs = allDbTargets.filter((t: any) => profileAgIds.has(t.adGroupId));
+        const existingTgIds = new Set(profileTgs.map((t: any) => t.amazonTargetId));
+        const tgUpdates: Promise<any>[] = [];
 
-          for (const dbTg of existingTgs) {
-            const fresh = amazonTgMap.get(dbTg.amazonTargetId);
-            if (!fresh) continue;
-
-            const freshBid = fresh.bid ? String(fresh.bid) : null;
-            const freshState = fresh.state?.toLowerCase() || 'enabled';
-
-            if (dbTg.bid !== freshBid || dbTg.state !== freshState) {
-              await this.db.update(productTargets).set({
+        // Update existing
+        for (const dbTg of profileTgs) {
+          const fresh = amazonTgMap.get(dbTg.amazonTargetId);
+          if (!fresh) continue;
+          const freshBid = fresh.bid ? String(fresh.bid) : null;
+          const freshState = fresh.state?.toLowerCase() || 'enabled';
+          if (dbTg.bid !== freshBid || dbTg.state !== freshState) {
+            tgUpdates.push(
+              this.db.update(productTargets).set({
                 bid: freshBid,
                 state: freshState,
                 rawData: fresh,
                 lastSyncedAt: new Date(),
                 updatedAt: new Date(),
-              }).where(eq(productTargets.id, dbTg.id));
-              targetsUpdated++;
-            }
+              }).where(eq(productTargets.id, dbTg.id)),
+            );
           }
+        }
+
+        // Insert new targets not yet in DB
+        let tgInserted = 0;
+        for (const [amazonTgId, fresh] of amazonTgMap) {
+          if (existingTgIds.has(amazonTgId)) continue;
+          const adGroupDbId = amazonAgToDbId.get(Number(fresh.adGroupId));
+          if (!adGroupDbId) continue;
+          const freshState = fresh.state?.toLowerCase() || 'enabled';
+          if (freshState === 'archived') continue;
+          tgUpdates.push(
+            this.db.insert(productTargets).values({
+              adGroupId: adGroupDbId,
+              amazonTargetId: amazonTgId,
+              expressionType: fresh.targetingClause?.type || fresh.expressionType || 'asinSameAs',
+              expression: fresh.targetingClause ? [fresh.targetingClause] : (fresh.expression || []),
+              state: freshState,
+              bid: fresh.bid ? String(fresh.bid) : null,
+              rawData: fresh,
+              lastSyncedAt: new Date(),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            }).onConflictDoNothing(),
+          );
+          tgInserted++;
+        }
+
+        await Promise.all(tgUpdates);
+        targetsUpdated += tgUpdates.length;
+        if (tgInserted > 0) {
+          this.logger.log(`[REFRESH] Inserted ${tgInserted} new targets for profile ${profile.marketplace}`);
         }
       } catch (err: any) {
         const msg = `Error refreshing profile ${profile.marketplace}: ${err.message || err}`;

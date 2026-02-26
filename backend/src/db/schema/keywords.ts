@@ -14,6 +14,11 @@ export const keywords = pgTable('keywords', {
   bid: decimal('bid', { precision: 10, scale: 4 }),
   lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
   rawData: jsonb('raw_data'),
+  // Bid cooldown tracking
+  lastBidChangeAt: timestamp('last_bid_change_at', { withTimezone: true }),
+  lastBidChangeType: varchar('last_bid_change_type', { length: 20 }),
+  previousBid: decimal('previous_bid', { precision: 10, scale: 4 }),
+  newBid: decimal('new_bid', { precision: 10, scale: 4 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
@@ -21,6 +26,7 @@ export const keywords = pgTable('keywords', {
   idxKeywordsAdGroup: index('idx_keywords_ad_group').on(table.adGroupId),
   idxKeywordsText: index('idx_keywords_text').on(table.keywordText),
   idxKeywordsState: index('idx_keywords_state').on(table.state),
+  idxKeywordsLastBidChange: index('idx_keywords_last_bid_change').on(table.lastBidChangeAt),
 }));
 
 export type Keyword = typeof keywords.$inferSelect;

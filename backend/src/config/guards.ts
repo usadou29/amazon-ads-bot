@@ -40,6 +40,15 @@ export const GUARDS = {
     relaunch: 14,
   } as Record<string, number>,
 
+  // Cooldown après modification d'enchère (en jours) par phase de cycle de vie
+  // Pendant le cooldown, aucune modification d'enchère n'est autorisée (pause/negative restent possibles)
+  COOLDOWN_DAYS_BY_PHASE: {
+    launch: 3,
+    relaunch: 3,
+    scale: 5,
+    evergreen: 7,
+  } as Record<string, number>,
+
   // Seuil minimum d'impressions pour avoir un signal fiable (campagne)
   MIN_IMPRESSIONS_FOR_SIGNAL: 300,
 
@@ -49,6 +58,24 @@ export const GUARDS = {
 
   // Période de tendance court terme (en jours)
   TREND_PERIOD_DAYS: 7,
+
+  // Macro gating thresholds
+  MACRO_DEGRADATION_ACOS_INCREASE: 1.10,
+  MACRO_DEGRADATION_CVR_DECREASE: 0.90,
+  MACRO_DEGRADATION_SPEND_SHARE_MIN: 0.60,
+  MACRO_BUDGET_UTILIZATION_THRESHOLD: 0.95,
+  MACRO_BUDGET_ACOS_MARGIN: 0.80,
+  MACRO_BUDGET_INCREASE_PCT: 20,
+  MACRO_PLACEMENT_ACOS_RATIO: 1.30,
+  MACRO_PLACEMENT_MIN_MULTIPLIER: 10,
+  MACRO_BIDDING_LAUNCH_MIN_CLICKS: 50,
+
+  // Lifecycle auto-switch thresholds
+  LIFECYCLE_ORDERS_THRESHOLD: 10,
+  LIFECYCLE_CLICKS_THRESHOLD: 30,
+  LIFECYCLE_ACOS_VARIANCE_THRESHOLD: 0.15,
+  LIFECYCLE_HYSTERESIS_HOURS: 48,
+  LIFECYCLE_MIN_DAYS_IN_PHASE: 7,
 
   // Seuils de clics par phase pour la Decision Window
   // hard = minimum de clics pour une décision confiante

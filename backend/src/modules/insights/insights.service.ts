@@ -106,6 +106,9 @@ export class InsightsService {
         case EntityDiagnosisCode.CLICKS_NO_SALES:
           losersCount++;
           break;
+        case EntityDiagnosisCode.VERY_EXPENSIVE:
+          expensiveCount++;
+          break;
         case EntityDiagnosisCode.EXPENSIVE_BUT_VALID:
           expensiveCount++;
           break;
@@ -330,8 +333,8 @@ export class InsightsService {
       return EntityDiagnosisCode.EXPENSIVE_BUT_VALID;
     }
 
-    // ACoS too high despite orders
-    return EntityDiagnosisCode.CLICKS_NO_SALES;
+    // ACoS way too high despite having orders
+    return EntityDiagnosisCode.VERY_EXPENSIVE;
   }
 
   // ══════════════════════════════════════════════════════════
@@ -376,6 +379,10 @@ export class InsightsService {
         this.action('improve_listing', 'book', 'insights.actions.improve_listing', 1),
         this.action('add_negative', 'ads', 'insights.actions.add_negative', 2),
       ],
+      [EntityDiagnosisCode.VERY_EXPENSIVE]: [
+        this.action('bid_down', 'ads', 'insights.actions.bid_down', 1),
+        this.action('improve_listing', 'book', 'insights.actions.improve_listing', 2),
+      ],
       [EntityDiagnosisCode.EXPENSIVE_BUT_VALID]: [
         this.action('bid_down', 'ads', 'insights.actions.bid_down', 1),
       ],
@@ -385,6 +392,10 @@ export class InsightsService {
       ],
       [EntityDiagnosisCode.BOOST_CANDIDATE]: [
         this.action('bid_up', 'ads', 'insights.actions.bid_up', 1),
+      ],
+      [EntityDiagnosisCode.COOLDOWN_ACTIVE]: [
+        this.action('patience', 'none', 'insights.actions.patience', 1),
+        this.action('monitor', 'none', 'insights.actions.monitor', 2),
       ],
     };
     return actionMap[code] || [];

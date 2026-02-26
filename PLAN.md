@@ -1,318 +1,399 @@
-# ENDROMEDE — Plan d'implémentation Frontend
+# Plan d'implémentation : Micro/Macro + Lifecycle Auto-Switch
 
-## Résumé
+## Contexte & Découvertes
 
-Construire l'interface "Auteur-first" d'ENDROMEDE : un SaaS qui traduit Amazon Ads en langage humain pour les auteurs KDP. Mobile-first, français naturel, thémable, avec les safety guards backend visibles.
+**Codebase existant :**
+- Lifecycle = simple calcul `daysSincePublish` (30/180 jours) dans `books.service.ts`
+- InsightsService agrège déjà les diagnostics micro en macro strategy (SCALE_WINNERS, CUT_LOSERS, etc.)
+- CampaignInsightCard affiche la macro strategy mais **sans actions exécutables**
+- AmazonClientService **n'a PAS de mutations campagne** (budget, bidding strategy, placements) → à ajouter
+- Placements stockés dans `rawData` (jsonb) des campagnes, pas en colonnes dédiées
 
----
-
-## Phase 1 : Fondations (Next.js + Design System + API Layer)
-
-### 1.1 — Setup projet Next.js
-
-**Tech stack :**
-- **Next.js 14 App Router** — SSR natif, routing par dossier, API routes pour proxy
-- **Tailwind CSS** — utility-first, mobile-first natif, design tokens via config
-- **Zustand** — state léger (workspace context, safety mode)
-- **SWR** — data fetching + cache + revalidation
-- **Recharts** — charts légers pour les graphiques 30 jours
-- **next-intl** — i18n prêt, français par défaut
-
-**Pourquoi Next.js plutôt que Vite+React Router :** le backend est séparé (NestJS port 3001), mais Next.js permet un proxy API clean via `next.config.js`, du SSR pour le SEO/perf mobile, et une structure i18n native. Pas besoin de deux serveurs à gérer en prod.
-
-**Structure du projet :**
-```
-endromede-ui/
-├── next.config.js              # Proxy API vers localhost:3001
-├── tailwind.config.ts          # Design tokens centralisés
-├── src/
-│   ├── app/
-│   │   ├── layout.tsx          # Root layout (providers, navbar, SafetyBanner)
-│   │   ├── page.tsx            # Redirect → /authors
-│   │   ├── authors/
-│   │   │   ├── page.tsx        # Liste auteurs (cartes)
-│   │   │   └── [authorId]/
-│   │   │       └── page.tsx    # Livres d'un auteur (cartes)
-│   │   ├── books/
-│   │   │   └── [bookId]/
-│   │   │       └── page.tsx    # Détail livre (diagnostic + reco + chart + timeline)
-│   │   ├── onboarding/
-│   │   │   └── page.tsx        # Wizard mapping campagnes ↔ livres
-│   │   └── settings/
-│   │       └── page.tsx        # Paramètres workspace
-│   │
-│   ├── components/
-│   │   ├── ui/                 # Design system réutilisable
-│   │   ├── features/           # Composants métier (AuthorCard, BookCard, RecoCard...)
-│   │   └── layout/             # Navbar, AppShell, SafetyBanner
-│   │
-│   ├── lib/
-│   │   ├── api/                # Client API + endpoints typés
-│   │   ├── hooks/              # useAuthors, useBooks, useRecommendations, useSafety
-│   │   ├── transforms/         # Technique → humain (ACOS → "Ratio dépense-ventes")
-│   │   ├── i18n/               # Dictionnaires fr.json / en.json
-│   │   └── theme/              # Design tokens exportés
-│   │
-│   └── types/                  # Types API + domain + UI
-```
-
-### 1.2 — Design Tokens (thémable)
-
-Fichier unique `src/lib/theme/tokens.ts` + intégration dans `tailwind.config.ts`.
-
-**Palette neutre par défaut :**
-- `primary`: bleu professionnel (#2563eb) — confiance, sérieux
-- `success`: vert (#10b981) — ✅ sous contrôle
-- `warning`: ambre (#f59e0b) — ⚠️ à optimiser
-- `danger`: rouge (#ef4444) — 🛑 perdant
-- `surface` / `background` / `text` : gris neutres
-
-**Slot logo :** Header avec `{theme.logo}` ou placeholder "ENDROMEDE" en texte. Changeable sans toucher au code composant.
-
-### 1.3 — API Layer
-
-**Client API** (`src/lib/api/client.ts`) : Axios avec baseURL configurable, interceptors auth + error handling.
-
-**Endpoints existants utilisés directement :**
-- `GET /api/books?workspaceId=X` → liste livres (grouper par `author` côté front)
-- `GET /api/books/:id` → détail livre + campagnes liées
-- `GET /api/metrics/summary?workspaceId=X` → KPIs globaux
-- `GET /api/recommendations?workspaceId=X` → recommandations
-- `GET /api/recommendations/pending?workspaceId=X` → reco en attente
-- `POST /api/recommendations/:id/approve` → approuver
-- `POST /api/recommendations/:id/reject` → rejeter
-- `POST /api/actions/dry-run` → simulation
-- `POST /api/actions/execute` → exécution (protégée par guards)
-- `GET /api/actions/kill-switch` → état kill-switch
-- `GET /api/actions/log?workspaceId=X` → historique actions
-
-**Nouveaux endpoints backend à créer :**
-
-| Endpoint | But | Logique |
-|----------|-----|---------|
-| `GET /api/authors?workspaceId=X` | Liste auteurs + KPIs agrégés | GROUP BY `books.author`, SUM metrics des campagnes liées |
-| `GET /api/authors/:authorId/books?workspaceId=X` | Livres d'un auteur + KPIs | Filter books par author, joindre metrics par book |
-| `GET /api/books/:id/dashboard` | Dashboard complet d'un livre | KPIs + tendances + recos pending + timeline actions, en 1 appel |
-| `GET /api/books/:id/metrics/daily?days=30` | Données chart journalier | SELECT depuis daily_metrics agrégé par jour |
-
-**Note :** `authorId` = slug encodé du nom d'auteur (pen name). Pas de table `authors` séparée — on utilise le champ `books.author` existant, groupé côté backend.
-
-### 1.4 — i18n
-
-**Stratégie :** dictionnaires JSON par langue, hook `useT()` simple. Français par défaut, structure prête pour ajouter EN/ES plus tard.
-
-```
-src/lib/i18n/
-├── fr.json    # Default — complet
-├── en.json    # Squelette vide, rempli plus tard
-└── index.ts   # Hook useT('metrics.spend') → "Dépense"
-```
-
-Toutes les chaînes UI passent par `useT()`. Aucun texte français hardcodé dans les composants.
+**Contrainte importante :** L'API Amazon SP Campaigns v3 supporte `updateCampaign` pour budget + bidding, et les placement adjustments. On doit ajouter ces méthodes.
 
 ---
 
-## Phase 2 : Pages et Composants
+## Phase 1 : Lifecycle Auto-Switch (Backend)
 
-### 2.1 — `/authors` — Liste des auteurs
+### 1.1 Migration SQL — `add_lifecycle_tracking_fields.sql`
 
-**Ce que l'utilisateur voit :**
-- Cartes par pen name (nom d'auteur)
-- Chaque carte : nombre de livres, Dépense 30j, Ventes 30j, Statut global
-- CTA "Voir les livres →"
-
-**Composants :**
-- `AuthorCard` : nom, bookCount, spend, sales, StatusBadge, lien
-- `StatusBadge` : ✅ Sous contrôle / ⚠️ À optimiser / 🛑 Perdant
-
-**Logique statut auteur :** agrégat des statuts de ses livres. Si au moins 1 livre 🛑 → auteur ⚠️. Si tous ✅ → auteur ✅.
-
-### 2.2 — `/authors/:authorId` — Livres d'un auteur
-
-**Ce que l'utilisateur voit :**
-- Header : nom de l'auteur + KPIs agrégés
-- Grille de cartes par livre (titre, ASIN, couverture si disponible)
-- KPIs par livre : Dépense, Ventes, Statut
-- Badge nombre de recommandations en attente
-- CTA "Ouvrir →"
-
-**Composants :**
-- `BookCard` : titre, ASIN, marketplace, KPIs, StatusBadge, pendingRecoCount
-- `KPISummaryBar` : barre résumé horizontale (Dépense totale / Ventes totales / ACOS moyen)
-
-### 2.3 — `/books/:bookId` — Détail d'un livre (page principale)
-
-**Ce que l'utilisateur voit :**
-
-**a) Résumé verbal (1 phrase) :**
-> "Ce livre dépense 45€/jour pour 92€ de ventes — c'est rentable mais il y a de la marge pour optimiser."
-
-Généré dynamiquement depuis les KPIs + tendance.
-
-**b) "Ce que je te conseille aujourd'hui" — Recommandations en cartes :**
-```
-┌─────────────────────────────────┐
-│ 💡 Arrêter ce mot-clé           │
-│                                  │
-│ Pourquoi : 50 clics, 0 vente    │
-│ Impact : -15€/jour d'économie   │
-│ Risque : Faible (réversible)    │
-│                                  │
-│ [Simuler]  [Appliquer]          │
-└─────────────────────────────────┘
+Ajouter au schema `books` :
+```sql
+ALTER TABLE books
+  ADD COLUMN IF NOT EXISTS lifecycle_phase VARCHAR(20) DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS lifecycle_source VARCHAR(10) DEFAULT 'auto'
+    CHECK (lifecycle_source IN ('auto', 'manual')),
+  ADD COLUMN IF NOT EXISTS lifecycle_changed_at TIMESTAMPTZ DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS lifecycle_previous_phase VARCHAR(20) DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS lifecycle_pending_phase VARCHAR(20) DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS lifecycle_pending_since TIMESTAMPTZ DEFAULT NULL;
 ```
 
-Le bouton "Appliquer" est grisé + tooltip si guards actifs (dry_run, kill-switch, auto_execute off).
+- `lifecycle_phase` : phase effective calculée (remplace le calcul à la volée)
+- `lifecycle_source` : auto ou manual
+- `lifecycle_changed_at` : date du dernier changement
+- `lifecycle_previous_phase` : pour historique
+- `lifecycle_pending_phase` + `lifecycle_pending_since` : pour hysteresis (2 checks consécutifs)
 
-**c) Graphique 30 jours :**
-- 2 courbes : Dépense (rouge) + Ventes (vert)
-- Ligne ACOS en pointillé
-- Mobile : scrollable horizontalement
+### 1.2 Schema Drizzle — `books.ts`
 
-**d) Timeline actions/recommandations :**
-- Liste chronologique des actions passées
-- Chaque entrée : date, action, résultat, dry-run ou réel
-- Badge "Simulé" ou "Appliqué"
+Ajouter les 6 colonnes au schema Drizzle. L'ancien champ `lifecyclePhaseOverride` reste pour backward compat (aliased vers lifecycle_phase quand source=manual).
 
-**Composants :**
-- `VerbalSummary` : phrase dynamique
-- `RecommendationCard` : pourquoi/impact/risque/actions
-- `MetricsChart` : Recharts responsive
-- `ActionTimeline` : liste chronologique
+### 1.3 Service — `LifecycleService` (nouveau fichier)
 
-### 2.4 — `/onboarding` — Wizard mapping
+**Fichier :** `backend/src/modules/lifecycle/lifecycle.service.ts`
 
-**3 étapes :**
-1. "Quel livre veux-tu suivre ?" → sélection livre (existant ou créer)
-2. "Quelles campagnes lui sont associées ?" → liste des campagnes Amazon dispo, checkboxes
-3. "Confirme" → résumé + bouton valider
+```
+Méthodes :
+- computePhase(bookId): LifecycleComputeResult
+- overridePhase(bookId, phase, reason): void
+- getPhaseInfo(bookId): LifecycleInfoDTO
+- computeAllBooks(): void  (appelé par cron)
+```
 
-**Composants :**
-- `WizardStepper` : indicateur d'étape (1/2/3)
-- `CampaignSelector` : liste avec recherche + checkbox
-- `ConfirmationCard` : résumé avant validation
+**Règles de détection :**
 
-### 2.5 — Safety Guards (visible partout)
+```
+LAUNCH si :
+  - daysSincePublish < 30
+  - OU orders_total_30d < 10
+  - OU data ads insuffisante (total clicks toutes campagnes < 30)
 
-**`SafetyBanner`** (dans le layout root) :
-- Si `dry_run: true` → bandeau bleu : "🔒 Mode test — Les changements seront simulés"
-- Si kill-switch ON → bandeau rouge : "⛔ Arrêt d'urgence — Aucun changement exécuté"
-- Si tout OK → pas de bandeau
+SCALE si :
+  - daysSincePublish >= 30 ET <= 180
+  - ET orders_total_30d >= 10
+  - ET au moins 2 semaines consécutives avec orders > 0
 
-**Dans RecommendationCard :**
-- Bouton "Appliquer" → disabled + tooltip "Mode test activé" si guards actifs
-- Bouton "Simuler" → toujours actif (dry-run est safe)
+EVERGREEN si :
+  - daysSincePublish > 180
+  - ET performance stable (variance ACoS < 15% sur 3 fenêtres 30j)
+  - OU daysSincePublish > 180 + volume stable
+
+RELAUNCH :
+  - Manuel uniquement (override) en v1
+```
+
+**Hysteresis :**
+```
+1. Calculer candidatePhase selon les règles
+2. Si candidatePhase !== currentPhase :
+   a. Si lifecycle_pending_phase === candidatePhase
+      ET lifecycle_pending_since < now - 48h :
+      → Appliquer le changement
+   b. Sinon :
+      → Stocker en pending (lifecycle_pending_phase, lifecycle_pending_since = now)
+3. Si candidatePhase === currentPhase :
+   → Effacer le pending
+4. Minimum cooldown : 7 jours dans la phase actuelle avant tout changement
+5. Si source = 'manual' → pas de recalcul auto
+```
+
+### 1.4 Controller — Endpoints lifecycle
+
+```
+GET  /books/:bookId/lifecycle         → { phase, source, explanation, evidence }
+POST /books/:bookId/lifecycle/compute → Force recalcul immédiat
+POST /books/:bookId/lifecycle/override → { phase, reason } → Override manuel
+```
+
+### 1.5 Cron — Intégration scheduler
+
+Dans `scheduler.service.ts`, job quotidien après sync :
+```
+@Cron('0 5 * * *')  // 5h UTC, après le sync de 3h
+async computeAllLifecycles()
+```
+
+### 1.6 Tests unitaires lifecycle (8 tests)
+
+1. Launch → Scale quand conditions remplies + hysteresis (2 checks)
+2. Scale → Evergreen après 180j + stabilité
+3. Hysteresis bloque si < 48h de pending
+4. Cooldown phase empêche changement si < 7j dans phase actuelle
+5. Override manuel → source = 'manual', bloque auto-switch
+6. Override manuel reset → retour en auto
+7. Launch maintenu si orders < 10 même si > 30 jours
+8. Données insuffisantes → reste Launch
 
 ---
 
-## Phase 3 : Backend — Nouveaux endpoints
+## Phase 2 : Macro Suggestions (Backend)
 
-### 3.1 — `GET /api/authors?workspaceId=X`
+### 2.1 Amazon Client — Mutations campagne
+
+**Fichier :** `amazon-client.service.ts` — ajouter 3 méthodes :
 
 ```typescript
-// Retourne :
-[{
-  id: "stephen-king",           // slug du pen name
-  name: "Stephen King",
-  bookCount: 3,
-  metrics: { spend: 450, sales: 920, acos: 48.9, roas: 2.04 },
-  status: "warning",            // agrégé des livres
-  pendingRecommendations: 4
-}]
+async updateCampaignBudget(profileId, campaignId, newBudget): Promise<void>
+async updateCampaignBiddingStrategy(profileId, campaignId, strategy): Promise<void>
+async updateCampaignPlacements(profileId, campaignId, placements): Promise<void>
 ```
 
-**Logique :** SELECT books GROUP BY author, JOIN daily_metrics agrégées via campaign_book_mapping.
+Utilise l'API Amazon SP Campaigns v3 :
+- PUT `/sp/campaigns` pour budget + bidding strategy
+- PUT `/sp/campaigns` pour dynamic bidding + placement adjustments
 
-### 3.2 — `GET /api/books/:id/dashboard`
+### 2.2 DTO — `MacroSuggestionDTO`
+
+**Fichier :** `backend/src/modules/macro/macro.types.ts`
 
 ```typescript
-// Retourne tout en 1 appel :
-{
-  book: { id, title, asin, author, marketplace, acosTarget },
-  metrics: { spend, sales, acos, roas, impressions, clicks, orders },
-  trends: { previous: {...}, changes: { spend: +12%, sales: -3% } },
-  verbalSummary: "Ce livre dépense 45€/jour...",  // généré backend
-  recommendations: [{ id, title, why, impact, risk, actionType, status }],
-  recentActions: [{ date, action, result, dryRun }],
-  dailyMetrics: [{ date, spend, sales, acos }]     // 30 jours pour chart
+type MacroSuggestionActionType =
+  | 'set_bidding_strategy'
+  | 'update_placements'
+  | 'increase_budget'
+  | 'decrease_budget'
+  | 'none';
+
+interface MacroSuggestionDTO {
+  id: string;
+  campaignId: string;
+  title: string;              // auteur-friendly
+  why: string;                // 1-2 phrases
+  bullets: string[];          // 2-3 max
+  impactTag: 'stabiliser' | 'accélérer' | 'réduire dépenses' | 'protéger rentabilité';
+  riskLevel: 'low' | 'medium' | 'high';
+  actionType: MacroSuggestionActionType;
+  executable: boolean;
+  current: {
+    biddingStrategy?: 'fixed' | 'down_only' | 'up_and_down';
+    placements?: { topOfSearch: number; restOfSearch: number; productPages: number };
+    budget?: number;
+  };
+  recommended?: { /* même structure */ };
+  guardrails?: {
+    requiresConsent: boolean;
+    consentLevel: 'none' | 'basic' | 'reinforced';
+    cooldownDays?: number;
+  };
+  evidence: {
+    strategicPeriodDays: number;
+    trendPeriodDays?: number;
+    acosStrategic?: number;
+    acosTrend?: number;
+    cvrStrategic?: number;
+    cvrTrend?: number;
+    spendShareImpacted?: number;
+    diagnosticsDistribution?: Record<string, number>;
+  };
 }
 ```
 
-### 3.3 — `GET /api/books/:id/metrics/daily?days=30`
+### 2.3 Service — `MacroSuggestionService`
 
-```typescript
-// Données pour le graphique
-[
-  { date: "2026-01-20", spend: 12.5, sales: 28.3, acos: 44.2, impressions: 5200, clicks: 58 },
-  { date: "2026-01-21", ... },
-  ...
-]
+**Fichier :** `backend/src/modules/macro/macro-suggestion.service.ts`
+
+**Méthode principale :**
+```
+async getMacroSuggestions(campaignId, bookId, lifecyclePhase): MacroSuggestionDTO[]
 ```
 
+**Étapes :**
+1. Charger métriques campagne (strategic period + trend 7j)
+2. Charger placements depuis rawData
+3. Charger budget + bidding strategy
+4. Charger distribution diagnostics micro (entity insights)
+5. Appliquer les 4 patterns de gating
+6. Retourner 0-2 suggestions max
+
+**Pattern 1 — Dégradation globale :**
+```
+Conditions :
+  - trendAcos > strategicAcos * 1.10 (ACoS 7j ↑ de +10%)
+  - ET trendCvr < strategicCvr * 0.90 (CVR 7j ↓ de -10%)
+  - ET spendShareImpacted >= 0.60 (60%+ du spend impacté)
+
+Actions possibles :
+  - biddingStrategy 'up_and_down' → suggérer 'down_only'
+  - topOfSearch > 50% → réduire placements
+
+impactTag: 'stabiliser'
+riskLevel: 'medium'
+```
+
+**Pattern 2 — Budget capped + rentable :**
+```
+Conditions :
+  - dailySpend >= dailyBudget * 0.95
+  - ET acos <= breakEvenAcos * 0.80
+  - ET orders > 0
+
+Action : increase_budget +20%
+impactTag: 'accélérer'
+riskLevel: 'low'
+```
+
+**Pattern 3 — Placements incohérents :**
+```
+Conditions :
+  - topOfSearch multiplicateur > 0
+  - ET topOfSearch ACoS > campaign ACoS * 1.30
+
+Action : update_placements, réduire topOfSearch
+impactTag: 'réduire dépenses'
+riskLevel: 'low'
+```
+
+**Pattern 4 — Bidding strategy incohérente avec phase :**
+```
+Conditions :
+  - Phase launch + bidding = 'up_and_down' + clicks < 50
+  - OU Phase evergreen + bidding = 'up_and_down' + acos > breakEven
+
+Action : set_bidding_strategy
+  Launch → 'fixed' ou 'down_only'
+  Evergreen → 'down_only'
+impactTag: 'protéger rentabilité'
+riskLevel: 'medium'
+```
+
+**Règle fondamentale : silence = stabilité**
+Si aucun pattern → tableau vide. Pas de suggestion "tout va bien".
+
+### 2.4 Controller — Endpoint macro
+
+```
+POST /campaigns/:campaignId/macro-suggestions
+Body: { bookId, lifecyclePhase }
+Returns: MacroSuggestionDTO[]
+
+POST /campaigns/:campaignId/macro-execute
+Body: { workspaceId, suggestionId, actionType, recommended }
+Returns: ExecutionResult
+```
+
+### 2.5 Executor macro — `MacroExecutorService`
+
+**Fichier :** `backend/src/modules/macro/macro-executor.service.ts`
+
+- Vérifie kill switch + feature flags
+- Applique via AmazonClientService
+- Log dans action_log (avec entityType='campaign')
+- Retourne résultat
+
+### 2.6 Tests unitaires macro (8 tests)
+
+1. Dégradation globale (60%+ spend impacté) → suggestions générées
+2. Dégradation locale (1-2 lignes) → PAS de macro
+3. Budget capped + rentable → increase_budget
+4. Budget capped + NON rentable → PAS de suggestion
+5. Placements incohérents → update_placements
+6. Bidding incohérente avec phase → switch strategy
+7. Aucun pattern → tableau vide
+8. Maximum 2 suggestions retournées
+
 ---
 
-## Phase 4 : Séquence d'implémentation
+## Phase 3 : Frontend — Bloc Macro + Lifecycle
 
-### Étape 1 — Setup projet + Design System
-- Init Next.js 14 + Tailwind + structure dossiers
-- Design tokens (`tokens.ts` + `tailwind.config.ts`)
-- Composants UI de base : Button, Card, Badge, StatusBadge, Alert, Skeleton
-- Layout : AppShell + Navbar + SafetyBanner
-- API client + hook useSafety
+### 3.1 API Client — Nouveaux endpoints
 
-### Étape 2 — Page `/authors`
-- Nouveau endpoint backend `GET /api/authors`
-- Composant AuthorCard
-- Page avec grille responsive (1 col mobile, 2-3 col desktop)
-- Hook useAuthors + SWR
+```typescript
+// client.ts
+export const fetchMacroSuggestions = (campaignId, bookId, lifecyclePhase) =>
+  api.post(`/campaigns/${campaignId}/macro-suggestions`, { bookId, lifecyclePhase });
 
-### Étape 3 — Page `/authors/:authorId`
-- Nouveau endpoint backend `GET /api/authors/:authorId/books`
-- Composant BookCard avec StatusBadge
-- KPISummaryBar
-- Hook useAuthorBooks
+export const executeMacroAction = (dto) =>
+  api.post('/campaigns/macro-execute', dto);
 
-### Étape 4 — Page `/books/:bookId`
-- Nouveau endpoint backend `GET /api/books/:id/dashboard`
-- VerbalSummary (phrase dynamique)
-- RecommendationCard avec boutons Simuler/Appliquer
-- MetricsChart (Recharts)
-- ActionTimeline
-- Intégration safety guards sur les boutons d'action
+export const fetchLifecycleInfo = (bookId) =>
+  api.get(`/books/${bookId}/lifecycle`);
 
-### Étape 5 — Onboarding wizard
-- WizardStepper
-- CampaignSelector (utilise `GET /api/books/available-campaigns` existant)
-- Validation mapping
+export const overrideLifecycle = (bookId, phase, reason) =>
+  api.post(`/books/${bookId}/lifecycle/override`, { phase, reason });
+```
 
-### Étape 6 — i18n + Polish
-- Extraction toutes chaînes → fr.json
-- Hook useT()
-- Squelette en.json
-- Tests responsive mobile
-- Loading states + error boundaries
+### 3.2 Composant — `MacroSuggestionsBlock`
+
+**Fichier :** `frontend/src/components/features/MacroSuggestionsBlock.tsx`
+
+- Ne s'affiche QUE si `suggestions.length > 0`
+- Pour chaque suggestion :
+  - Titre + impactTag badge
+  - Paragraphe "why"
+  - Bullets d'explication
+  - Bouton "Voir / Ajuster" → ouvre MacroActionModal
+- Couleurs par impact :
+  - stabiliser → amber
+  - accélérer → emerald
+  - réduire dépenses → blue
+  - protéger rentabilité → rose
+
+### 3.3 Composant — `MacroActionModal`
+
+**Fichier :** `frontend/src/components/features/MacroActionModal.tsx`
+
+- Section "Pourquoi maintenant" avec evidence
+- Valeur actuelle vs recommandée
+- Pour budget : input numérique
+- Pour bidding strategy : radio buttons
+- Pour placements : 3 sliders (topOfSearch, productPages, restOfSearch)
+- Risk level badge + guardrails info
+- Bouton "Appliquer" (si executable) OU "Checklist" (si non executable)
+
+### 3.4 Intégration — `OverviewCampaignView.tsx`
+
+Dans `OverviewCampaignCard` :
+- Fetch macro suggestions par campagne (au mount/expand)
+- Placer `<MacroSuggestionsBlock>` ENTRE résumé campagne et tableaux
+- Ne montre que si suggestions non vides
+
+### 3.5 Lifecycle display — Page livre
+
+Dans `books/[bookId]/page.tsx` :
+- Badge "Phase : Scale (auto)" ou "Relaunch (manuel)"
+- Lien "Pourquoi ?" → popover avec explanation bullets + evidence
+- Si manual → bouton "Repasser en auto"
+
+### 3.6 Indicateur période stratégique
+
+Petit texte dans résumé campagne : "Analyse basée sur X jours"
+Si uiDays !== strategicDays : note subtile d'info
 
 ---
 
-## Fichiers critiques
+## Ordre d'implémentation
+
+```
+Étape 1  : Migration SQL lifecycle + schema Drizzle books.ts
+Étape 2  : LifecycleService + computePhase + hysteresis + tests (8 tests)
+Étape 3  : Endpoints lifecycle + intégration cron scheduler
+Étape 4  : Amazon Client mutations campagne (budget, bidding, placements)
+Étape 5  : macro.types.ts (DTO) + MacroSuggestionService + gating + tests (8 tests)
+Étape 6  : MacroExecutorService + endpoints macro
+Étape 7  : Frontend MacroSuggestionsBlock + MacroActionModal
+Étape 8  : Intégration OverviewCampaignView (bloc macro entre résumé et tableaux)
+Étape 9  : Frontend lifecycle display (badge + popover + override)
+Étape 10 : Indicateur période stratégique + traductions fr.json
+Étape 11 : tsc --noEmit backend + frontend
+Étape 12 : Run tous les tests unitaires
+```
+
+## Fichiers créés (9 nouveaux)
 
 | Fichier | Rôle |
 |---------|------|
-| `tailwind.config.ts` | Design tokens centralisés — toute la palette ici |
-| `src/lib/theme/tokens.ts` | Tokens exportés pour JS (composants dynamiques) |
-| `src/lib/transforms/metrics.ts` | ACOS → "Ratio dépense-ventes", toute la traduction technique → humain |
-| `src/lib/transforms/status.ts` | Calcul ✅ ⚠️ 🛑 basé sur ACOS target + ROAS + tendance |
-| `src/lib/transforms/verbal.ts` | Génération des phrases résumé ("Ce livre dépense...") |
-| `src/lib/api/client.ts` | Client Axios avec proxy + auth |
-| `src/lib/i18n/fr.json` | Dictionnaire français complet |
-| `src/components/ui/SafetyBanner.tsx` | Bandeau dry-run / kill-switch visible partout |
+| `backend/src/db/migrations/add_lifecycle_tracking_fields.sql` | Migration DB |
+| `backend/src/modules/lifecycle/lifecycle.service.ts` | Calcul lifecycle + hysteresis |
+| `backend/src/modules/lifecycle/lifecycle.spec.ts` | 8 tests lifecycle |
+| `backend/src/modules/macro/macro.types.ts` | DTOs macro |
+| `backend/src/modules/macro/macro-suggestion.service.ts` | Gating + suggestions |
+| `backend/src/modules/macro/macro-suggestion.spec.ts` | 8 tests macro |
+| `backend/src/modules/macro/macro-executor.service.ts` | Exécution macro |
+| `frontend/src/components/features/MacroSuggestionsBlock.tsx` | Bloc macro UI |
+| `frontend/src/components/features/MacroActionModal.tsx` | Modale macro UI |
 
----
+## Fichiers modifiés (10)
 
-## Ce qui ne change PAS
-
-- Backend NestJS existant reste en place (port 3001)
-- Safety guards hard (kill-switch, auto_execute_enabled, dry_run, auto_mode_enabled) restent côté backend
-- Le front ne bypass jamais les guards — il lit l'état et adapte l'UI
-- La table `books` existante est utilisée telle quelle (champ `author` pour grouper)
-- `campaign_book_mapping` existant pour le lien campagnes ↔ livres
+| Fichier | Modification |
+|---------|-------------|
+| `backend/src/db/schema/books.ts` | 6 colonnes lifecycle |
+| `backend/src/modules/books/books.service.ts` | Utiliser LifecycleService |
+| `backend/src/modules/books/books.controller.ts` | 3 endpoints lifecycle |
+| `backend/src/modules/amazon-client/amazon-client.service.ts` | 3 méthodes mutation |
+| `backend/src/modules/scheduler/scheduler.service.ts` | Cron lifecycle |
+| `backend/src/config/guards.ts` | Seuils macro gating + lifecycle |
+| `frontend/src/lib/api/client.ts` | 4 nouveaux endpoints |
+| `frontend/src/components/features/OverviewCampaignView.tsx` | Intégration bloc macro |
+| `frontend/src/app/books/[bookId]/page.tsx` | Lifecycle display |
+| `frontend/src/lib/i18n/dictionaries/fr.json` | Traductions macro + lifecycle |
