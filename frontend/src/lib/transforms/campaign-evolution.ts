@@ -1,9 +1,106 @@
 /**
- * Adapter : mapCampaignEvolutionToViewModel + buildAuthorSummary
+ * Adapter : mapCampaignEvolutionToViewModel
  * Transforme le JSON brut de l'API en ViewModel lisible pour l'UI auteur
  */
 
 // ── Types bruts (API response) ──────────────────────────────────
+
+export interface TopFocusEvidence {
+  label: string;
+  value: string;
+}
+
+export interface TopFocusCta {
+  label: string;
+  intent: 'CREATE' | 'CLEANUP' | 'AMPLIFY' | 'OBSERVE';
+  planId?: string;
+}
+
+export interface TopFocus {
+  theme: 'VISIBILITE' | 'CONVERSION' | 'RENTABILITE' | 'STRUCTURE';
+  title: string;
+  summary: string;
+  evidence: TopFocusEvidence[];
+  primaryCta: TopFocusCta;
+}
+
+export interface CampaignToCreate {
+  name: string;
+  type: string;
+  targetingMode: 'AUTO' | 'MANUAL';
+  dailyBudget: number;
+  biddingStrategy: string;
+  placementAdjustments?: { topOfSearch: number; restOfSearch: number; productPages: number };
+  seedKeywords?: string[];
+  seedAsins?: string[];
+  notesWhy: string;
+}
+
+export interface CampaignToPause {
+  campaignId: string;
+  name: string;
+  reason: string;
+  harvestedKeywords?: string[];
+  harvestedAsins?: string[];
+}
+
+export interface PauseStrategy {
+  campaignsToPause: CampaignToPause[];
+  totalBudgetToSave: number;
+}
+
+export interface CreationPlan {
+  planId: string;
+  fingerprint: string;
+  campaignsToCreate: CampaignToCreate[];
+  gaps?: string[];
+  pauseStrategy?: PauseStrategy;
+}
+
+export type GapSeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export interface StructuralGap {
+  type: string;
+  severity: GapSeverity;
+  label: string;
+  explanation: string;
+  campaignsToCreate: string[];
+}
+
+export interface LifecycleDetection {
+  phase: string;
+  confidence: number;
+  reasonBullets: string[];
+}
+
+export interface WinnerKeywordAsset {
+  text: string;
+  matchType: string;
+  acos?: number;
+  orders?: number;
+  campaignId: string;
+}
+
+export interface SearchTermAsset {
+  query: string;
+  count: number;
+}
+
+export interface HarvestedAssets {
+  winnerKeywords: WinnerKeywordAsset[];
+  winnerSearchTerms: SearchTermAsset[];
+  winnerAsins: string[];
+  suggestedNegatives: string[];
+  windowDays: number;
+}
+
+export interface CreationPlanResponse {
+  creationPlan: CreationPlan;
+  roadmap: Array<{ week: number; title: string; actions: Array<{ type: string; details: Record<string, any>; priority: 'high' | 'medium' | 'low'; estimatedDurationHours?: number; why: string; impact: string }> }>;
+  gaps: StructuralGap[];
+  harvestedAssets: HarvestedAssets;
+  lifecycleUsed: string;
+}
 
 export interface CampaignEvolutionResult {
   bookId: string;
@@ -13,13 +110,17 @@ export interface CampaignEvolutionResult {
   duplicationScore: number;
   chaosScore: number;
   scenario: string;
+  topFocus: TopFocus;
+  creationPlan?: CreationPlan;
+  gaps?: StructuralGap[];
+  lifecycleDetected?: LifecycleDetection;
   campaignRoles: Array<{ campaignId: string; campaignName: string; roles: string[]; macroStrategy: string; confidence: number }>;
   structuralIssues: Array<{ type: string; severity: 'high' | 'medium' | 'low'; description: string; affectedEntities: string[] }>;
   suggestions: Array<{ priority: number; type: string; description: string; estimatedImpact: string; details: Record<string, any> }>;
-  roadmap: Array<{ week: number; actions: Array<{ type: string; details: Record<string, any>; priority: 'high' | 'medium' | 'low'; estimatedDurationHours?: number }> }>;
+  roadmap: Array<{ week: number; title: string; actions: Array<{ type: string; details: Record<string, any>; priority: 'high' | 'medium' | 'low'; estimatedDurationHours?: number; why: string; impact: string }> }>;
   nextCampaignRecommendations: Array<{ campaignType: string; targetingType: string; matchTypes?: string[]; keywords?: string[]; estimatedDailyBudget: number; rationale: string; priority: string }>;
   diversificationOpportunities: Array<{ type: string; description: string; prerequisites: string[]; met: boolean; estimatedBudget?: number; priority: string }>;
-  context: { lifecyclePhase: string; totalCampaigns: number; totalAdGroups: number; totalKeywords: number; totalProductTargets: number; totalWinnerKeywords: number; totalBoostCandidateKeywords: number };
+  context: { lifecyclePhase: string; totalCampaigns: number; totalAdGroups: number; totalKeywords: number; totalProductTargets: number; totalWinnerKeywords: number; totalBoostCandidateKeywords: number; avgAcos?: number; totalSpend30d?: number; totalSales30d?: number };
 }
 
 // ── ViewModel (UI) ──────────────────────────────────────────────
@@ -39,15 +140,25 @@ export interface TopAction {
 export interface RoadmapItem {
   title: string;
   desc: string;
+  why: string;
+  impact: string;
   priority: 'high' | 'medium' | 'low';
 }
 
 export interface RoadmapWeekVM {
   weekLabel: string;
+  weekTitle: string;
   items: RoadmapItem[];
 }
 
 export interface EvolutionViewModel {
+  // Top Focus (primary display)
+  topFocus: TopFocus;
+  creationPlan?: CreationPlan;
+  gaps: StructuralGap[];
+  lifecycleDetected?: LifecycleDetection;
+
+  // Legacy fields
   summarySentence: string;
   scenarioLabel: string;
   stateTag: StateTag;
@@ -85,47 +196,10 @@ function scenarioToLabel(scenario: string): string {
   }
 }
 
-// ── Author-friendly wording ─────────────────────────────────────
-
-export function buildAuthorSummary(result: CampaignEvolutionResult): string {
-  const { scenario, context } = result;
-  const { totalCampaigns, totalWinnerKeywords, totalKeywords } = context;
-
-  switch (scenario) {
-    case 'scenario_a_no_campaigns':
-      return 'Tu n\'as pas encore de campagnes publicitaires pour ce livre. On va t\'aider à lancer tes premières pubs étape par étape.';
-
-    case 'scenario_b_chaos_detected': {
-      const parts: string[] = [];
-      if (result.duplicationScore > 0.4) {
-        parts.push('tes campagnes se cannibalisent (mêmes mots-clés partout)');
-      }
-      if (result.chaosScore > 0.6) {
-        parts.push('la structure de tes campagnes est désorganisée');
-      }
-      const issue = parts.length > 0 ? parts.join(' et ') : 'ta structure publicitaire nécessite un nettoyage';
-      return `${capitalize(issue)}. On va simplifier et réorganiser pour que chaque euro dépensé soit mieux ciblé.`;
-    }
-
-    case 'scenario_c_winners_exist': {
-      const winnerWord = totalWinnerKeywords === 1 ? 'mot-clé gagnant' : 'mots-clés gagnants';
-      return `Tu as ${totalWinnerKeywords} ${winnerWord} qui convertissent bien. On va les isoler et les pousser pour maximiser tes ventes.`;
-    }
-
-    case 'scenario_stable':
-      return `Tes ${totalCampaigns} campagnes tournent de façon stable avec ${totalKeywords} mots-clés. On te suggère quelques optimisations pour continuer à progresser.`;
-
-    default:
-      return 'Analyse en cours de ton portefeuille publicitaire.';
-  }
-}
-
 // ── Suggestion → TopAction ──────────────────────────────────────
 
 function suggestionToAction(suggestion: CampaignEvolutionResult['suggestions'][0]): TopAction {
   const isCreateCampaign = suggestion.type === 'create_campaign';
-  const isPause = suggestion.type === 'pause_campaign';
-  const isBidIncrease = suggestion.type === 'bid_increase';
 
   let ctaLabel = 'Voir';
   let isExecutable = false;
@@ -133,12 +207,10 @@ function suggestionToAction(suggestion: CampaignEvolutionResult['suggestions'][0
   if (isCreateCampaign) {
     ctaLabel = 'Créer';
     isExecutable = true;
-  } else if (isPause) {
+  } else if (suggestion.type === 'pause_campaign') {
     ctaLabel = 'Mettre en pause';
-    isExecutable = false;
-  } else if (isBidIncrease) {
+  } else if (suggestion.type === 'bid_increase') {
     ctaLabel = 'Ajuster';
-    isExecutable = false;
   } else if (suggestion.type === 'consolidate_adgroup' || suggestion.type === 'restructure') {
     ctaLabel = 'Voir le plan';
   } else if (suggestion.type === 'rename_campaign') {
@@ -239,14 +311,17 @@ function generateWhyForRec(rec: CampaignEvolutionResult['nextCampaignRecommendat
   return 'Diversifie ta stratégie pour toucher de nouveaux lecteurs.';
 }
 
-// ── Roadmap → RoadmapWeekVM ─────────────────────────────────────
+// ── Roadmap → RoadmapWeekVM (enriched) ──────────────────────────
 
 function roadmapToVM(roadmap: CampaignEvolutionResult['roadmap']): RoadmapWeekVM[] {
   return roadmap.map((week) => ({
     weekLabel: `Semaine ${week.week}`,
+    weekTitle: week.title || `Semaine ${week.week}`,
     items: week.actions.map((action) => ({
       title: actionTypeToTitle(action.type),
       desc: action.details?.action || action.details?.rationale || '',
+      why: action.why || '',
+      impact: action.impact || '',
       priority: action.priority,
     })),
   }));
@@ -269,13 +344,11 @@ function actionTypeToTitle(type: string): string {
 
 export function mapCampaignEvolutionToViewModel(result: CampaignEvolutionResult): EvolutionViewModel {
   const stateTag = scenarioToStateTag(result.scenario);
-  const summarySentence = buildAuthorSummary(result);
 
   // Build top actions: merge suggestions + nextCampaignRecommendations, take top 3
   const fromSuggestions = result.suggestions.map(suggestionToAction);
   const fromRecs = result.nextCampaignRecommendations.map(recToAction);
 
-  // Deduplicate: if a suggestion is already "create_campaign" and a rec also is, prefer the rec (more detailed)
   const allActions = [...fromSuggestions];
   for (const rec of fromRecs) {
     const exists = allActions.some(
@@ -284,11 +357,14 @@ export function mapCampaignEvolutionToViewModel(result: CampaignEvolutionResult)
     if (!exists) allActions.push(rec);
   }
 
-  // Sort by priority (suggestions have numeric priority, recs don't — put recs after)
   const topActions = allActions.slice(0, 3);
 
   return {
-    summarySentence,
+    topFocus: result.topFocus,
+    creationPlan: result.creationPlan,
+    gaps: result.gaps || [],
+    lifecycleDetected: result.lifecycleDetected,
+    summarySentence: result.topFocus.summary,
     scenarioLabel: scenarioToLabel(result.scenario),
     stateTag,
     topActions,

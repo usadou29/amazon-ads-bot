@@ -825,4 +825,41 @@ export class AmazonClientService {
       return { success: false, error: err.message };
     }
   }
+
+  /**
+   * Update campaign state (PAUSED / ENABLED) via Amazon SP API
+   */
+  async updateCampaignState(
+    adAccountId: string,
+    profileId: number,
+    marketplace: Marketplace,
+    amazonCampaignId: number,
+    state: 'paused' | 'enabled',
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.createApiClient(adAccountId, profileId, marketplace);
+
+      const body = {
+        campaigns: [{
+          campaignId: amazonCampaignId.toString(),
+          state,
+        }],
+      };
+
+      const response = await retryWithBackoff(async () => {
+        return client.put('/sp/campaigns', body, {
+          headers: {
+            Accept: AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+            'Content-Type': AMAZON_CONFIG.API_VERSION.CAMPAIGNS,
+          },
+        });
+      });
+
+      this.logger.log(`[UPDATE-STATE] Campaign ${amazonCampaignId} state updated to ${state}`);
+      return { success: true };
+    } catch (err: any) {
+      this.logger.error(`[UPDATE-STATE] Failed to update campaign state: ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
 }

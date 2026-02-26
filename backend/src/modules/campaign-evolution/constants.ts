@@ -121,3 +121,47 @@ export const BID_GUARDS = {
   absoluteMin: 0.10,
   absoluteMax: 5.00,
 } as const;
+
+// ── Gap Detection Thresholds ────────────────────────────────
+
+/**
+ * Severity of each gap type depends on lifecycle phase.
+ * 'critical' = blocks growth, 'high' = significant, 'medium' = nice to have, 'low' = future
+ */
+export const GAP_SEVERITY_MATRIX: Record<string, Record<string, 'critical' | 'high' | 'medium' | 'low'>> = {
+  GAP_EXPLORATION: { launch: 'critical', scale: 'high', evergreen: 'high', relaunch: 'critical' },
+  GAP_VALIDATION:  { launch: 'high',     scale: 'critical', evergreen: 'critical', relaunch: 'high' },
+  GAP_AMPLIFICATION: { launch: 'low',    scale: 'high', evergreen: 'high', relaunch: 'medium' },
+  GAP_DIVERSIFICATION: { launch: 'low',  scale: 'medium', evergreen: 'high', relaunch: 'low' },
+  GAP_VIDEO:       { launch: 'low',      scale: 'low', evergreen: 'medium', relaunch: 'low' },
+  GAP_CLEANUP:     { launch: 'medium',   scale: 'high', evergreen: 'high', relaunch: 'high' },
+};
+
+/** Duplication threshold above which we detect GAP_CLEANUP */
+export const GAP_CLEANUP_DUPLICATION_THRESHOLD = 0.4;
+
+/** Chaos threshold above which we detect GAP_CLEANUP */
+export const GAP_CLEANUP_CHAOS_THRESHOLD = 0.5;
+
+// ── Harvest Config ─────────────────────────────────────────
+
+/** Minimum winner keywords before accepting harvest (otherwise fallback to wider window) */
+export const HARVEST_MIN_KEYWORDS = 3;
+
+/** Harvest windows in days, tried in order until HARVEST_MIN_KEYWORDS met */
+export const HARVEST_WINDOWS = [7, 14, 30, 60] as const;
+
+/** Strategic period per lifecycle phase (base window for harvest) */
+export const LIFECYCLE_STRATEGIC_DAYS: Record<string, number> = {
+  launch: 7,
+  scale: 14,
+  evergreen: 30,
+  relaunch: 14,
+};
+
+// ── Pause Batch Config ──────────────────────────────────────
+
+export const PAUSE_BATCH_CONFIG = {
+  maxPerBatch: 20,
+  cooldownMs: 2000,
+} as const;

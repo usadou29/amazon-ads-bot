@@ -216,3 +216,86 @@ export interface CreateFromPlanDto {
 
 export const createCampaignFromPlan = (dto: CreateFromPlanDto) =>
   api.post('/campaigns/create-from-plan', dto, { timeout: 60000 }).then((r) => r.data);
+
+// ── Batch Create from CreationPlan ────────────────
+
+export interface BatchCreateFromPlanDto {
+  workspaceId: string;
+  bookId: string;
+  planId: string;
+  fingerprint: string;
+  lifecyclePhase?: string;
+  campaigns: Array<{
+    name: string;
+    type: string;
+    targetingMode: 'AUTO' | 'MANUAL';
+    dailyBudget: number;
+    biddingStrategy: string;
+    seedKeywords?: string[];
+    seedAsins?: string[];
+    notesWhy: string;
+  }>;
+  overrides?: Array<{
+    index: number;
+    dailyBudget?: number;
+    biddingStrategy?: string;
+    seedKeywords?: string[];
+    skip?: boolean;
+  }>;
+}
+
+export const createBatchFromPlan = (dto: BatchCreateFromPlanDto) =>
+  api.post('/campaigns/create-batch-from-plan', dto, { timeout: 120000 }).then((r) => r.data);
+
+// ── Pause Batch ─────────────────────────────────
+
+export interface PauseBatchDto {
+  workspaceId: string;
+  bookId: string;
+  campaignIds: string[];
+  reason: string;
+}
+
+export interface PauseBatchResult {
+  total: number;
+  paused: number;
+  failed: number;
+  results: Array<{
+    campaignId: string;
+    success: boolean;
+    error?: string;
+  }>;
+}
+
+export const pauseBatchCampaigns = (dto: PauseBatchDto) =>
+  api.post('/campaigns/pause-batch', dto, { timeout: 60000 }).then((r) => r.data);
+
+// ── Creation Plan (on-demand, recalculable) ────────────────────
+export interface CreationPlanRequestDto {
+  bookId: string;
+  workspaceId: string;
+  lifecyclePhaseOverride?: string;
+  forceRebuild?: boolean;
+}
+
+export const getCreationPlan = (dto: CreationPlanRequestDto) =>
+  api.post('/campaign-evolution/creation-plan', dto, { timeout: 60000 }).then((r) => r.data);
+
+// ── Pause All For Book ─────────────────────────────────────────
+export interface PauseAllForBookDto {
+  workspaceId: string;
+  bookId: string;
+  reason?: string;
+}
+
+export interface PauseAllForBookResult {
+  totalActive: number;
+  totalPaused: number;
+  totalFailed: number;
+  totalAlreadyPaused: number;
+  totalBudgetSaved: number;
+  failedCampaigns: Array<{ campaignId: string; name: string; error: string }>;
+}
+
+export const pauseAllForBook = (dto: PauseAllForBookDto): Promise<PauseAllForBookResult> =>
+  api.post('/campaigns/pause-all-for-book', dto, { timeout: 120000 }).then((r) => r.data);

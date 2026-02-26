@@ -11,6 +11,7 @@ import {
 } from '@/db/schema';
 import { eq, and, inArray, gte, lte } from 'drizzle-orm';
 import { InsightsService } from '@/modules/insights/insights.service';
+import { LifecycleService } from '@/modules/lifecycle/lifecycle.service';
 import { GUARDS } from '@/config/guards';
 
 import { StructureAnalyzerService } from './services/structure-analyzer.service';
@@ -18,6 +19,9 @@ import { CampaignClassifierService } from './services/campaign-classifier.servic
 import { ScenarioSelectorService } from './services/scenario-selector.service';
 import { MaturityScorerService } from './services/maturity-scorer.service';
 import { RoadmapGeneratorService } from './services/roadmap-generator.service';
+import { TopFocusService } from './services/top-focus.service';
+import { GapDetectorService } from './services/gap-detector.service';
+import { HarvestService } from './services/harvest.service';
 
 import type {
   CampaignEvolutionResult,
@@ -29,6 +33,10 @@ import type {
   InsightMetrics,
   ScenarioContext,
   EvolutionContext,
+  TopFocusContext,
+  StructuralGap,
+  LifecycleDetection,
+  CreationPlanResponse,
 } from './campaign-evolution.types';
 
 @Injectable()
@@ -38,11 +46,15 @@ export class CampaignEvolutionService {
   constructor(
     @Inject(DATABASE_CONNECTION) private readonly db: any,
     private readonly insightsService: InsightsService,
+    private readonly lifecycleService: LifecycleService,
     private readonly structureAnalyzer: StructureAnalyzerService,
     private readonly campaignClassifier: CampaignClassifierService,
     private readonly scenarioSelector: ScenarioSelectorService,
     private readonly maturityScorer: MaturityScorerService,
     private readonly roadmapGenerator: RoadmapGeneratorService,
+    private readonly topFocusService: TopFocusService,
+    private readonly gapDetector: GapDetectorService,
+    private readonly harvestService: HarvestService,
   ) {}
 
   // ── Main Entry Point ──────────────────────────────────────────
@@ -142,17 +154,48 @@ export class CampaignEvolutionService {
       namingConsistency,
     );
 
-    // 14. Roadmap
+    // 14. Context stats (enriched with spend/sales)
+    const context = this.buildContext(activeCampaigns, entityInsightsMap, bookContext);
+
+    // 15. Gap Detection (before TopFocus and Roadmap so they can use gaps)
+    const topFocusCtx: TopFocusContext = {
+      scenario,
+      bookContext,
+      campaigns: activeCampaigns,
+      entityInsightsMap,
+      duplicationScore,
+      chaosScore,
+      campaignRoles,
+      maturityScore: maturity.total,
+      context,
+      gaps: [], // will be filled below
+    };
+
+    const gaps = this.gapDetector.detectGaps(topFocusCtx);
+    topFocusCtx.gaps = gaps;
+
+    // 16. Roadmap (now with gaps + entityInsightsMap)
     const roadmap = this.roadmapGenerator.generateRoadmap({
       scenario,
       bookContext,
       suggestions,
       campaigns: activeCampaigns,
       campaignRoles,
+      entityInsightsMap,
+      gaps,
     });
 
-    // 15. Context stats
-    const context = this.buildContext(activeCampaigns, entityInsightsMap, bookContext);
+    // 17. Top Focus + Creation Plan (gap-aware)
+    const topFocus = this.topFocusService.computeTopFocus(topFocusCtx);
+    const creationPlan = this.topFocusService.generateCreationPlan(topFocusCtx);
+
+    // Link planId to CTA if plan exists
+    if (creationPlan && topFocus.primaryCta.intent === 'CREATE') {
+      topFocus.primaryCta.planId = creationPlan.planId;
+    }
+
+    // 18. Lifecycle detection (enriched)
+    const lifecycleDetected = await this.detectLifecycle(bookId, bookContext);
 
     return {
       bookId,
@@ -167,6 +210,10 @@ export class CampaignEvolutionService {
       duplicationScore: Math.round(duplicationScore * 100) / 100,
       chaosScore: Math.round(chaosScore * 100) / 100,
       scenario,
+      topFocus,
+      creationPlan,
+      gaps,
+      lifecycleDetected,
       campaignRoles,
       structuralIssues,
       suggestions,
@@ -174,6 +221,139 @@ export class CampaignEvolutionService {
       nextCampaignRecommendations,
       diversificationOpportunities,
       context,
+    };
+  }
+
+  // ── Lifecycle Detection ────────────────────────────────────────
+
+  private async detectLifecycle(bookId: string, bookContext: BookContext): Promise<LifecycleDetection> {
+    try {
+      const result = await this.lifecycleService.computePhase(bookId);
+      const evidence = result.evidence || {};
+
+      // Compute confidence from evidence strength
+      let confidence = 0.6; // base
+      if (evidence.daysSincePublish !== undefined) {
+        if (evidence.daysSincePublish > 180 && result.phase === 'evergreen') confidence += 0.2;
+        if (evidence.daysSincePublish < 30 && result.phase === 'launch') confidence += 0.2;
+        if (evidence.daysSincePublish >= 30 && evidence.daysSincePublish <= 180 && result.phase === 'scale') confidence += 0.15;
+      }
+      if (evidence.ordersTotal30d !== undefined && evidence.ordersTotal30d > 10) confidence += 0.1;
+      confidence = Math.min(confidence, 1.0);
+
+      return {
+        phase: result.phase,
+        confidence: Math.round(confidence * 100) / 100,
+        reasonBullets: result.explanation || [],
+      };
+    } catch (err) {
+      this.logger.warn(`Lifecycle detection failed for book ${bookId}: ${err}`);
+      return {
+        phase: bookContext.lifecyclePhase || 'launch',
+        confidence: 0.5,
+        reasonBullets: ['Phase déterminée à partir du profil du livre'],
+      };
+    }
+  }
+
+  // ── On-demand Creation Plan ───────────────────────────────────
+
+  async generateCreationPlan(
+    bookId: string,
+    workspaceId: string,
+    lifecyclePhaseOverride?: string,
+    forceRebuild?: boolean,
+  ): Promise<CreationPlanResponse> {
+    this.logger.log(`Generating creation plan for book ${bookId} (override=${lifecyclePhaseOverride}, forceRebuild=${forceRebuild})`);
+
+    // 1. Load book context
+    const bookContext = await this.loadBookContext(bookId);
+    if (lifecyclePhaseOverride) {
+      bookContext.lifecyclePhase = lifecyclePhaseOverride;
+    }
+
+    // 2. Load campaign graph + diagnostics
+    const graph = await this.loadCampaignGraph(bookId);
+    const activeCampaigns = graph.campaigns.filter(c => c.state !== 'archived');
+    const { entityInsightsMap, macroStrategies } = await this.loadDiagnostics(activeCampaigns, bookContext);
+
+    // 3. Structure analysis
+    const duplicationScore = this.structureAnalyzer.computeDuplicationScore(activeCampaigns);
+    const chaosScore = this.structureAnalyzer.computeChaosScore(activeCampaigns);
+
+    // 4. Campaign classification
+    const campaignRoles = this.campaignClassifier.classifyCampaigns(activeCampaigns, entityInsightsMap, macroStrategies);
+
+    // 5. Maturity
+    const namingConsistency = this.structureAnalyzer.namingConsistencyComponent(activeCampaigns.map(c => c.name));
+    const maturity = this.maturityScorer.computeMaturityScore(activeCampaigns, campaignRoles, entityInsightsMap, duplicationScore, chaosScore, namingConsistency);
+
+    // 6. Context + scenario
+    const context = this.buildContext(activeCampaigns, entityInsightsMap, bookContext);
+    const scenario = this.scenarioSelector.selectScenario(activeCampaigns, duplicationScore, chaosScore, entityInsightsMap);
+
+    // 7. Build TopFocusContext
+    const topFocusCtx: TopFocusContext = {
+      scenario: forceRebuild ? scenario : scenario, // Keep scenario but force gaps
+      bookContext,
+      campaigns: activeCampaigns,
+      entityInsightsMap,
+      duplicationScore,
+      chaosScore,
+      campaignRoles,
+      maturityScore: maturity.total,
+      context,
+      gaps: [],
+    };
+
+    // 8. Detect gaps (if forceRebuild, we still detect them but treat plan as always needed)
+    const gaps = this.gapDetector.detectGaps(topFocusCtx);
+    topFocusCtx.gaps = gaps;
+
+    // 9. Harvest seeds
+    const harvestedAssets = await this.harvestService.harvestAsync(topFocusCtx);
+
+    // 10. Generate creation plan (always, even if no gaps — forceRebuild scenario)
+    let creationPlan = this.topFocusService.generateCreationPlan(topFocusCtx);
+
+    // If forceRebuild and no plan was generated (everything looks fine), force a basic plan
+    if (forceRebuild && !creationPlan) {
+      creationPlan = this.topFocusService.generateCreationPlan({
+        ...topFocusCtx,
+        // Force at least exploration gap if nothing found
+        gaps: gaps.length > 0 ? gaps : [{
+          type: 'GAP_EXPLORATION' as any,
+          severity: 'high' as any,
+          label: 'Rebuild forcé',
+          explanation: 'Rebuild manuel demandé par l\'auteur.',
+          campaignsToCreate: ['SP_AUTO' as any],
+        }],
+      });
+    }
+
+    // 11. Inject harvested seeds into creation plan
+    if (creationPlan && harvestedAssets.winnerKeywords.length > 0) {
+      for (const campaign of creationPlan.campaignsToCreate) {
+        if (campaign.targetingMode === 'MANUAL' && (!campaign.seedKeywords || campaign.seedKeywords.length === 0)) {
+          campaign.seedKeywords = harvestedAssets.winnerKeywords.map(w => w.text);
+        }
+      }
+    }
+
+    // 12. Roadmap
+    const suggestions = this.scenarioSelector.generateSuggestions({
+      bookContext, campaigns: activeCampaigns, entityInsightsMap, macroStrategies, duplicationScore, chaosScore, campaignRoles,
+    });
+    const roadmap = this.roadmapGenerator.generateRoadmap({
+      scenario, bookContext, suggestions, campaigns: activeCampaigns, campaignRoles, entityInsightsMap, gaps,
+    });
+
+    return {
+      creationPlan: creationPlan!,
+      roadmap,
+      gaps,
+      harvestedAssets,
+      lifecycleUsed: bookContext.lifecyclePhase,
     };
   }
 
@@ -195,7 +375,6 @@ export class CampaignEvolutionService {
   }
 
   private async loadCampaignGraph(bookId: string): Promise<CampaignGraph> {
-    // 1. Get campaign IDs mapped to this book
     const mappings = await this.db
       .select({ campaignId: campaignBookMapping.campaignId })
       .from(campaignBookMapping)
@@ -204,13 +383,11 @@ export class CampaignEvolutionService {
     const campaignIds = mappings.map((m: any) => m.campaignId);
     if (campaignIds.length === 0) return { campaigns: [] };
 
-    // 2. Load campaigns
     const allCampaigns = await this.db
       .select()
       .from(campaigns)
       .where(inArray(campaigns.id, campaignIds));
 
-    // 3. Load ad groups for all campaigns
     const allAdGroups = await this.db
       .select()
       .from(adGroups)
@@ -218,7 +395,6 @@ export class CampaignEvolutionService {
 
     const adGroupIds = allAdGroups.map((ag: any) => ag.id);
 
-    // 4. Load keywords and targets for all ad groups
     const [allKeywords, allTargets] = await Promise.all([
       adGroupIds.length > 0
         ? this.db.select().from(keywords).where(inArray(keywords.adGroupId, adGroupIds))
@@ -228,7 +404,6 @@ export class CampaignEvolutionService {
         : [],
     ]);
 
-    // 5. Index by parent ID
     const agsByCampaign = new Map<string, any[]>();
     for (const ag of allAdGroups) {
       if (!agsByCampaign.has(ag.campaignId)) agsByCampaign.set(ag.campaignId, []);
@@ -247,7 +422,6 @@ export class CampaignEvolutionService {
       tgsByAdGroup.get(tg.adGroupId)!.push(tg);
     }
 
-    // 6. Assemble graph
     const result: CampaignWithEntities[] = allCampaigns.map((c: any) => {
       const campaignAgs = agsByCampaign.get(c.id) || [];
       return {
@@ -300,7 +474,6 @@ export class CampaignEvolutionService {
     const lifecyclePhase = bookContext.lifecyclePhase as any;
     const periodDays = GUARDS.STRATEGIC_PERIOD_BY_PHASE[lifecyclePhase] || 14;
 
-    // Collect all entity keys to batch-fetch metrics
     const allEntityKeys: string[] = [];
     const entityKeyToCampaign = new Map<string, string>();
 
@@ -330,7 +503,6 @@ export class CampaignEvolutionService {
       return { entityInsightsMap, macroStrategies };
     }
 
-    // Batch fetch metrics
     const endDate = new Date().toISOString().split('T')[0];
     const startDate = new Date(Date.now() - periodDays * 86400000).toISOString().split('T')[0];
 
@@ -352,7 +524,6 @@ export class CampaignEvolutionService {
         ),
       );
 
-    // Aggregate metrics by entity key
     const metricsByKey = new Map<string, InsightMetrics>();
     for (const row of rawRows) {
       const existing = metricsByKey.get(row.entityKey) || {
@@ -370,7 +541,6 @@ export class CampaignEvolutionService {
       metricsByKey.set(row.entityKey, existing);
     }
 
-    // Compute insights per entity
     const insightsByEntity = new Map<string, EntityInsight>();
     for (const campaign of activeCampaigns) {
       for (const ag of campaign.adGroups) {
@@ -403,7 +573,6 @@ export class CampaignEvolutionService {
       }
     }
 
-    // Group insights by campaign ID
     for (const campaign of activeCampaigns) {
       const campaignInsights: EntityInsight[] = [];
       for (const ag of campaign.adGroups) {
@@ -422,8 +591,6 @@ export class CampaignEvolutionService {
       }
 
       entityInsightsMap.set(campaign.id, campaignInsights);
-
-      // Compute macro strategy from entity insights
       const macro = this.insightsService.getCampaignMacroStrategy(campaignInsights);
       macroStrategies.set(campaign.id, macro);
     }
@@ -431,7 +598,7 @@ export class CampaignEvolutionService {
     return { entityInsightsMap, macroStrategies };
   }
 
-  // ── Context Builder ───────────────────────────────────────────
+  // ── Context Builder (enriched) ─────────────────────────────────
 
   private buildContext(
     campaigns: CampaignWithEntities[],
@@ -443,6 +610,8 @@ export class CampaignEvolutionService {
     let totalAdGroups = 0;
     let totalWinnerKeywords = 0;
     let totalBoostCandidateKeywords = 0;
+    let totalSpend = 0;
+    let totalSales = 0;
 
     for (const c of campaigns) {
       totalAdGroups += c.adGroups.length;
@@ -456,8 +625,12 @@ export class CampaignEvolutionService {
       for (const insight of insights) {
         if (insight.diagnosisCode === 'winner') totalWinnerKeywords++;
         if (insight.diagnosisCode === 'boost_candidate') totalBoostCandidateKeywords++;
+        totalSpend += insight.summaryFacts.spend || 0;
+        totalSales += insight.summaryFacts.sales || 0;
       }
     }
+
+    const avgAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 0;
 
     return {
       lifecyclePhase: bookContext.lifecyclePhase,
@@ -467,6 +640,9 @@ export class CampaignEvolutionService {
       totalProductTargets,
       totalWinnerKeywords,
       totalBoostCandidateKeywords,
+      avgAcos: Math.round(avgAcos * 10) / 10,
+      totalSpend30d: Math.round(totalSpend * 100) / 100,
+      totalSales30d: Math.round(totalSales * 100) / 100,
     };
   }
 }

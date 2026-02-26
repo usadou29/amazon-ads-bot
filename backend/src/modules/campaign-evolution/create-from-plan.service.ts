@@ -17,7 +17,9 @@ import {
   LIFECYCLE_DEFAULTS,
   BUDGET_GUARDS,
   BID_GUARDS,
+  PAUSE_BATCH_CONFIG,
 } from './constants';
+import type { PauseBatchDto, PauseBatchResult, PauseAllForBookResult } from './campaign-evolution.types';
 
 // ── DTOs ────────────────────────────────────────────────────────
 
@@ -48,6 +50,64 @@ export interface CreateFromPlanResult {
   message: string;
   alreadyCreated?: boolean;
   existingCampaignLink?: string;
+}
+
+// ── Batch DTOs ───────────────────────────────────────────────
+
+export interface BatchCampaignOverride {
+  /** Index in the creationPlan.campaignsToCreate array */
+  index: number;
+  /** Override daily budget (optional) */
+  dailyBudget?: number;
+  /** Override bidding strategy (optional) */
+  biddingStrategy?: string;
+  /** Override seed keywords (optional) */
+  seedKeywords?: string[];
+  /** Skip this campaign (optional) */
+  skip?: boolean;
+}
+
+export interface BatchCreateFromPlanDto {
+  workspaceId: string;
+  bookId: string;
+  planId: string;
+  fingerprint: string;
+  lifecyclePhase?: string;
+  /** Campaign definitions from creationPlan */
+  campaigns: Array<{
+    name: string;
+    type: string;
+    targetingMode: 'AUTO' | 'MANUAL';
+    dailyBudget: number;
+    biddingStrategy: string;
+    seedKeywords?: string[];
+    seedAsins?: string[];
+    notesWhy: string;
+  }>;
+  /** Optional overrides per campaign */
+  overrides?: BatchCampaignOverride[];
+}
+
+export interface BatchCampaignResult {
+  index: number;
+  name: string;
+  success: boolean;
+  amazonCampaignId?: number;
+  dbCampaignId?: string;
+  message: string;
+  alreadyCreated?: boolean;
+  skipped?: boolean;
+}
+
+export interface BatchCreateFromPlanResult {
+  planId: string;
+  fingerprint: string;
+  totalRequested: number;
+  totalCreated: number;
+  totalSkipped: number;
+  totalFailed: number;
+  results: BatchCampaignResult[];
+  message: string;
 }
 
 // ── Error types for granular handling ─────────────────────────
@@ -258,6 +318,212 @@ export class CreateFromPlanService {
     } finally {
       // Always release lock
       this.releaseLock(fingerprint);
+    }
+  }
+
+  // ── Batch Entry Point ────────────────────────────────────────
+
+  async createBatchFromPlan(dto: BatchCreateFromPlanDto): Promise<BatchCreateFromPlanResult> {
+    if (!dto.workspaceId) throw new BadRequestException('workspaceId requis');
+    if (!dto.bookId) throw new BadRequestException('bookId requis');
+    if (!dto.planId) throw new BadRequestException('planId requis');
+    if (!dto.campaigns || dto.campaigns.length === 0) throw new BadRequestException('Aucune campagne dans le plan');
+    if (dto.campaigns.length > 10) throw new BadRequestException('Maximum 10 campagnes par batch');
+
+    // Check plan-level idempotence
+    const planFingerprint = `plan:${dto.planId}:${dto.fingerprint}`;
+    if (this.isLocked(planFingerprint)) {
+      throw new ConflictException('Une création batch est déjà en cours pour ce plan. Patientez.');
+    }
+
+    const existingPlan = await this.checkIdempotence(planFingerprint, dto.workspaceId);
+    if (existingPlan) {
+      this.logger.warn(`Batch idempotent hit: plan ${dto.planId} already executed`);
+      return {
+        planId: dto.planId,
+        fingerprint: dto.fingerprint,
+        totalRequested: dto.campaigns.length,
+        totalCreated: 0,
+        totalSkipped: dto.campaigns.length,
+        totalFailed: 0,
+        results: dto.campaigns.map((c, i) => ({
+          index: i,
+          name: c.name,
+          success: true,
+          message: 'Déjà créé précédemment',
+          alreadyCreated: true,
+        })),
+        message: 'Ce plan a déjà été exécuté — aucun doublon créé.',
+      };
+    }
+
+    this.acquireLock(planFingerprint);
+
+    const results: BatchCampaignResult[] = [];
+    let totalCreated = 0;
+    let totalSkipped = 0;
+    let totalFailed = 0;
+
+    try {
+      // Apply overrides
+      const overridesMap = new Map<number, BatchCampaignOverride>();
+      if (dto.overrides) {
+        for (const ov of dto.overrides) {
+          overridesMap.set(ov.index, ov);
+        }
+      }
+
+      // Create campaigns sequentially (Amazon rate limits)
+      for (let i = 0; i < dto.campaigns.length; i++) {
+        const campaign = dto.campaigns[i];
+        const override = overridesMap.get(i);
+
+        // Skip if user opted out
+        if (override?.skip) {
+          results.push({
+            index: i,
+            name: campaign.name,
+            success: true,
+            message: 'Ignorée par l\'utilisateur',
+            skipped: true,
+          });
+          totalSkipped++;
+          continue;
+        }
+
+        // Apply overrides
+        const effectiveBudget = override?.dailyBudget ?? campaign.dailyBudget;
+        const effectiveKeywords = override?.seedKeywords ?? campaign.seedKeywords;
+
+        // Map CampaignToCreate types to CreateFromPlanDto
+        const matchTypes = this.typeToMatchTypes(campaign.type);
+        const targetingType = campaign.targetingMode === 'AUTO' ? 'auto' : 'manual';
+
+        const singleDto: CreateFromPlanDto = {
+          workspaceId: dto.workspaceId,
+          bookId: dto.bookId,
+          planActionType: 'create_campaign',
+          planPayload: {
+            campaignType: 'sponsoredProducts',
+            targetingType,
+            matchTypes,
+            dailyBudget: effectiveBudget,
+            keywords: effectiveKeywords || [],
+            asins: campaign.seedAsins || [],
+          },
+          lifecyclePhase: dto.lifecyclePhase,
+        };
+
+        try {
+          const result = await this.createCampaignFromPlan(singleDto);
+          results.push({
+            index: i,
+            name: result.campaignName,
+            success: true,
+            amazonCampaignId: result.amazonCampaignId,
+            dbCampaignId: result.dbCampaignId,
+            message: result.message,
+            alreadyCreated: result.alreadyCreated,
+          });
+          if (result.alreadyCreated) {
+            totalSkipped++;
+          } else {
+            totalCreated++;
+          }
+        } catch (err: any) {
+          const msg = err?.response?.message || err?.message || 'Erreur inconnue';
+          results.push({
+            index: i,
+            name: campaign.name,
+            success: false,
+            message: msg,
+          });
+          totalFailed++;
+
+          // On 401/403 (token expired), stop the batch — no point retrying others
+          if (msg.includes('Authentification') || msg.includes('401') || msg.includes('403')) {
+            // Mark remaining as skipped
+            for (let j = i + 1; j < dto.campaigns.length; j++) {
+              results.push({
+                index: j,
+                name: dto.campaigns[j].name,
+                success: false,
+                message: 'Annulé — authentification expirée',
+                skipped: true,
+              });
+              totalFailed++;
+            }
+            break;
+          }
+        }
+      }
+
+      // Log batch action
+      await this.logBatchAction(dto, planFingerprint, results, totalCreated > 0 ? 'success' : 'failed');
+
+      const allOk = totalFailed === 0;
+      const message = allOk
+        ? `${totalCreated} campagne(s) créée(s) avec succès.`
+        : totalCreated > 0
+          ? `${totalCreated} créée(s), ${totalFailed} échouée(s). Vérifiez les détails.`
+          : `Aucune campagne créée — ${totalFailed} erreur(s).`;
+
+      return {
+        planId: dto.planId,
+        fingerprint: dto.fingerprint,
+        totalRequested: dto.campaigns.length,
+        totalCreated,
+        totalSkipped,
+        totalFailed,
+        results,
+        message,
+      };
+    } finally {
+      this.releaseLock(planFingerprint);
+    }
+  }
+
+  private typeToMatchTypes(type: string): string[] {
+    switch (type) {
+      case 'SP_MANUAL_EXACT': return ['exact'];
+      case 'SP_MANUAL_PHRASE': return ['phrase'];
+      case 'SP_MANUAL_BROAD': return ['broad'];
+      case 'SP_PRODUCT':
+      case 'SP_CATEGORY': return [];
+      case 'SP_AUTO': return [];
+      default: return [];
+    }
+  }
+
+  private async logBatchAction(
+    dto: BatchCreateFromPlanDto,
+    planFingerprint: string,
+    results: BatchCampaignResult[],
+    status: 'success' | 'failed',
+  ): Promise<void> {
+    try {
+      await this.db.insert(actionLog).values({
+        workspaceId: dto.workspaceId,
+        entityType: 'campaign',
+        entityKey: `fingerprint:${planFingerprint}`,
+        amazonEntityId: null,
+        actionType: 'create_from_plan',
+        beforeValue: null,
+        afterValue: {
+          planId: dto.planId,
+          fingerprint: dto.fingerprint,
+          results,
+        },
+        rationale: `Batch Plan: ${dto.planId}`,
+        executedBy: 'user',
+        status,
+        apiRequest: dto,
+        errorMessage: null,
+        isReversible: false,
+        dryRun: false,
+      });
+    } catch (err) {
+      this.logger.error('Failed to log batch action', err);
     }
   }
 
@@ -850,5 +1116,266 @@ export class CreateFromPlanService {
     } catch (err) {
       this.logger.error('Failed to log action', err);
     }
+  }
+
+  // ── Pause Batch ──────────────────────────────────────────────
+
+  async pauseBatch(dto: PauseBatchDto): Promise<PauseBatchResult> {
+    this.logger.log(`[PAUSE-BATCH] Pausing ${dto.campaignIds.length} campaigns for book ${dto.bookId}`);
+
+    const results: PauseBatchResult['results'] = [];
+    let totalPaused = 0;
+    let totalFailed = 0;
+
+    // Load campaign details to get Amazon IDs
+    const dbCampaigns = await this.db
+      .select()
+      .from(campaigns)
+      .where(inArray(campaigns.id, dto.campaignIds));
+
+    const campaignMap = new Map<string, any>();
+    for (const c of dbCampaigns) {
+      campaignMap.set(c.id, c);
+    }
+
+    // Load workspace profile info: adAccount → profile (marketplaceProfiles has no workspaceId)
+    const [adAccount] = await this.db
+      .select()
+      .from(adAccounts)
+      .where(eq(adAccounts.workspaceId, dto.workspaceId))
+      .limit(1);
+
+    if (!adAccount) {
+      throw new BadRequestException('No ad account found for workspace');
+    }
+
+    const [profile] = await this.db
+      .select()
+      .from(marketplaceProfiles)
+      .where(eq(marketplaceProfiles.adAccountId, adAccount.id))
+      .limit(1);
+
+    if (!profile) {
+      throw new BadRequestException('No marketplace profile found for workspace');
+    }
+
+    for (const campaignId of dto.campaignIds) {
+      const campaign = campaignMap.get(campaignId);
+      if (!campaign) {
+        results.push({
+          campaignId,
+          campaignName: 'Unknown',
+          success: false,
+          message: 'Campaign not found in database',
+        });
+        totalFailed++;
+        continue;
+      }
+
+      try {
+        const amazonCampaignId = campaign.amazonCampaignId;
+        if (!amazonCampaignId) {
+          results.push({
+            campaignId,
+            campaignName: campaign.name,
+            success: false,
+            message: 'No Amazon campaign ID',
+          });
+          totalFailed++;
+          continue;
+        }
+
+        const result = await this.amazonClient.updateCampaignState(
+          adAccount.id,
+          profile.profileId,
+          profile.marketplace,
+          Number(amazonCampaignId),
+          'paused',
+        );
+
+        if (result.success) {
+          // Update local state
+          await this.db.update(campaigns)
+            .set({ state: 'paused', updatedAt: new Date() })
+            .where(eq(campaigns.id, campaignId));
+
+          results.push({
+            campaignId,
+            campaignName: campaign.name,
+            success: true,
+            message: 'Paused',
+          });
+          totalPaused++;
+        } else {
+          results.push({
+            campaignId,
+            campaignName: campaign.name,
+            success: false,
+            message: result.error || 'Amazon API error',
+          });
+          totalFailed++;
+        }
+
+        // Cooldown between API calls
+        if (dto.campaignIds.indexOf(campaignId) < dto.campaignIds.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, PAUSE_BATCH_CONFIG.cooldownMs));
+        }
+      } catch (err: any) {
+        results.push({
+          campaignId,
+          campaignName: campaign.name,
+          success: false,
+          message: err.message || 'Unexpected error',
+        });
+        totalFailed++;
+      }
+    }
+
+    // Log action
+    try {
+      await this.db.insert(actionLog).values({
+        entityType: 'book',
+        entityId: dto.bookId,
+        actionType: 'pause_batch',
+        payload: {
+          campaignIds: dto.campaignIds,
+          reason: dto.reason,
+          totalPaused,
+          totalFailed,
+        },
+        rationale: `Pause batch: ${dto.reason}`,
+        executedBy: 'user',
+        status: totalFailed === 0 ? 'completed' : 'partial',
+        apiRequest: dto,
+        errorMessage: totalFailed > 0 ? `${totalFailed} failed` : null,
+        isReversible: true,
+        dryRun: false,
+      });
+    } catch (err) {
+      this.logger.error('Failed to log pause action', err);
+    }
+
+    return {
+      totalRequested: dto.campaignIds.length,
+      totalPaused,
+      totalFailed,
+      results,
+    };
+  }
+
+  // ── Pause All For Book ──────────────────────────────────────
+
+  async pauseAllForBook(
+    workspaceId: string,
+    bookId: string,
+    reason: string,
+  ): Promise<PauseAllForBookResult> {
+    this.logger.log(`[PAUSE-ALL] Pausing all active campaigns for book ${bookId}`);
+
+    // 1. Find all campaigns mapped to this book
+    const mappings = await this.db
+      .select({ campaignId: campaignBookMapping.campaignId })
+      .from(campaignBookMapping)
+      .where(eq(campaignBookMapping.bookId, bookId));
+
+    if (mappings.length === 0) {
+      return {
+        totalActive: 0,
+        totalPaused: 0,
+        totalFailed: 0,
+        totalAlreadyPaused: 0,
+        totalBudgetSaved: 0,
+        failedCampaigns: [],
+      };
+    }
+
+    const campaignIds = mappings.map((m: any) => m.campaignId);
+
+    // 2. Load all campaigns to check state
+    const allCampaigns = await this.db
+      .select()
+      .from(campaigns)
+      .where(inArray(campaigns.id, campaignIds));
+
+    const activeCampaigns = allCampaigns.filter(
+      (c: any) => c.state === 'enabled' || c.state === 'active',
+    );
+    const alreadyPaused = allCampaigns.filter(
+      (c: any) => c.state === 'paused',
+    );
+
+    if (activeCampaigns.length === 0) {
+      return {
+        totalActive: 0,
+        totalPaused: 0,
+        totalFailed: 0,
+        totalAlreadyPaused: alreadyPaused.length,
+        totalBudgetSaved: 0,
+        failedCampaigns: [],
+      };
+    }
+
+    // 3. Batch pause in chunks of PAUSE_BATCH_CONFIG.maxPerBatch
+    const activeCampaignIds = activeCampaigns.map((c: any) => c.id);
+    let totalPaused = 0;
+    let totalFailed = 0;
+    let totalBudgetSaved = 0;
+    const failedCampaigns: PauseAllForBookResult['failedCampaigns'] = [];
+
+    for (let i = 0; i < activeCampaignIds.length; i += PAUSE_BATCH_CONFIG.maxPerBatch) {
+      const chunk = activeCampaignIds.slice(i, i + PAUSE_BATCH_CONFIG.maxPerBatch);
+
+      try {
+        const result = await this.pauseBatch({
+          workspaceId,
+          bookId,
+          campaignIds: chunk,
+          reason,
+        });
+
+        totalPaused += result.totalPaused;
+        totalFailed += result.totalFailed;
+
+        for (const r of result.results) {
+          if (!r.success) {
+            failedCampaigns.push({
+              campaignId: r.campaignId,
+              name: r.campaignName,
+              error: r.message,
+            });
+          }
+        }
+      } catch (err: any) {
+        // Entire chunk failed
+        totalFailed += chunk.length;
+        for (const cId of chunk) {
+          const camp = activeCampaigns.find((c: any) => c.id === cId);
+          failedCampaigns.push({
+            campaignId: cId,
+            name: camp?.name || 'Unknown',
+            error: err.message || 'Batch pause failed',
+          });
+        }
+      }
+    }
+
+    // 4. Compute budget saved
+    for (const c of activeCampaigns) {
+      const budget = c.dailyBudget ? Number(c.dailyBudget) : 0;
+      // Only count if it was actually paused
+      const wasFailed = failedCampaigns.some(f => f.campaignId === c.id);
+      if (!wasFailed) {
+        totalBudgetSaved += budget;
+      }
+    }
+
+    return {
+      totalActive: activeCampaigns.length,
+      totalPaused,
+      totalFailed,
+      totalAlreadyPaused: alreadyPaused.length,
+      totalBudgetSaved: Math.round(totalBudgetSaved * 100) / 100,
+      failedCampaigns,
+    };
   }
 }

@@ -1,6 +1,6 @@
 /**
  * CampaignEvolutionEngine — Types & DTOs
- * Audit structurel, maturity score, roadmap 30 jours
+ * Audit structurel, maturity score, roadmap 30 jours, TopFocus, CreationPlan
  */
 
 import { type LifecyclePhase } from '@/db/schema/books';
@@ -21,6 +21,107 @@ export interface CampaignRoleAssignment {
   confidence: number; // 0-1
 }
 
+// ── Gap Detection ────────────────────────────────────────────
+
+export enum GapType {
+  GAP_EXPLORATION = 'GAP_EXPLORATION',       // Missing Auto campaign
+  GAP_VALIDATION = 'GAP_VALIDATION',         // Missing Exact/Phrase campaign
+  GAP_AMPLIFICATION = 'GAP_AMPLIFICATION',   // Winners not isolated in dedicated Exact
+  GAP_DIVERSIFICATION = 'GAP_DIVERSIFICATION', // No product targeting
+  GAP_VIDEO = 'GAP_VIDEO',                   // Eligible for SB Video but none exists
+  GAP_CLEANUP = 'GAP_CLEANUP',               // High duplication/chaos requiring cleanup
+}
+
+export type GapSeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export interface StructuralGap {
+  type: GapType;
+  severity: GapSeverity;
+  label: string;
+  explanation: string;
+  campaignsToCreate: CampaignPlanType[];
+}
+
+// ── Pause Strategy (for rebuild flows) ──────────────────────
+
+export interface CampaignToPause {
+  campaignId: string;
+  name: string;
+  reason: string;
+  harvestedKeywords?: string[];
+  harvestedAsins?: string[];
+}
+
+export interface PauseStrategy {
+  campaignsToPause: CampaignToPause[];
+  totalBudgetToSave: number;
+}
+
+// ── Harvested Assets (from HarvestService) ──────────────────
+
+export interface WinnerKeywordAsset {
+  text: string;
+  matchType: string;
+  acos?: number;
+  orders?: number;
+  campaignId: string;
+}
+
+export interface SearchTermAsset {
+  query: string;
+  count: number;
+}
+
+export interface HarvestedAssets {
+  winnerKeywords: WinnerKeywordAsset[];
+  winnerSearchTerms: SearchTermAsset[];
+  winnerAsins: string[];
+  suggestedNegatives: string[];
+  windowDays: number;
+}
+
+// ── Lifecycle Detection ─────────────────────────────────────
+
+export interface LifecycleDetection {
+  phase: string;
+  confidence: number;  // 0-1
+  reasonBullets: string[];
+}
+
+// ── Pause All For Book ──────────────────────────────────────
+
+export interface PauseAllForBookDto {
+  workspaceId: string;
+  bookId: string;
+  reason?: string;
+}
+
+export interface PauseAllForBookResult {
+  totalActive: number;
+  totalPaused: number;
+  totalFailed: number;
+  totalAlreadyPaused: number;
+  totalBudgetSaved: number;
+  failedCampaigns: Array<{ campaignId: string; name: string; error: string }>;
+}
+
+// ── Creation Plan Request (on-demand) ───────────────────────
+
+export interface CreationPlanRequestDto {
+  bookId: string;
+  workspaceId: string;
+  lifecyclePhaseOverride?: string;
+  forceRebuild?: boolean;
+}
+
+export interface CreationPlanResponse {
+  creationPlan: CreationPlan;
+  roadmap: RoadmapWeek[];
+  gaps: StructuralGap[];
+  harvestedAssets: HarvestedAssets;
+  lifecycleUsed: string;
+}
+
 // ── Scenarios ─────────────────────────────────────────────────
 
 export enum Scenario {
@@ -28,6 +129,69 @@ export enum Scenario {
   B = 'scenario_b_chaos_detected',
   C = 'scenario_c_winners_exist',
   STABLE = 'scenario_stable',
+}
+
+// ── Top Focus ─────────────────────────────────────────────────
+
+export type TopFocusTheme = 'VISIBILITE' | 'CONVERSION' | 'RENTABILITE' | 'STRUCTURE';
+export type CtaIntent = 'CREATE' | 'CLEANUP' | 'AMPLIFY' | 'OBSERVE';
+
+export interface TopFocusEvidence {
+  label: string;
+  value: string;
+}
+
+export interface TopFocusCta {
+  label: string;
+  intent: CtaIntent;
+  planId?: string; // if intent=CREATE, references creationPlan.planId
+}
+
+export interface TopFocus {
+  theme: TopFocusTheme;
+  title: string;
+  summary: string;
+  evidence: TopFocusEvidence[]; // max 2
+  primaryCta: TopFocusCta;
+}
+
+// ── Creation Plan ─────────────────────────────────────────────
+
+export type CampaignPlanType =
+  | 'SP_AUTO'
+  | 'SP_MANUAL_BROAD'
+  | 'SP_MANUAL_PHRASE'
+  | 'SP_MANUAL_EXACT'
+  | 'SP_PRODUCT'
+  | 'SP_CATEGORY'
+  | 'SB_VIDEO';
+
+export type BiddingStrategy = 'DOWN_ONLY' | 'UP_DOWN' | 'FIXED';
+
+export interface PlacementAdjustments {
+  topOfSearch: number;
+  restOfSearch: number;
+  productPages: number;
+}
+
+export interface CampaignToCreate {
+  name: string;
+  type: CampaignPlanType;
+  targetingMode: 'AUTO' | 'MANUAL';
+  dailyBudget: number;
+  biddingStrategy: BiddingStrategy;
+  placementAdjustments?: PlacementAdjustments;
+  seedKeywords?: string[];
+  seedAsins?: string[];
+  notesWhy: string; // 1 phrase auteur-friendly
+}
+
+export interface CreationPlan {
+  planId: string;
+  fingerprint: string;
+  campaignsToCreate: CampaignToCreate[];
+  gaps: GapType[];
+  pauseStrategy?: PauseStrategy;
 }
 
 // ── Structural Issues ─────────────────────────────────────────
@@ -73,10 +237,13 @@ export interface RoadmapAction {
   details: Record<string, any>;
   priority: 'high' | 'medium' | 'low';
   estimatedDurationHours?: number;
+  why: string;
+  impact: string;
 }
 
 export interface RoadmapWeek {
   week: number; // 1-4
+  title: string;
   actions: RoadmapAction[];
 }
 
@@ -124,6 +291,12 @@ export interface CampaignEvolutionResult {
   chaosScore: number;       // 0-1
   scenario: Scenario;
 
+  // ── New: Top Focus ──
+  topFocus: TopFocus;
+  creationPlan?: CreationPlan;
+  gaps: StructuralGap[];
+  lifecycleDetected: LifecycleDetection;
+
   campaignRoles: CampaignRoleAssignment[];
   structuralIssues: StructuralIssue[];
   suggestions: StructuralSuggestion[];
@@ -142,6 +315,9 @@ export interface EvolutionContext {
   totalProductTargets: number;
   totalWinnerKeywords: number;
   totalBoostCandidateKeywords: number;
+  avgAcos?: number;
+  totalSpend30d?: number;
+  totalSales30d?: number;
 }
 
 // ── Internal types for data passing ───────────────────────────
@@ -214,4 +390,42 @@ export interface RoadmapContext {
   suggestions: StructuralSuggestion[];
   campaigns: CampaignWithEntities[];
   campaignRoles: CampaignRoleAssignment[];
+  entityInsightsMap?: Map<string, EntityInsight[]>;
+  gaps?: StructuralGap[];
+}
+
+// ── Pause Batch DTO ─────────────────────────────────────────
+
+export interface PauseBatchDto {
+  workspaceId: string;
+  bookId: string;
+  campaignIds: string[];
+  reason: string;
+}
+
+export interface PauseBatchResult {
+  totalRequested: number;
+  totalPaused: number;
+  totalFailed: number;
+  results: Array<{
+    campaignId: string;
+    campaignName: string;
+    success: boolean;
+    message: string;
+  }>;
+}
+
+// ── TopFocus Context (for TopFocusService) ────────────────────
+
+export interface TopFocusContext {
+  scenario: Scenario;
+  bookContext: BookContext;
+  campaigns: CampaignWithEntities[];
+  entityInsightsMap: Map<string, EntityInsight[]>;
+  duplicationScore: number;
+  chaosScore: number;
+  campaignRoles: CampaignRoleAssignment[];
+  maturityScore: number;
+  context: EvolutionContext;
+  gaps: StructuralGap[];
 }
