@@ -7,11 +7,15 @@ import { CampaignClassifierService } from './services/campaign-classifier.servic
 import { ScenarioSelectorService } from './services/scenario-selector.service';
 import { MaturityScorerService } from './services/maturity-scorer.service';
 import { RoadmapGeneratorService } from './services/roadmap-generator.service';
+import { TopFocusService } from './services/top-focus.service';
+import { GapDetectorService } from './services/gap-detector.service';
+import { HarvestService } from './services/harvest.service';
 import { InsightsModule } from '@/modules/insights/insights.module';
 import { AmazonClientModule } from '@/modules/amazon-client/amazon-client.module';
+import { LifecycleModule } from '@/modules/lifecycle/lifecycle.module';
 
 @Module({
-  imports: [InsightsModule, AmazonClientModule],
+  imports: [InsightsModule, AmazonClientModule, LifecycleModule],
   controllers: [CampaignEvolutionController],
   providers: [
     CampaignEvolutionService,
@@ -21,6 +25,9 @@ import { AmazonClientModule } from '@/modules/amazon-client/amazon-client.module
     ScenarioSelectorService,
     MaturityScorerService,
     RoadmapGeneratorService,
+    TopFocusService,
+    GapDetectorService,
+    HarvestService,
   ],
   exports: [CampaignEvolutionService, CreateFromPlanService],
 })

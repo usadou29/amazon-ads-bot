@@ -121,3 +121,158 @@ export const BID_GUARDS = {
   absoluteMin: 0.10,
   absoluteMax: 5.00,
 } as const;
+
+// ── Gap Detection Thresholds ────────────────────────────────
+
+/**
+ * Severity of each gap type depends on lifecycle phase.
+ * 'critical' = blocks growth, 'high' = significant, 'medium' = nice to have, 'low' = future
+ */
+export const GAP_SEVERITY_MATRIX: Record<string, Record<string, 'critical' | 'high' | 'medium' | 'low'>> = {
+  GAP_EXPLORATION: { launch: 'critical', scale: 'high', evergreen: 'high', relaunch: 'critical' },
+  GAP_VALIDATION:  { launch: 'high',     scale: 'critical', evergreen: 'critical', relaunch: 'high' },
+  GAP_AMPLIFICATION: { launch: 'low',    scale: 'high', evergreen: 'high', relaunch: 'medium' },
+  GAP_DIVERSIFICATION: { launch: 'low',  scale: 'medium', evergreen: 'high', relaunch: 'low' },
+  GAP_VIDEO:       { launch: 'low',      scale: 'low', evergreen: 'medium', relaunch: 'low' },
+  GAP_CLEANUP:     { launch: 'medium',   scale: 'high', evergreen: 'high', relaunch: 'high' },
+};
+
+/** Duplication threshold above which we detect GAP_CLEANUP */
+export const GAP_CLEANUP_DUPLICATION_THRESHOLD = 0.4;
+
+/** Chaos threshold above which we detect GAP_CLEANUP */
+export const GAP_CLEANUP_CHAOS_THRESHOLD = 0.5;
+
+// ── Harvest Config ─────────────────────────────────────────
+
+/** Minimum winner keywords before accepting harvest (otherwise fallback to wider window) */
+export const HARVEST_MIN_KEYWORDS = 3;
+
+/** Harvest windows in days, tried in order until HARVEST_MIN_KEYWORDS met */
+export const HARVEST_WINDOWS = [7, 14, 30, 60] as const;
+
+/** Strategic period per lifecycle phase (base window for harvest) */
+export const LIFECYCLE_STRATEGIC_DAYS: Record<string, number> = {
+  launch: 7,
+  scale: 14,
+  evergreen: 30,
+  relaunch: 14,
+};
+
+// ── Pause Batch Config ──────────────────────────────────────
+
+export const PAUSE_BATCH_CONFIG = {
+  maxPerBatch: 20,
+  cooldownMs: 2000,
+} as const;
+
+// ── Strategic Builder: Default Bids per Lifecycle ───────────
+// Used as fallback when no historical data (avgWinningBid) is available
+
+export const LIFECYCLE_DEFAULT_BIDS: Record<string, number> = {
+  launch: 0.45,
+  scale: 0.55,
+  evergreen: 0.50,
+  relaunch: 0.50,
+};
+
+// ── Strategic Builder: Bid Strategy per Lifecycle ───────────
+
+export type StrategicBiddingStrategy = 'DOWN_ONLY' | 'UP_DOWN' | 'FIXED';
+
+export const LIFECYCLE_BID_STRATEGY: Record<string, Record<string, StrategicBiddingStrategy>> = {
+  launch: {
+    SP_AUTO: 'UP_DOWN',
+    SP_MANUAL_BROAD: 'UP_DOWN',
+    SP_MANUAL_PHRASE: 'UP_DOWN',
+    SP_MANUAL_EXACT: 'UP_DOWN',
+    SP_PRODUCT: 'DOWN_ONLY',
+    SP_CATEGORY: 'DOWN_ONLY',
+    default: 'UP_DOWN',
+  },
+  scale: {
+    SP_AUTO: 'DOWN_ONLY',
+    SP_MANUAL_BROAD: 'DOWN_ONLY',
+    SP_MANUAL_PHRASE: 'DOWN_ONLY',
+    SP_MANUAL_EXACT: 'UP_DOWN', // Winners Exact gets UP_DOWN
+    SP_PRODUCT: 'DOWN_ONLY',
+    SP_CATEGORY: 'DOWN_ONLY',
+    default: 'DOWN_ONLY',
+  },
+  evergreen: {
+    SP_AUTO: 'DOWN_ONLY',
+    SP_MANUAL_BROAD: 'DOWN_ONLY',
+    SP_MANUAL_PHRASE: 'DOWN_ONLY',
+    SP_MANUAL_EXACT: 'UP_DOWN', // Winners Exact gets UP_DOWN
+    SP_PRODUCT: 'DOWN_ONLY',
+    SP_CATEGORY: 'DOWN_ONLY',
+    default: 'DOWN_ONLY',
+  },
+  relaunch: {
+    SP_AUTO: 'UP_DOWN',
+    SP_MANUAL_BROAD: 'UP_DOWN',
+    SP_MANUAL_PHRASE: 'DOWN_ONLY',
+    SP_MANUAL_EXACT: 'UP_DOWN',
+    SP_PRODUCT: 'DOWN_ONLY',
+    SP_CATEGORY: 'DOWN_ONLY',
+    default: 'UP_DOWN',
+  },
+};
+
+// ── Strategic Builder: Budget per Lifecycle + Campaign Type ──
+
+export const STRATEGIC_BUDGETS: Record<string, Record<string, number>> = {
+  launch: {
+    SP_AUTO: 10,
+    SP_MANUAL_BROAD: 8,
+    SP_MANUAL_PHRASE: 8,
+    SP_MANUAL_EXACT: 10,
+    SP_PRODUCT: 5,
+    SP_CATEGORY: 5,
+    SB_VIDEO: 10,
+    default: 8,
+  },
+  scale: {
+    SP_AUTO: 12,
+    SP_MANUAL_BROAD: 10,
+    SP_MANUAL_PHRASE: 10,
+    SP_MANUAL_EXACT: 20, // Winners Exact gets high budget
+    SP_PRODUCT: 10,
+    SP_CATEGORY: 8,
+    SB_VIDEO: 15,
+    default: 10,
+  },
+  evergreen: {
+    SP_AUTO: 10,
+    SP_MANUAL_BROAD: 8,
+    SP_MANUAL_PHRASE: 8,
+    SP_MANUAL_EXACT: 15,
+    SP_PRODUCT: 10,
+    SP_CATEGORY: 10,
+    SB_VIDEO: 12,
+    default: 10,
+  },
+  relaunch: {
+    SP_AUTO: 10,
+    SP_MANUAL_BROAD: 8,
+    SP_MANUAL_PHRASE: 8,
+    SP_MANUAL_EXACT: 12,
+    SP_PRODUCT: 8,
+    SP_CATEGORY: 5,
+    SB_VIDEO: 10,
+    default: 8,
+  },
+};
+
+// ── Strategic Builder: Placement Adjustments ────────────────
+
+/** TopOfSearch placement boost when CVR top > others (topPlacementPerformance > 1.0) */
+export const PLACEMENT_TOP_OF_SEARCH_BOOST_MIN = 20; // %
+export const PLACEMENT_TOP_OF_SEARCH_BOOST_MAX = 40; // %
+/** Threshold above which top-of-search placement boost is applied */
+export const PLACEMENT_PERFORMANCE_THRESHOLD = 1.0;
+
+// ── Strategic Builder: Winner Bid Multiplier ────────────────
+
+/** Multiply avgWinningBid by this factor for new campaign bids */
+export const WINNER_BID_MULTIPLIER = 1.05;

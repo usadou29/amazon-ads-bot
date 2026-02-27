@@ -7,9 +7,10 @@ import {
   mapCampaignEvolutionToViewModel,
   type EvolutionViewModel,
   type CampaignEvolutionResult,
-  type TopAction,
+  type StructuralGap,
 } from '@/lib/transforms/campaign-evolution';
 import { CreateCampaignWizard } from './CreateCampaignWizard';
+import { RebuildWizard } from './RebuildWizard';
 
 // ── State Tag Styles ────────────────────────────────────────────
 
@@ -20,10 +21,18 @@ const stateTagConfig: Record<string, { label: string; bg: string; text: string; 
   STABLE: { label: 'Optimisation', bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200', icon: '⚙️' },
 };
 
-const priorityColors: Record<string, string> = {
-  high: 'bg-red-100 text-red-700 border-red-200',
-  medium: 'bg-amber-100 text-amber-700 border-amber-200',
-  low: 'bg-slate-100 text-slate-600 border-slate-200',
+const gapSeverityStyles: Record<string, { bg: string; text: string; border: string }> = {
+  critical: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
+  high: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+  medium: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
+  low: { bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-200' },
+};
+
+const themeColors: Record<string, { bg: string; border: string; text: string }> = {
+  VISIBILITE: { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-800' },
+  CONVERSION: { bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-800' },
+  RENTABILITE: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-800' },
+  STRUCTURE: { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-800' },
 };
 
 // ── Props ───────────────────────────────────────────────────────
@@ -40,9 +49,10 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
   const [vm, setVm] = useState<EvolutionViewModel | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showDetails, setShowDetails] = useState(false);
   const [showRoadmap, setShowRoadmap] = useState(false);
-  const [wizardAction, setWizardAction] = useState<TopAction | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+  const [showRebuildWizard, setShowRebuildWizard] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,18 +85,13 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
             <div className="h-5 bg-slate-200 rounded w-48" />
             <div className="h-4 bg-slate-100 rounded w-full" />
             <div className="h-4 bg-slate-100 rounded w-3/4" />
-            <div className="flex gap-3 mt-4">
-              <div className="h-20 bg-slate-100 rounded flex-1" />
-              <div className="h-20 bg-slate-100 rounded flex-1" />
-              <div className="h-20 bg-slate-100 rounded flex-1" />
-            </div>
+            <div className="h-10 bg-slate-100 rounded w-40 mt-4" />
           </div>
         </CardContent>
       </Card>
     );
   }
 
-  // ── Error ─────────────────────────────────────────
   if (error) {
     return (
       <Card>
@@ -100,11 +105,16 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
   if (!vm) return null;
 
   const tagCfg = stateTagConfig[vm.stateTag] || stateTagConfig.STABLE;
+  const focus = vm.topFocus;
+  const focusTheme = themeColors[focus.theme] || themeColors.VISIBILITE;
+  const cta = focus.primaryCta;
+  const showCreateButton = cta.intent === 'CREATE' && vm.creationPlan;
+  const showAlwaysCreateButton = !showCreateButton;
 
   return (
     <>
       <Card className="overflow-hidden">
-        {/* ── Header ── */}
+        {/* ── Header Bar ── */}
         <div className={`px-5 py-3 ${tagCfg.bg} border-b ${tagCfg.border}`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -124,13 +134,78 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
         </div>
 
         <CardContent className="pt-4">
-          {/* ── 1. Summary sentence ── */}
-          <p className="text-sm text-slate-700 leading-relaxed mb-4">
-            {vm.summarySentence}
-          </p>
+          {/* ── A) Coach Summary (1–2 phrases) ── */}
+          <div className="mb-4">
+            <h4 className="text-base font-semibold text-slate-900 mb-1">{focus.title}</h4>
+            <p className="text-sm text-slate-600 leading-relaxed">{focus.summary}</p>
+          </div>
 
-          {/* ── 2. Top Actions ── */}
-          {vm.topActions.length > 0 && (
+          {/* ── B) Top Focus: Evidence (2 max) ── */}
+          {focus.evidence.length > 0 && (
+            <div className="flex gap-3 mb-4">
+              {focus.evidence.map((ev, i) => (
+                <div
+                  key={i}
+                  className={`flex-1 p-3 rounded-lg border ${focusTheme.bg} ${focusTheme.border}`}
+                >
+                  <p className={`text-xs font-medium ${focusTheme.text} opacity-70`}>{ev.label}</p>
+                  <p className={`text-sm font-semibold ${focusTheme.text}`}>{ev.value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── B.2) Gap Badges ── */}
+          {vm.gaps.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              {vm.gaps.map((gap, i) => {
+                const style = gapSeverityStyles[gap.severity] || gapSeverityStyles.medium;
+                return (
+                  <span
+                    key={i}
+                    className={`inline-flex items-center px-2 py-0.5 text-[11px] font-medium rounded-full border ${style.bg} ${style.text} ${style.border}`}
+                    title={gap.explanation}
+                  >
+                    {gap.severity === 'critical' && '●  '}
+                    {gap.severity === 'high' && '◐  '}
+                    {gap.label}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── C) Primary CTA (1 button max) + Always-visible secondary ── */}
+          <div className="mb-4 flex items-center gap-2">
+            {showCreateButton ? (
+              <Button
+                variant="primary"
+                onClick={() => setShowWizard(true)}
+              >
+                {cta.label}
+              </Button>
+            ) : cta.intent === 'CLEANUP' ? (
+              <Button variant="secondary" onClick={() => setShowRoadmap(true)}>
+                {cta.label}
+              </Button>
+            ) : cta.intent === 'AMPLIFY' ? (
+              <Button variant="secondary" onClick={() => setShowRoadmap(true)}>
+                {cta.label}
+              </Button>
+            ) : (
+              <span className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-slate-500 bg-slate-50 border border-slate-200 rounded-lg">
+                {cta.label}
+              </span>
+            )}
+            {showAlwaysCreateButton && (
+              <Button variant="secondary" size="sm" onClick={() => setShowRebuildWizard(true)}>
+                Creer des campagnes
+              </Button>
+            )}
+          </div>
+
+          {/* ── Top Actions (secondary) ── */}
+          {vm.topActions.length > 0 && !showCreateButton && (
             <div className="mb-4">
               <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
                 Actions recommandées
@@ -142,26 +217,13 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
                     className="flex items-start justify-between gap-3 p-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors"
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="text-sm font-medium text-slate-900">{action.title}</span>
-                        {action.actionType === 'create_campaign' && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
-                            Nouveau
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-500 line-clamp-2">{action.why || action.description}</p>
+                      <span className="text-sm font-medium text-slate-900">{action.title}</span>
+                      <p className="text-xs text-slate-500 mt-0.5">{action.why || action.description}</p>
                     </div>
-                    {action.isExecutable ? (
-                      <Button
-                        size="sm"
-                        variant={action.actionType === 'create_campaign' ? 'primary' : 'secondary'}
-                        onClick={() => setWizardAction(action)}
-                      >
+                    {action.isExecutable && (
+                      <Button size="sm" variant="secondary" onClick={() => setShowWizard(true)}>
                         {action.ctaLabel}
                       </Button>
-                    ) : (
-                      <span className="text-xs text-slate-400 px-2 py-1">{action.ctaLabel}</span>
                     )}
                   </div>
                 ))}
@@ -169,7 +231,7 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
             </div>
           )}
 
-          {/* ── 3. Roadmap Toggle ── */}
+          {/* ── Roadmap Toggle ── */}
           {vm.roadmap.length > 0 && (
             <div>
               <button
@@ -177,22 +239,24 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
                 className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hover:text-brand-600 transition-colors mb-2"
               >
                 <span>{showRoadmap ? '▼' : '▶'}</span>
-                Plan 30 jours
+                Voir le plan 30 jours
               </button>
               {showRoadmap && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   {vm.roadmap.map((week, i) => (
                     <div key={i} className="p-3 rounded-lg border border-slate-200 bg-slate-50">
-                      <h5 className="text-xs font-semibold text-slate-700 mb-2">{week.weekLabel}</h5>
-                      <div className="space-y-1.5">
+                      <h5 className="text-xs font-semibold text-slate-700 mb-0.5">{week.weekLabel}</h5>
+                      <p className="text-[11px] text-slate-500 mb-2 italic">{week.weekTitle}</p>
+                      <div className="space-y-2">
                         {week.items.map((item, j) => (
                           <div key={j} className="flex items-start gap-1.5">
-                            <span className={`inline-block mt-0.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                            <span className={`inline-block mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
                               item.priority === 'high' ? 'bg-red-400' : item.priority === 'medium' ? 'bg-amber-400' : 'bg-slate-300'
                             }`} />
                             <div>
                               <p className="text-xs font-medium text-slate-700">{item.title}</p>
-                              {item.desc && <p className="text-[11px] text-slate-500">{item.desc}</p>}
+                              {item.why && <p className="text-[11px] text-slate-500 mt-0.5">{item.why}</p>}
+                              {item.impact && <p className="text-[11px] text-emerald-600 mt-0.5">{item.impact}</p>}
                             </div>
                           </div>
                         ))}
@@ -204,7 +268,7 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
             </div>
           )}
 
-          {/* ── 4. Details (hidden by default) ── */}
+          {/* ── Details (hidden by default) ── */}
           {showDetails && (
             <div className="mt-4 pt-3 border-t border-slate-100">
               <div className="grid grid-cols-3 gap-3 text-center">
@@ -241,12 +305,12 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
                   );
                 })}
               </div>
-              {/* Context stats */}
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400">
                 <span>{vm.context.totalCampaigns} campagnes</span>
                 <span>{vm.context.totalKeywords} mots-clés</span>
                 <span>{vm.context.totalProductTargets} targets</span>
                 <span>{vm.context.totalWinnerKeywords} winners</span>
+                {vm.context.avgAcos ? <span>ACoS moy. {vm.context.avgAcos}%</span> : null}
               </div>
             </div>
           )}
@@ -254,14 +318,29 @@ export function BookCampaignPlanPanel({ bookId, lifecyclePhase, onCampaignCreate
       </Card>
 
       {/* ── Wizard Modal ── */}
-      {wizardAction && (
+      {showWizard && (
         <CreateCampaignWizard
           bookId={bookId}
-          action={wizardAction}
+          creationPlan={vm.creationPlan}
+          topActions={vm.topActions}
           lifecyclePhase={lifecyclePhase}
-          onClose={() => setWizardAction(null)}
+          onClose={() => setShowWizard(false)}
           onCreated={() => {
-            setWizardAction(null);
+            setShowWizard(false);
+            onCampaignCreated?.();
+          }}
+        />
+      )}
+
+      {/* ── Rebuild Wizard Modal ── */}
+      {showRebuildWizard && (
+        <RebuildWizard
+          bookId={bookId}
+          initialAnalysis={vm}
+          lifecyclePhase={lifecyclePhase || vm.context.lifecyclePhase}
+          onClose={() => setShowRebuildWizard(false)}
+          onSuccess={() => {
+            setShowRebuildWizard(false);
             onCampaignCreated?.();
           }}
         />

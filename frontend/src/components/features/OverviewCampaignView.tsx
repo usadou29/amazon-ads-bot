@@ -1711,6 +1711,30 @@ function OverviewCampaignCard({
   );
 }
 
+// ── Toggle Switch ──
+function ToggleSwitch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="flex items-center gap-2 cursor-pointer select-none">
+      <span className="text-xs text-slate-500">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+          checked ? 'bg-brand-600' : 'bg-slate-300'
+        }`}
+      >
+        <span
+          className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+            checked ? 'translate-x-4' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+    </label>
+  );
+}
+
 // ── Main Component ──
 export function OverviewCampaignView({
   bookId,
@@ -1727,6 +1751,7 @@ export function OverviewCampaignView({
   acosTarget,
   onActionExecuted,
 }: OverviewCampaignViewProps) {
+  const [hidePaused, setHidePaused] = useState(true);
 
   if (loading) {
     return (
@@ -1761,13 +1786,29 @@ export function OverviewCampaignView({
     return a.name.localeCompare(b.name);
   });
 
+  // Filter out paused campaigns when toggle is active
+  const visibleCampaigns = hidePaused
+    ? sortedCampaigns.filter((c) => c.state !== 'paused')
+    : sortedCampaigns;
+
+  const pausedCount = campaignDetails.campaigns.filter((c) => c.state === 'paused').length;
+
   return (
     <div className="space-y-4">
-      {/* Period selector */}
+      {/* Period selector + hide paused toggle */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-700">
-          Campagnes ({campaignDetails.campaigns.length})
-        </h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-semibold text-slate-700">
+            Campagnes ({visibleCampaigns.length}{hidePaused && pausedCount > 0 ? `/${campaignDetails.campaigns.length}` : ''})
+          </h3>
+          {pausedCount > 0 && (
+            <ToggleSwitch
+              checked={hidePaused}
+              onChange={setHidePaused}
+              label={`Masquer en pause (${pausedCount})`}
+            />
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-slate-400">Période :</span>
           {[
@@ -1809,7 +1850,7 @@ export function OverviewCampaignView({
       )}
 
       {/* Campaign cards */}
-      {sortedCampaigns.map((campaign) => (
+      {visibleCampaigns.map((campaign) => (
         <OverviewCampaignCard
           key={campaign.id}
           campaign={campaign}

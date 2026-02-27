@@ -25,6 +25,7 @@ export function CampaignsListModal({ open, onClose }: CampaignsListModalProps) {
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [hidePaused, setHidePaused] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -49,9 +50,38 @@ export function CampaignsListModal({ open, onClose }: CampaignsListModalProps) {
         </div>
       ) : (
         <div className="space-y-3">
-          <p className="text-xs text-slate-500 mb-3">
-            {campaigns.length} campagne(s) trouvée(s). Créez un livre puis associez-y vos campagnes pour suivre leurs performances.
-          </p>
+          {(() => {
+            const pausedCount = campaigns.filter((c: any) => c.state === 'paused').length;
+            const visibleCampaigns = hidePaused
+              ? campaigns.filter((c: any) => c.state !== 'paused')
+              : campaigns;
+            return (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs text-slate-500">
+                    {visibleCampaigns.length}{hidePaused && pausedCount > 0 ? `/${campaigns.length}` : ''} campagne(s) trouvée(s). Créez un livre puis associez-y vos campagnes pour suivre leurs performances.
+                  </p>
+                  {pausedCount > 0 && (
+                    <label className="flex items-center gap-2 cursor-pointer select-none flex-shrink-0 ml-3">
+                      <span className="text-xs text-slate-500">Masquer en pause ({pausedCount})</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={hidePaused}
+                        onClick={() => setHidePaused(!hidePaused)}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          hidePaused ? 'bg-brand-600' : 'bg-slate-300'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                            hidePaused ? 'translate-x-4' : 'translate-x-0.5'
+                          }`}
+                        />
+                      </button>
+                    </label>
+                  )}
+                </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -64,7 +94,7 @@ export function CampaignsListModal({ open, onClose }: CampaignsListModalProps) {
                 </tr>
               </thead>
               <tbody>
-                {campaigns.map((c: any) => (
+                {visibleCampaigns.map((c: any) => (
                   <tr key={c.id} className="border-b border-slate-100 hover:bg-slate-50">
                     <td className="py-2 px-2 font-medium text-slate-900 max-w-[200px] truncate">{c.name}</td>
                     <td className="py-2 px-2 text-slate-600">{TYPE_LABELS[c.campaignType] || c.campaignType}</td>
@@ -82,6 +112,9 @@ export function CampaignsListModal({ open, onClose }: CampaignsListModalProps) {
               </tbody>
             </table>
           </div>
+              </>
+            );
+          })()}
         </div>
       )}
     </Modal>
