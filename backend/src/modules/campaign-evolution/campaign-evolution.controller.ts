@@ -120,12 +120,13 @@ export class CampaignEvolutionController {
     if (!dto.bookId || !dto.workspaceId) {
       throw new BadRequestException('bookId and workspaceId are required');
     }
-    this.logger.log(`Creation plan requested for book ${dto.bookId} (override=${dto.lifecyclePhaseOverride}, forceRebuild=${dto.forceRebuild})`);
+    this.logger.log(`Creation plan requested for book ${dto.bookId} (override=${dto.lifecyclePhaseOverride}, forceRebuild=${dto.forceRebuild}, mode=${dto.mode})`);
     return this.evolutionService.generateCreationPlan(
       dto.bookId,
       dto.workspaceId,
       dto.lifecyclePhaseOverride,
       dto.forceRebuild,
+      dto.mode,
     );
   }
 

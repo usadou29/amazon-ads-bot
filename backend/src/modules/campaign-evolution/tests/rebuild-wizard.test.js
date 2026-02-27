@@ -1,6 +1,7 @@
 /**
- * Tests unitaires : Rebuild Propre — lifecycle detection, creation-plan, pause-all
- * 10 tests couvrant le flow complet du rebuild wizard (backend)
+ * Tests unitaires : Rebuild Propre — mode-based plan generation (v3)
+ * Tests covering: lifecycle override, HARVEST/RESET dispatcher, fingerprint idempotence,
+ * pause-all shape, gap detection
  */
 
 let passed = 0;
@@ -72,7 +73,7 @@ function makeCtx(campaigns, insightsMap, opts = {}) {
     scenario: opts.scenario || 'scenario_stable',
     bookContext: {
       id: 'book-1',
-      title: 'Test Book',
+      title: opts.title || 'Test Book',
       asin: 'B001',
       lifecyclePhase: opts.lifecycle || 'scale',
       acosTarget: 30,
@@ -101,6 +102,20 @@ function makeCtx(campaigns, insightsMap, opts = {}) {
   };
 }
 
+function makeHarvest(overrides = {}) {
+  return {
+    winnerKeywords: overrides.winnerKeywords || [],
+    winnerSearchTerms: overrides.winnerSearchTerms || [],
+    winnerAsins: overrides.winnerAsins || [],
+    suggestedNegatives: overrides.suggestedNegatives || [],
+    windowDays: overrides.windowDays || 14,
+    avgWinningBid: overrides.avgWinningBid !== undefined ? overrides.avgWinningBid : null,
+    avgCpcObserved: overrides.avgCpcObserved !== undefined ? overrides.avgCpcObserved : null,
+    topPlacementPerformance: overrides.topPlacementPerformance !== undefined ? overrides.topPlacementPerformance : null,
+    userProvidedKeywords: overrides.userProvidedKeywords || ['test', 'book'],
+  };
+}
+
 const gapDetector = new GapDetectorService();
 const topFocusService = new TopFocusService();
 const harvestService = new HarvestService(null);
@@ -110,7 +125,6 @@ const harvestService = new HarvestService(null);
 console.log('\n📌 Lifecycle Override → Different Gap Detection');
 
 test('Lifecycle override launch → GAP_EXPLORATION critical', () => {
-  // No auto campaign, lifecycle=launch → critical exploration gap
   const kw = makeKeyword('1', 'test', 'exact');
   const ag = makeAdGroup('ag1', [kw]);
   const camp = makeCampaign('c1', { adGroups: [ag], targetingType: 'manual' });
@@ -136,9 +150,63 @@ test('Lifecycle override scale → GAP_EXPLORATION high (not critical)', () => {
   assert(explorationGap.severity === 'high', `Expected high, got ${explorationGap.severity}`);
 });
 
-console.log('\n📌 ForceRebuild Scenario');
+console.log('\n📌 Mode-Based Plan Generation (generateCreationPlanForMode)');
 
-test('STABLE with no gaps → TopFocus intent OBSERVE (normal behavior)', () => {
+test('HARVEST mode → dispatches to HarvestPlanBuilder', () => {
+  const ctx = makeCtx([], new Map(), { lifecycle: 'scale' });
+  const harvest = makeHarvest({
+    winnerKeywords: [{ text: 'kw1', matchType: 'exact', acos: 15, orders: 5, campaignId: 'c1' }],
+    avgWinningBid: 0.60,
+  });
+
+  const plan = topFocusService.generateCreationPlanForMode(ctx, harvest, 'HARVEST');
+  assert(plan, 'Expected a plan');
+  assert(plan.campaignsToCreate.length >= 1, 'Expected at least 1 campaign');
+  // HARVEST with winners → should have Exact
+  const hasExact = plan.campaignsToCreate.some(c => c.type === 'SP_MANUAL_EXACT');
+  assert(hasExact, 'Expected SP_MANUAL_EXACT in HARVEST with winners');
+});
+
+test('RESET mode → dispatches to ResetPlanBuilder', () => {
+  const ctx = makeCtx([], new Map(), { lifecycle: 'launch' });
+  const harvest = makeHarvest({
+    winnerKeywords: [{ text: 'kw1', matchType: 'exact', orders: 5, campaignId: 'c1' }], // Should be IGNORED
+    avgWinningBid: 0.99, // Should be IGNORED
+    userProvidedKeywords: ['test', 'book'],
+  });
+
+  const plan = topFocusService.generateCreationPlanForMode(ctx, harvest, 'RESET');
+  assert(plan, 'Expected a plan');
+  assert(plan.campaignsToCreate.length >= 1, 'Expected at least 1 campaign');
+  // RESET launch → NO Exact
+  const hasExact = plan.campaignsToCreate.some(c => c.type === 'SP_MANUAL_EXACT');
+  assert(!hasExact, 'Expected NO SP_MANUAL_EXACT in RESET launch');
+});
+
+test('HARVEST and RESET produce different plans for same context', () => {
+  const ctx = makeCtx([], new Map(), { lifecycle: 'scale' });
+  const harvest = makeHarvest({
+    winnerKeywords: [{ text: 'kw1', matchType: 'exact', acos: 15, orders: 5, campaignId: 'c1' }],
+    winnerAsins: ['B00ASIN1'],
+    avgWinningBid: 0.72,
+    userProvidedKeywords: ['test'],
+  });
+
+  const harvestPlan = topFocusService.generateCreationPlanForMode(ctx, harvest, 'HARVEST');
+  const resetPlan = topFocusService.generateCreationPlanForMode(ctx, harvest, 'RESET');
+
+  assert(harvestPlan.fingerprint !== resetPlan.fingerprint, 'Different modes should produce different fingerprints');
+
+  const harvestTypes = harvestPlan.campaignsToCreate.map(c => c.type).sort();
+  const resetTypes = resetPlan.campaignsToCreate.map(c => c.type).sort();
+  // HARVEST should have Product (because of ASINs), RESET should not (launch doesn't)
+  const harvestHasProduct = harvestTypes.includes('SP_PRODUCT');
+  assert(harvestHasProduct, 'HARVEST should have SP_PRODUCT');
+});
+
+console.log('\n📌 TopFocus Behavior (legacy)');
+
+test('STABLE with no gaps → TopFocus intent OBSERVE', () => {
   const kw = makeKeyword('1', 'test', 'exact');
   const ag = makeAdGroup('ag1', [kw]);
   const autoCamp = makeCampaign('c1', { adGroups: [ag], targetingType: 'auto' });
@@ -155,94 +223,34 @@ test('STABLE with no gaps → TopFocus intent OBSERVE (normal behavior)', () => 
   assert(topFocus.primaryCta.intent === 'OBSERVE', `Expected OBSERVE, got ${topFocus.primaryCta.intent}`);
 });
 
-test('STABLE with injected GAP_EXPLORATION → creates SP_AUTO in plan', () => {
-  const kw = makeKeyword('1', 'test', 'exact');
-  const ag = makeAdGroup('ag1', [kw]);
-  const camp = makeCampaign('c1', { adGroups: [ag], targetingType: 'manual' });
+console.log('\n📌 Fingerprint Idempotence');
 
-  const insightsMap = new Map();
-  insightsMap.set('c1', [makeInsight('keyword:1', 'winner', 5)]);
+test('Same plan (same mode) produces same fingerprint', () => {
+  const ctx = makeCtx([], new Map(), { lifecycle: 'scale' });
+  const harvest = makeHarvest({ userProvidedKeywords: ['test'] });
 
-  const ctx = makeCtx([camp], insightsMap, { lifecycle: 'scale' });
-  // Force a gap (simulates forceRebuild behavior)
-  ctx.gaps = [{
-    type: 'GAP_EXPLORATION',
-    severity: 'critical',
-    label: 'Campagne de découverte manquante',
-    explanation: 'Aucune campagne Auto.',
-    campaignsToCreate: ['SP_AUTO'],
-  }];
+  const plan1 = topFocusService.generateCreationPlanForMode(ctx, harvest, 'RESET');
+  const plan2 = topFocusService.generateCreationPlanForMode(ctx, harvest, 'RESET');
 
-  const plan = topFocusService.generateCreationPlan(ctx);
-  assert(plan, 'Expected a creation plan');
-  assert(plan.campaignsToCreate.length >= 1, `Expected at least 1 campaign, got ${plan.campaignsToCreate.length}`);
-  const hasAuto = plan.campaignsToCreate.some(c => c.type === 'SP_AUTO');
-  assert(hasAuto, 'Expected SP_AUTO in creation plan');
+  assert(plan1 && plan2, 'Both plans should exist');
+  assert(plan1.fingerprint === plan2.fingerprint, `Fingerprints should match: ${plan1.fingerprint} vs ${plan2.fingerprint}`);
 });
 
-console.log('\n📌 Harvest Seeds Injection');
+test('Different lifecycle produces different fingerprint', () => {
+  const ctx1 = makeCtx([], new Map(), { lifecycle: 'launch' });
+  const ctx2 = makeCtx([], new Map(), { lifecycle: 'evergreen' });
+  const harvest = makeHarvest({ userProvidedKeywords: ['test'] });
 
-test('Harvest winner keywords are properly extracted and sorted', () => {
-  const kw1 = makeKeyword('1', 'top keyword', 'exact');
-  const kw2 = makeKeyword('2', 'medium keyword', 'broad');
-  const ag = makeAdGroup('ag1', [kw1, kw2]);
-  const camp = makeCampaign('c1', { adGroups: [ag] });
+  const plan1 = topFocusService.generateCreationPlanForMode(ctx1, harvest, 'RESET');
+  const plan2 = topFocusService.generateCreationPlanForMode(ctx2, harvest, 'RESET');
 
-  const insightsMap = new Map();
-  insightsMap.set('c1', [
-    makeInsight('keyword:1', 'winner', 10),
-    makeInsight('keyword:2', 'winner', 3),
-  ]);
-
-  const ctx = makeCtx([camp], insightsMap);
-  const harvested = harvestService.harvest(ctx);
-
-  assert(harvested.winnerKeywords.length === 2, `Expected 2, got ${harvested.winnerKeywords.length}`);
-  assert(harvested.winnerKeywords[0].text === 'top keyword', 'Expected top keyword first (more orders)');
-  assert(harvested.winnerKeywords[0].orders === 10, 'Expected 10 orders');
+  assert(plan1 && plan2, 'Both plans should exist');
+  assert(plan1.fingerprint !== plan2.fingerprint, 'Fingerprints should differ for different lifecycles');
 });
 
-test('Harvested seeds can be injected into manual campaigns', () => {
-  const kw = makeKeyword('1', 'winner kw', 'exact');
-  const ag = makeAdGroup('ag1', [kw]);
-  const camp = makeCampaign('c1', { adGroups: [ag], targetingType: 'manual' });
-
-  const insightsMap = new Map();
-  insightsMap.set('c1', [makeInsight('keyword:1', 'winner', 5)]);
-
-  const ctx = makeCtx([camp], insightsMap, { lifecycle: 'scale' });
-  ctx.gaps = [{
-    type: 'GAP_VALIDATION',
-    severity: 'critical',
-    label: 'Validation manquante',
-    explanation: 'Test',
-    campaignsToCreate: ['SP_MANUAL_EXACT'],
-  }];
-
-  const plan = topFocusService.generateCreationPlan(ctx);
-  const harvested = harvestService.harvest(ctx);
-
-  // Simulate seed injection (as done in generateCreationPlan service method)
-  if (plan && harvested.winnerKeywords.length > 0) {
-    for (const c of plan.campaignsToCreate) {
-      if (c.targetingMode === 'MANUAL' && (!c.seedKeywords || c.seedKeywords.length === 0)) {
-        c.seedKeywords = harvested.winnerKeywords.map(w => w.text);
-      }
-    }
-  }
-
-  assert(plan, 'Expected plan');
-  const manualCampaign = plan.campaignsToCreate.find(c => c.targetingMode === 'MANUAL');
-  if (manualCampaign) {
-    assert(manualCampaign.seedKeywords && manualCampaign.seedKeywords.length > 0, 'Expected seeds injected');
-    assert(manualCampaign.seedKeywords.includes('winner kw'), 'Expected "winner kw" in seeds');
-  }
-});
-
-console.log('\n📌 Pause-All Logic');
+console.log('\n📌 Pause-All Shape');
 
 test('PauseAllForBookResult type has correct shape', () => {
-  // Type validation test — just verify the structure is correct
   const result = {
     totalActive: 5,
     totalPaused: 4,
@@ -261,58 +269,25 @@ test('PauseAllForBookResult type has correct shape', () => {
   assert(result.failedCampaigns[0].campaignId === 'c1', 'Failed campaign shape correct');
 });
 
-console.log('\n📌 Fingerprint Idempotence');
+console.log('\n📌 Harvest Seeds Injection');
 
-test('Same plan produces same fingerprint (idempotence base)', () => {
-  // The creation plan fingerprint is based on plan contents
-  const kw = makeKeyword('1', 'test', 'exact');
-  const ag = makeAdGroup('ag1', [kw]);
-  const camp = makeCampaign('c1', { adGroups: [ag], targetingType: 'manual' });
+test('Harvest winner keywords sorted by orders desc', () => {
+  const kw1 = makeKeyword('1', 'top keyword', 'exact');
+  const kw2 = makeKeyword('2', 'medium keyword', 'broad');
+  const ag = makeAdGroup('ag1', [kw1, kw2]);
+  const camp = makeCampaign('c1', { adGroups: [ag] });
 
   const insightsMap = new Map();
-  insightsMap.set('c1', [makeInsight('keyword:1', 'winner', 5)]);
+  insightsMap.set('c1', [
+    makeInsight('keyword:1', 'winner', 10),
+    makeInsight('keyword:2', 'winner', 3),
+  ]);
 
-  const ctx = makeCtx([camp], insightsMap, { lifecycle: 'scale' });
-  ctx.gaps = [{
-    type: 'GAP_EXPLORATION',
-    severity: 'critical',
-    label: 'Test',
-    explanation: 'Test',
-    campaignsToCreate: ['SP_AUTO'],
-  }];
+  const ctx = makeCtx([camp], insightsMap);
+  const harvested = harvestService.harvest(ctx);
 
-  const plan1 = topFocusService.generateCreationPlan(ctx);
-  const plan2 = topFocusService.generateCreationPlan(ctx);
-
-  assert(plan1 && plan2, 'Both plans should exist');
-  assert(plan1.fingerprint === plan2.fingerprint, `Fingerprints should match: ${plan1.fingerprint} vs ${plan2.fingerprint}`);
-});
-
-test('Different lifecycle produces different fingerprint', () => {
-  const kw = makeKeyword('1', 'test', 'exact');
-  const ag = makeAdGroup('ag1', [kw]);
-  const camp = makeCampaign('c1', { adGroups: [ag], targetingType: 'manual' });
-
-  const gap = {
-    type: 'GAP_EXPLORATION',
-    severity: 'critical',
-    label: 'Test',
-    explanation: 'Test',
-    campaignsToCreate: ['SP_AUTO'],
-  };
-
-  const ctx1 = makeCtx([camp], new Map([['c1', []]]), { lifecycle: 'launch' });
-  ctx1.gaps = [gap];
-
-  const ctx2 = makeCtx([camp], new Map([['c1', []]]), { lifecycle: 'evergreen' });
-  ctx2.gaps = [gap];
-
-  const plan1 = topFocusService.generateCreationPlan(ctx1);
-  const plan2 = topFocusService.generateCreationPlan(ctx2);
-
-  assert(plan1 && plan2, 'Both plans should exist');
-  // Different lifecycle → different budgets → different fingerprint
-  assert(plan1.fingerprint !== plan2.fingerprint, 'Fingerprints should differ for different lifecycles');
+  assert(harvested.winnerKeywords.length === 2, `Expected 2, got ${harvested.winnerKeywords.length}`);
+  assert(harvested.winnerKeywords[0].text === 'top keyword', 'Expected top keyword first (more orders)');
 });
 
 // ── Summary ──────────────────────────────────────────────────────

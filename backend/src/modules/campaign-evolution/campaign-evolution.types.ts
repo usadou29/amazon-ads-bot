@@ -78,6 +78,14 @@ export interface HarvestedAssets {
   winnerAsins: string[];
   suggestedNegatives: string[];
   windowDays: number;
+  /** Average CPC of winner keywords (real data) */
+  avgWinningBid: number | null;
+  /** Average CPC across all keywords with spend (real data) */
+  avgCpcObserved: number | null;
+  /** Top-of-search performance ratio (CVR top / CVR other). >1 = top is better */
+  topPlacementPerformance: number | null;
+  /** User-provided keywords (from book title or manual input) */
+  userProvidedKeywords: string[];
 }
 
 // ── Lifecycle Detection ─────────────────────────────────────
@@ -112,6 +120,8 @@ export interface CreationPlanRequestDto {
   workspaceId: string;
   lifecyclePhaseOverride?: string;
   forceRebuild?: boolean;
+  /** User-chosen creation mode: HARVEST (optimize existing) or RESET (start fresh) */
+  mode?: CreationMode;
 }
 
 export interface CreationPlanResponse {
@@ -120,7 +130,13 @@ export interface CreationPlanResponse {
   gaps: StructuralGap[];
   harvestedAssets: HarvestedAssets;
   lifecycleUsed: string;
+  /** Which creation mode was used */
+  modeUsed: CreationMode;
 }
+
+// ── Creation Mode (user-selected strategy) ───────────────────
+/** HARVEST = optimize from existing data, RESET = start fresh */
+export type CreationMode = 'HARVEST' | 'RESET';
 
 // ── Scenarios ─────────────────────────────────────────────────
 
@@ -174,16 +190,27 @@ export interface PlacementAdjustments {
   productPages: number;
 }
 
+/** Explanation block for each campaign parameter — displayed in wizard "Pourquoi ce choix?" */
+export interface CampaignExplanation {
+  parameter: string;    // e.g. 'type', 'bid', 'budget', 'biddingStrategy', 'placementAdjustments', 'keywords', 'negatives'
+  value: string;        // human-readable value
+  reasoning: string;    // "Pourquoi ce choix?" in author-friendly French
+  dataSource: string;   // e.g. 'real_data', 'lifecycle_default', 'inferred', 'rule_based'
+}
+
 export interface CampaignToCreate {
   name: string;
   type: CampaignPlanType;
   targetingMode: 'AUTO' | 'MANUAL';
   dailyBudget: number;
+  defaultBid: number;
   biddingStrategy: BiddingStrategy;
   placementAdjustments?: PlacementAdjustments;
   seedKeywords?: string[];
   seedAsins?: string[];
+  negativeKeywords?: string[];
   notesWhy: string; // 1 phrase auteur-friendly
+  explanations: CampaignExplanation[];
 }
 
 export interface CreationPlan {

@@ -230,10 +230,14 @@ export interface BatchCreateFromPlanDto {
     type: string;
     targetingMode: 'AUTO' | 'MANUAL';
     dailyBudget: number;
+    defaultBid?: number;
     biddingStrategy: string;
+    placementAdjustments?: { topOfSearch: number; restOfSearch: number; productPages: number };
     seedKeywords?: string[];
     seedAsins?: string[];
+    negativeKeywords?: string[];
     notesWhy: string;
+    explanations?: Array<{ parameter: string; value: string; reasoning: string; dataSource: string }>;
   }>;
   overrides?: Array<{
     index: number;
@@ -271,11 +275,14 @@ export const pauseBatchCampaigns = (dto: PauseBatchDto) =>
   api.post('/campaigns/pause-batch', dto, { timeout: 60000 }).then((r) => r.data);
 
 // ── Creation Plan (on-demand, recalculable) ────────────────────
+export type CreationMode = 'HARVEST' | 'RESET';
+
 export interface CreationPlanRequestDto {
   bookId: string;
   workspaceId: string;
   lifecyclePhaseOverride?: string;
   forceRebuild?: boolean;
+  mode?: CreationMode;
 }
 
 export const getCreationPlan = (dto: CreationPlanRequestDto) =>

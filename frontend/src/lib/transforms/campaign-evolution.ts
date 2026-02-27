@@ -24,16 +24,26 @@ export interface TopFocus {
   primaryCta: TopFocusCta;
 }
 
+export interface CampaignExplanation {
+  parameter: string;
+  value: string;
+  reasoning: string;
+  dataSource: string;
+}
+
 export interface CampaignToCreate {
   name: string;
   type: string;
   targetingMode: 'AUTO' | 'MANUAL';
   dailyBudget: number;
+  defaultBid: number;
   biddingStrategy: string;
   placementAdjustments?: { topOfSearch: number; restOfSearch: number; productPages: number };
   seedKeywords?: string[];
   seedAsins?: string[];
+  negativeKeywords?: string[];
   notesWhy: string;
+  explanations: CampaignExplanation[];
 }
 
 export interface CampaignToPause {
@@ -92,7 +102,13 @@ export interface HarvestedAssets {
   winnerAsins: string[];
   suggestedNegatives: string[];
   windowDays: number;
+  avgWinningBid: number | null;
+  avgCpcObserved: number | null;
+  topPlacementPerformance: number | null;
+  userProvidedKeywords: string[];
 }
+
+export type CreationMode = 'HARVEST' | 'RESET';
 
 export interface CreationPlanResponse {
   creationPlan: CreationPlan;
@@ -100,6 +116,7 @@ export interface CreationPlanResponse {
   gaps: StructuralGap[];
   harvestedAssets: HarvestedAssets;
   lifecycleUsed: string;
+  modeUsed: CreationMode;
 }
 
 export interface CampaignEvolutionResult {

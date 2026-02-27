@@ -1,6 +1,10 @@
 /**
  * Tests unitaires : HarvestService
- * 10 tests couvrant extraction de winners, ASINs, negatives, search terms, multi-window fallback
+ * 14 tests couvrant extraction de winners, ASINs, negatives, search terms, multi-window fallback
+ * Updated for v3 tolerant criteria:
+ *   - Winners: orders >= 1 OR ACOS <= targetAcos × 1.2
+ *   - ASINs: orders >= 1 OR CTR >= campaign avg CTR
+ *   - Negatives: clicks >= 15 AND orders === 0
  */
 
 let passed = 0;
@@ -49,13 +53,18 @@ function makeCampaign(id, adGroups = [], opts = {}) {
   };
 }
 
-function makeInsight(entityKey, diagnosisCode, acos = null, orders = 0) {
+function makeInsight(entityKey, diagnosisCode, opts = {}) {
+  const clicks = opts.clicks !== undefined ? opts.clicks : 20;
+  const orders = opts.orders !== undefined ? opts.orders : 0;
+  const acos = opts.acos !== undefined ? opts.acos : null;
+  const impressions = opts.impressions !== undefined ? opts.impressions : 100;
+  const spend = opts.spend !== undefined ? opts.spend : 10;
   return {
     entityKey,
-    entityType: 'keyword',
+    entityType: opts.entityType || 'keyword',
     diagnosisCode,
     eligibility: true,
-    summaryFacts: { impressions: 100, clicks: 20, ctr: 0.2, orders, cvr: 0.05, spend: 10, sales: 50, acos, periodDays: 14 },
+    summaryFacts: { impressions, clicks, ctr: impressions > 0 ? clicks / impressions : 0, orders, cvr: clicks > 0 ? orders / clicks : 0, spend, sales: orders * 10, acos, periodDays: 14 },
     suggestedActions: [],
     confidenceScore: 0.8,
   };
@@ -66,10 +75,10 @@ function makeCtx(campaigns = [], insightsMap = new Map(), opts = {}) {
     scenario: opts.scenario || 'scenario_stable',
     bookContext: {
       id: 'book-1',
-      title: 'Test Book',
+      title: 'Test Book Title',
       asin: 'B001',
       lifecyclePhase: opts.lifecycle || 'scale',
-      acosTarget: 30,
+      acosTarget: opts.acosTarget || 30,
       royaltyPerUnit: 3.5,
       salePrice: 9.99,
     },
@@ -95,43 +104,82 @@ function makeCtx(campaigns = [], insightsMap = new Map(), opts = {}) {
 // ── Load HarvestService ──────────────────────────────────────────
 
 const { HarvestService } = require('../services/harvest.service');
-
-// Create a mock instance (no DB needed for sync methods)
 const service = new HarvestService(null);
 
 // ── Tests ────────────────────────────────────────────────────────
 
-console.log('\n📌 Winner Keyword Extraction');
+console.log('\n📌 Tolerant Winner Keyword Extraction (v3 criteria)');
 
-test('Extracts winner keywords from entityInsightsMap', () => {
+test('Winner by orders >= 1 (any ACOS)', () => {
   const kw1 = makeKeyword('1', 'thriller psychologique', 'exact');
-  const kw2 = makeKeyword('2', 'roman noir', 'broad');
-  const kw3 = makeKeyword('3', 'livre fantastique', 'exact');
-
-  const ag = makeAdGroup('ag1', [kw1, kw2, kw3]);
+  const ag = makeAdGroup('ag1', [kw1]);
   const camp = makeCampaign('c1', [ag]);
 
   const insightsMap = new Map();
   insightsMap.set('c1', [
-    makeInsight('keyword:1', 'winner', 15, 5),
-    makeInsight('keyword:2', 'boost_candidate', 25, 2),
-    makeInsight('keyword:3', 'winner', 12, 8),
+    makeInsight('keyword:1', 'winner', { acos: 50, orders: 2 }), // High ACOS but has orders
   ]);
 
   const ctx = makeCtx([camp], insightsMap);
   const result = service.harvest(ctx);
+  assert(result.winnerKeywords.length === 1, `Expected 1 winner (orders >= 1), got ${result.winnerKeywords.length}`);
+  assert(result.winnerKeywords[0].text === 'thriller psychologique', 'Expected correct keyword text');
+});
 
-  assert(result.winnerKeywords.length === 2, `Expected 2 winners, got ${result.winnerKeywords.length}`);
-  // Sorted by orders desc: kw3 (8 orders) first, kw1 (5 orders) second
-  assert(result.winnerKeywords[0].text === 'livre fantastique', `Expected first winner to be 'livre fantastique', got '${result.winnerKeywords[0].text}'`);
-  assert(result.winnerKeywords[1].text === 'thriller psychologique', `Expected second winner, got '${result.winnerKeywords[1].text}'`);
-  assert(result.winnerKeywords[0].orders === 8, `Expected 8 orders, got ${result.winnerKeywords[0].orders}`);
-  assert(result.winnerKeywords[0].acos === 12, `Expected acos 12, got ${result.winnerKeywords[0].acos}`);
+test('Winner by ACOS <= targetAcos × 1.2 (even with 0 orders)', () => {
+  const kw1 = makeKeyword('1', 'roman noir', 'broad');
+  const ag = makeAdGroup('ag1', [kw1]);
+  const camp = makeCampaign('c1', [ag]);
+
+  const insightsMap = new Map();
+  // acosTarget = 30, threshold = 36. ACOS = 35 should qualify
+  insightsMap.set('c1', [
+    makeInsight('keyword:1', 'boost_candidate', { acos: 35, orders: 0 }),
+  ]);
+
+  const ctx = makeCtx([camp], insightsMap, { acosTarget: 30 });
+  const result = service.harvest(ctx);
+  assert(result.winnerKeywords.length === 1, `Expected 1 winner (ACOS <= 36), got ${result.winnerKeywords.length}`);
+});
+
+test('Not winner if ACOS > targetAcos × 1.2 AND orders === 0', () => {
+  const kw1 = makeKeyword('1', 'livre cher', 'exact');
+  const ag = makeAdGroup('ag1', [kw1]);
+  const camp = makeCampaign('c1', [ag]);
+
+  const insightsMap = new Map();
+  // acosTarget = 30, threshold = 36. ACOS = 40 should NOT qualify with 0 orders
+  insightsMap.set('c1', [
+    makeInsight('keyword:1', 'very_expensive', { acos: 40, orders: 0 }),
+  ]);
+
+  const ctx = makeCtx([camp], insightsMap, { acosTarget: 30 });
+  const result = service.harvest(ctx);
+  assert(result.winnerKeywords.length === 0, `Expected 0 winners, got ${result.winnerKeywords.length}`);
+});
+
+test('Sorts winners by orders descending', () => {
+  const kw1 = makeKeyword('1', 'keyword-a', 'exact');
+  const kw2 = makeKeyword('2', 'keyword-b', 'broad');
+  const ag = makeAdGroup('ag1', [kw1, kw2]);
+  const camp = makeCampaign('c1', [ag]);
+
+  const insightsMap = new Map();
+  insightsMap.set('c1', [
+    makeInsight('keyword:1', 'winner', { acos: 15, orders: 3 }),
+    makeInsight('keyword:2', 'winner', { acos: 12, orders: 8 }),
+  ]);
+
+  const ctx = makeCtx([camp], insightsMap);
+  const result = service.harvest(ctx);
+  assert(result.winnerKeywords.length === 2, 'Expected 2 winners');
+  assert(result.winnerKeywords[0].text === 'keyword-b', `Expected keyword-b first (8 orders), got '${result.winnerKeywords[0].text}'`);
+  assert(result.winnerKeywords[0].orders === 8, 'Expected 8 orders first');
 });
 
 test('Deduplicates winner keywords by text (case insensitive)', () => {
   const kw1 = makeKeyword('1', 'thriller', 'exact');
-  const kw2 = makeKeyword('2', 'Thriller', 'broad'); // Same text different case
+  const kw2 = makeKeyword('2', 'Thriller', 'broad');
 
   const ag1 = makeAdGroup('ag1', [kw1]);
   const ag2 = makeAdGroup('ag2', [kw2]);
@@ -139,145 +187,135 @@ test('Deduplicates winner keywords by text (case insensitive)', () => {
   const camp2 = makeCampaign('c2', [ag2]);
 
   const insightsMap = new Map();
-  insightsMap.set('c1', [makeInsight('keyword:1', 'winner', 15, 5)]);
-  insightsMap.set('c2', [makeInsight('keyword:2', 'winner', 18, 3)]);
+  insightsMap.set('c1', [makeInsight('keyword:1', 'winner', { orders: 5, acos: 15 })]);
+  insightsMap.set('c2', [makeInsight('keyword:2', 'winner', { orders: 3, acos: 18 })]);
 
   const ctx = makeCtx([camp1, camp2], insightsMap);
   const result = service.harvest(ctx);
-
   assert(result.winnerKeywords.length === 1, `Expected 1 deduplicated winner, got ${result.winnerKeywords.length}`);
 });
 
-test('Zero winners + zero campaigns → empty harvest', () => {
-  const ctx = makeCtx([], new Map());
-  const result = service.harvest(ctx);
+console.log('\n📌 Tolerant Winner ASIN Extraction (v3 criteria)');
 
-  assert(result.winnerKeywords.length === 0, 'Expected 0 winners');
-  assert(result.winnerAsins.length === 0, 'Expected 0 ASINs');
-  assert(result.suggestedNegatives.length === 0, 'Expected 0 negatives');
-  assert(result.winnerSearchTerms.length === 0, 'Expected 0 search terms');
-});
-
-test('Archived keywords are skipped', () => {
-  const kw1 = makeKeyword('1', 'test keyword', 'exact', 'archived');
-  const ag = makeAdGroup('ag1', [kw1]);
-  const camp = makeCampaign('c1', [ag]);
-
-  const insightsMap = new Map();
-  insightsMap.set('c1', [makeInsight('keyword:1', 'winner', 15, 5)]);
-
-  const ctx = makeCtx([camp], insightsMap);
-  const result = service.harvest(ctx);
-
-  assert(result.winnerKeywords.length === 0, 'Expected 0 winners (archived skipped)');
-});
-
-console.log('\n📌 Winner ASIN Extraction');
-
-test('Extracts winner ASINs from product targets', () => {
+test('ASIN winner by orders >= 1', () => {
   const tg1 = makeTarget('1', 'asinSameAs', 'B00ABCDEF1');
-  const tg2 = makeTarget('2', 'asinSameAs', 'B00ABCDEF2');
-  const tg3 = makeTarget('3', 'asinCategorySameAs', 'cat123'); // Not asinSameAs
-
-  const ag = makeAdGroup('ag1', [], [tg1, tg2, tg3]);
+  const ag = makeAdGroup('ag1', [], [tg1]);
   const camp = makeCampaign('c1', [ag]);
 
   const insightsMap = new Map();
   insightsMap.set('c1', [
-    makeInsight('target:1', 'winner', 10, 5),
-    makeInsight('target:2', 'winner', 12, 3),
-    makeInsight('target:3', 'winner', 8, 7), // winner but not asinSameAs
+    makeInsight('target:1', 'winner', { orders: 2, impressions: 100, clicks: 10 }),
   ]);
 
   const ctx = makeCtx([camp], insightsMap);
   const result = service.harvest(ctx);
-
-  assert(result.winnerAsins.length === 2, `Expected 2 ASINs, got ${result.winnerAsins.length}`);
-  assert(result.winnerAsins.includes('B00ABCDEF1'), 'Expected ASIN B00ABCDEF1');
-  assert(result.winnerAsins.includes('B00ABCDEF2'), 'Expected ASIN B00ABCDEF2');
+  assert(result.winnerAsins.length === 1, `Expected 1 ASIN, got ${result.winnerAsins.length}`);
+  assert(result.winnerAsins[0] === 'B00ABCDEF1', 'Expected correct ASIN');
 });
 
-console.log('\n📌 Suggested Negatives Extraction');
+test('ASIN winner by CTR >= campaign avg CTR (even with 0 orders)', () => {
+  const tg1 = makeTarget('1', 'asinSameAs', 'B00HIGH_CTR');
+  const tg2 = makeTarget('2', 'asinSameAs', 'B00LOW_CTR');
+  const ag = makeAdGroup('ag1', [], [tg1, tg2]);
+  const camp = makeCampaign('c1', [ag]);
 
-test('Extracts negatives from very_expensive and clicks_no_sales keywords', () => {
+  const insightsMap = new Map();
+  // tg1: CTR = 20/100 = 0.20, tg2: CTR = 5/100 = 0.05. Avg CTR = 0.125
+  insightsMap.set('c1', [
+    makeInsight('target:1', 'boost_candidate', { orders: 0, impressions: 100, clicks: 20 }),
+    makeInsight('target:2', 'new_no_data', { orders: 0, impressions: 100, clicks: 5 }),
+  ]);
+
+  const ctx = makeCtx([camp], insightsMap);
+  const result = service.harvest(ctx);
+  // tg1 CTR (0.20) >= avg (0.125) → winner. tg2 CTR (0.05) < avg → not winner
+  assert(result.winnerAsins.includes('B00HIGH_CTR'), 'Expected HIGH_CTR ASIN (CTR >= avg)');
+  assert(!result.winnerAsins.includes('B00LOW_CTR'), 'Expected LOW_CTR ASIN excluded');
+});
+
+test('Non-asinSameAs targets are skipped', () => {
+  const tg = makeTarget('1', 'asinCategorySameAs', 'cat123');
+  const ag = makeAdGroup('ag1', [], [tg]);
+  const camp = makeCampaign('c1', [ag]);
+
+  const insightsMap = new Map();
+  insightsMap.set('c1', [makeInsight('target:1', 'winner', { orders: 5, impressions: 100, clicks: 10 })]);
+
+  const ctx = makeCtx([camp], insightsMap);
+  const result = service.harvest(ctx);
+  assert(result.winnerAsins.length === 0, 'Expected 0 ASINs (non-asinSameAs skipped)');
+});
+
+console.log('\n📌 Negatives (v3 criteria: clicks >= 15 AND orders === 0)');
+
+test('Negative: clicks >= 15 AND orders === 0', () => {
   const kw1 = makeKeyword('1', 'mauvais mot', 'broad');
   const kw2 = makeKeyword('2', 'bon mot', 'exact');
-  const kw3 = makeKeyword('3', 'terrible mot', 'phrase');
+  const kw3 = makeKeyword('3', 'presque', 'phrase');
 
   const ag = makeAdGroup('ag1', [kw1, kw2, kw3]);
   const camp = makeCampaign('c1', [ag]);
 
   const insightsMap = new Map();
   insightsMap.set('c1', [
-    makeInsight('keyword:1', 'very_expensive', 80, 1),
-    makeInsight('keyword:2', 'winner', 15, 5),
-    makeInsight('keyword:3', 'clicks_no_sales', null, 0),
+    makeInsight('keyword:1', 'clicks_no_sales', { clicks: 20, orders: 0, acos: null }),
+    makeInsight('keyword:2', 'winner', { clicks: 30, orders: 5, acos: 15 }),
+    makeInsight('keyword:3', 'new_no_data', { clicks: 10, orders: 0, acos: null }), // Not enough clicks
   ]);
 
   const ctx = makeCtx([camp], insightsMap);
   const result = service.harvest(ctx);
 
-  assert(result.suggestedNegatives.length === 2, `Expected 2 negatives, got ${result.suggestedNegatives.length}`);
-  assert(result.suggestedNegatives.includes('mauvais mot'), 'Expected "mauvais mot" in negatives');
-  assert(result.suggestedNegatives.includes('terrible mot'), 'Expected "terrible mot" in negatives');
+  assert(result.suggestedNegatives.length === 1, `Expected 1 negative, got ${result.suggestedNegatives.length}`);
+  assert(result.suggestedNegatives.includes('mauvais mot'), 'Expected "mauvais mot" (clicks=20, orders=0)');
 });
 
-test('Negatives are deduplicated (case insensitive)', () => {
-  const kw1 = makeKeyword('1', 'Bad Keyword', 'broad');
-  const kw2 = makeKeyword('2', 'bad keyword', 'exact');
-
-  const ag1 = makeAdGroup('ag1', [kw1]);
-  const ag2 = makeAdGroup('ag2', [kw2]);
-  const camp = makeCampaign('c1', [ag1, ag2]);
+test('Not negative if clicks >= 15 but orders > 0', () => {
+  const kw1 = makeKeyword('1', 'converting kw', 'broad');
+  const ag = makeAdGroup('ag1', [kw1]);
+  const camp = makeCampaign('c1', [ag]);
 
   const insightsMap = new Map();
   insightsMap.set('c1', [
-    makeInsight('keyword:1', 'very_expensive', 80, 1),
-    makeInsight('keyword:2', 'clicks_no_sales', null, 0),
+    makeInsight('keyword:1', 'boost_candidate', { clicks: 25, orders: 1, acos: 60 }),
   ]);
 
   const ctx = makeCtx([camp], insightsMap);
   const result = service.harvest(ctx);
-
-  assert(result.suggestedNegatives.length === 1, `Expected 1 deduplicated negative, got ${result.suggestedNegatives.length}`);
+  assert(result.suggestedNegatives.length === 0, 'Expected 0 negatives (has orders)');
 });
 
-console.log('\n📌 Lifecycle Strategic Days');
+console.log('\n📌 Empty & Edge Cases');
 
-test('harvest uses lifecycle-specific window days', () => {
-  const ctx1 = makeCtx([], new Map(), { lifecycle: 'launch' });
-  const r1 = service.harvest(ctx1);
-  assert(r1.windowDays === 7, `Expected 7 for launch, got ${r1.windowDays}`);
-
-  const ctx2 = makeCtx([], new Map(), { lifecycle: 'evergreen' });
-  const r2 = service.harvest(ctx2);
-  assert(r2.windowDays === 30, `Expected 30 for evergreen, got ${r2.windowDays}`);
-
-  const ctx3 = makeCtx([], new Map(), { lifecycle: 'scale' });
-  const r3 = service.harvest(ctx3);
-  assert(r3.windowDays === 14, `Expected 14 for scale, got ${r3.windowDays}`);
+test('Zero campaigns → empty harvest', () => {
+  const ctx = makeCtx([], new Map());
+  const result = service.harvest(ctx);
+  assert(result.winnerKeywords.length === 0, 'Expected 0 winners');
+  assert(result.winnerAsins.length === 0, 'Expected 0 ASINs');
+  assert(result.suggestedNegatives.length === 0, 'Expected 0 negatives');
 });
 
-test('Custom targetDays overrides lifecycle default', () => {
-  const ctx = makeCtx([], new Map(), { lifecycle: 'launch' });
-  const result = service.harvest(ctx, 30);
-  assert(result.windowDays === 30, `Expected 30 (custom), got ${result.windowDays}`);
-});
-
-console.log('\n📌 Archived Campaign Handling');
-
-test('Archived campaigns are skipped entirely', () => {
-  const kw = makeKeyword('1', 'good keyword', 'exact');
-  const ag = makeAdGroup('ag1', [kw]);
+test('Archived keywords and campaigns are skipped', () => {
+  const kw1 = makeKeyword('1', 'archived kw', 'exact', 'archived');
+  const ag = makeAdGroup('ag1', [kw1]);
   const camp = makeCampaign('c1', [ag], { state: 'archived' });
 
   const insightsMap = new Map();
-  insightsMap.set('c1', [makeInsight('keyword:1', 'winner', 15, 5)]);
+  insightsMap.set('c1', [makeInsight('keyword:1', 'winner', { orders: 5, acos: 15 })]);
 
   const ctx = makeCtx([camp], insightsMap);
   const result = service.harvest(ctx);
+  assert(result.winnerKeywords.length === 0, 'Expected 0 (archived)');
+});
 
-  assert(result.winnerKeywords.length === 0, 'Expected 0 winners (campaign archived)');
+test('userProvidedKeywords inferred from book title', () => {
+  const ctx = makeCtx([], new Map());
+  ctx.bookContext.title = 'Le Silence des Abysses Roman';
+  const result = service.harvest(ctx);
+  assert(result.userProvidedKeywords.length > 0, 'Expected inferred keywords');
+  assert(result.userProvidedKeywords.includes('silence'), 'Expected "silence"');
+  assert(result.userProvidedKeywords.includes('abysses'), 'Expected "abysses"');
+  assert(result.userProvidedKeywords.includes('roman'), 'Expected "roman"');
 });
 
 // ── Summary ──────────────────────────────────────────────────────

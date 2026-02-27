@@ -37,6 +37,7 @@ import type {
   StructuralGap,
   LifecycleDetection,
   CreationPlanResponse,
+  CreationMode,
 } from './campaign-evolution.types';
 
 @Injectable()
@@ -185,9 +186,10 @@ export class CampaignEvolutionService {
       gaps,
     });
 
-    // 17. Top Focus + Creation Plan (gap-aware)
+    // 17. Top Focus + Creation Plan (gap-aware, with harvest data)
+    const harvestedAssets = this.harvestService.harvest(topFocusCtx);
     const topFocus = this.topFocusService.computeTopFocus(topFocusCtx);
-    const creationPlan = this.topFocusService.generateCreationPlan(topFocusCtx);
+    const creationPlan = this.topFocusService.generateCreationPlan(topFocusCtx, harvestedAssets);
 
     // Link planId to CTA if plan exists
     if (creationPlan && topFocus.primaryCta.intent === 'CREATE') {
@@ -229,7 +231,7 @@ export class CampaignEvolutionService {
   private async detectLifecycle(bookId: string, bookContext: BookContext): Promise<LifecycleDetection> {
     try {
       const result = await this.lifecycleService.computePhase(bookId);
-      const evidence = result.evidence || {};
+      const evidence: Record<string, any> = result.evidence || {};
 
       // Compute confidence from evidence strength
       let confidence = 0.6; // base
@@ -263,8 +265,10 @@ export class CampaignEvolutionService {
     workspaceId: string,
     lifecyclePhaseOverride?: string,
     forceRebuild?: boolean,
+    mode?: CreationMode,
   ): Promise<CreationPlanResponse> {
-    this.logger.log(`Generating creation plan for book ${bookId} (override=${lifecyclePhaseOverride}, forceRebuild=${forceRebuild})`);
+    const effectiveMode: CreationMode = mode || 'HARVEST';
+    this.logger.log(`Generating creation plan for book ${bookId} (override=${lifecyclePhaseOverride}, mode=${effectiveMode})`);
 
     // 1. Load book context
     const bookContext = await this.loadBookContext(bookId);
@@ -294,7 +298,7 @@ export class CampaignEvolutionService {
 
     // 7. Build TopFocusContext
     const topFocusCtx: TopFocusContext = {
-      scenario: forceRebuild ? scenario : scenario, // Keep scenario but force gaps
+      scenario,
       bookContext,
       campaigns: activeCampaigns,
       entityInsightsMap,
@@ -306,41 +310,21 @@ export class CampaignEvolutionService {
       gaps: [],
     };
 
-    // 8. Detect gaps (if forceRebuild, we still detect them but treat plan as always needed)
+    // 8. Detect gaps (informational only — no longer drive creation)
     const gaps = this.gapDetector.detectGaps(topFocusCtx);
     topFocusCtx.gaps = gaps;
 
-    // 9. Harvest seeds
+    // 9. Harvest assets (used by HARVEST mode, partially by RESET for userProvidedKeywords)
     const harvestedAssets = await this.harvestService.harvestAsync(topFocusCtx);
 
-    // 10. Generate creation plan (always, even if no gaps — forceRebuild scenario)
-    let creationPlan = this.topFocusService.generateCreationPlan(topFocusCtx);
+    // 10. Generate creation plan based on user-selected mode
+    const creationPlan = this.topFocusService.generateCreationPlanForMode(
+      topFocusCtx,
+      harvestedAssets,
+      effectiveMode,
+    );
 
-    // If forceRebuild and no plan was generated (everything looks fine), force a basic plan
-    if (forceRebuild && !creationPlan) {
-      creationPlan = this.topFocusService.generateCreationPlan({
-        ...topFocusCtx,
-        // Force at least exploration gap if nothing found
-        gaps: gaps.length > 0 ? gaps : [{
-          type: 'GAP_EXPLORATION' as any,
-          severity: 'high' as any,
-          label: 'Rebuild forcé',
-          explanation: 'Rebuild manuel demandé par l\'auteur.',
-          campaignsToCreate: ['SP_AUTO' as any],
-        }],
-      });
-    }
-
-    // 11. Inject harvested seeds into creation plan
-    if (creationPlan && harvestedAssets.winnerKeywords.length > 0) {
-      for (const campaign of creationPlan.campaignsToCreate) {
-        if (campaign.targetingMode === 'MANUAL' && (!campaign.seedKeywords || campaign.seedKeywords.length === 0)) {
-          campaign.seedKeywords = harvestedAssets.winnerKeywords.map(w => w.text);
-        }
-      }
-    }
-
-    // 12. Roadmap
+    // 11. Roadmap (for informational display)
     const suggestions = this.scenarioSelector.generateSuggestions({
       bookContext, campaigns: activeCampaigns, entityInsightsMap, macroStrategies, duplicationScore, chaosScore, campaignRoles,
     });
@@ -349,11 +333,12 @@ export class CampaignEvolutionService {
     });
 
     return {
-      creationPlan: creationPlan!,
+      creationPlan,
       roadmap,
       gaps,
       harvestedAssets,
       lifecycleUsed: bookContext.lifecyclePhase,
+      modeUsed: effectiveMode,
     };
   }
 

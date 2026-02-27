@@ -79,10 +79,14 @@ export interface BatchCreateFromPlanDto {
     type: string;
     targetingMode: 'AUTO' | 'MANUAL';
     dailyBudget: number;
+    defaultBid?: number;
     biddingStrategy: string;
+    placementAdjustments?: { topOfSearch: number; restOfSearch: number; productPages: number };
     seedKeywords?: string[];
     seedAsins?: string[];
+    negativeKeywords?: string[];
     notesWhy: string;
+    explanations?: Array<{ parameter: string; value: string; reasoning: string; dataSource: string }>;
   }>;
   /** Optional overrides per campaign */
   overrides?: BatchCampaignOverride[];
@@ -399,18 +403,32 @@ export class CreateFromPlanService {
         const matchTypes = this.typeToMatchTypes(campaign.type);
         const targetingType = campaign.targetingMode === 'AUTO' ? 'auto' : 'manual';
 
+        const planPayload: any = {
+          campaignType: campaign.type?.startsWith('SB') ? 'sponsoredBrands' : 'sponsoredProducts',
+          targetingType,
+          matchTypes,
+          dailyBudget: effectiveBudget,
+          keywords: effectiveKeywords || [],
+          asins: campaign.seedAsins || [],
+          negativeKeywords: campaign.negativeKeywords || [],
+        };
+
+        // Inject strategic bid and strategy if provided
+        if (campaign.defaultBid) {
+          planPayload._defaultBid = campaign.defaultBid;
+        }
+        if (campaign.biddingStrategy) {
+          planPayload._biddingStrategy = campaign.biddingStrategy;
+        }
+        if (campaign.placementAdjustments) {
+          planPayload._placementAdjustments = campaign.placementAdjustments;
+        }
+
         const singleDto: CreateFromPlanDto = {
           workspaceId: dto.workspaceId,
           bookId: dto.bookId,
           planActionType: 'create_campaign',
-          planPayload: {
-            campaignType: 'sponsoredProducts',
-            targetingType,
-            matchTypes,
-            dailyBudget: effectiveBudget,
-            keywords: effectiveKeywords || [],
-            asins: campaign.seedAsins || [],
-          },
+          planPayload,
           lifecyclePhase: dto.lifecyclePhase,
         };
 
