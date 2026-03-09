@@ -49,7 +49,7 @@ export const cardHover = {
     y: -4, 
     boxShadow: '0 12px 24px -8px rgba(0, 0, 0, 0.15), 0 4px 8px -4px rgba(0, 0, 0, 0.1)',
     transition: {
-      type: 'spring',
+      type: 'spring' as const,
       stiffness: 400,
       damping: 25,
     },
@@ -171,7 +171,11 @@ export function PageTransition({ children }: { children: React.ReactNode }) {
 // LOADING ANIMATIONS
 // ============================================
 
-export function LoadingPulse() {
+interface LoadingPulseProps {
+  className?: string;
+}
+
+export function LoadingPulse({ className = '' }: LoadingPulseProps) {
   return (
     <motion.div
       animate={{
@@ -182,7 +186,7 @@ export function LoadingPulse() {
         repeat: Infinity,
         ease: 'easeInOut',
       }}
-      className="bg-slate-200 rounded"
+      className={`bg-slate-200 rounded ${className}`}
     />
   );
 }

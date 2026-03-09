@@ -61,23 +61,15 @@ export const toast = {
     sonnerToast.dismiss(toastId);
   },
 
-  promise: <T>(
+  promise: <T,>(
     promise: Promise<T>,
-    {
-      loading,
-      success,
-      error,
-    }: {
+    messages: {
       loading: string;
       success: string | ((data: T) => string);
       error: string | ((error: Error) => string);
     }
   ) => {
-    return sonnerToast.promise(promise, {
-      loading,
-      success,
-      error,
-    });
+    return sonnerToast.promise(promise, messages);
   },
 };
 
