@@ -1,5 +1,6 @@
 'use client';
 import React, { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/Card';
 import { CardSkeleton } from '@/components/ui/Skeleton';
 import { Button } from '@/components/ui/Button';
@@ -189,12 +190,24 @@ export default function HomePage() {
   };
 
   return (
-    <div className="space-y-6">
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+      className="space-y-8"
+    >
       {/* ═══ Header ═══ */}
-      <div className="flex items-center justify-between">
+      <motion.div 
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, delay: 0.1 }}
+        className="flex items-center justify-between"
+      >
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">{t('home.title')}</h1>
-          <p className="text-sm text-slate-500 mt-0.5">{t('home.subtitle')}</p>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-slate-900 via-slate-700 to-slate-900 bg-clip-text text-transparent">
+            {t('home.title')}
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">{t('home.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
           <SyncButton />
@@ -202,74 +215,108 @@ export default function HomePage() {
             + {t('home.add_book')}
           </Button>
         </div>
-      </div>
+      </motion.div>
 
       {/* ═══ Bilan du mois ═══ */}
       {hasBooks && (
-        <Card className="bg-gradient-to-r from-slate-50 to-white">
-          <CardContent>
-            <h2 className="text-sm font-medium text-slate-500 uppercase tracking-wide mb-3">
-              {t('home.profit_title')}
-            </h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {/* Profit — le chiffre clé */}
-              <div className="text-center">
-                <p className={`text-3xl font-bold ${profitColor}`}>
-                  {totals.profit >= 0 ? '+' : ''}{totals.profit.toFixed(0)}€
-                </p>
-                <p className="text-xs text-slate-500 mt-1">{t('home.total_profit')}</p>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, delay: 0.2 }}
+        >
+          <Card className="bg-white/80 backdrop-blur-sm border border-white/50 shadow-xl shadow-slate-200/50">
+            <CardContent className="p-6">
+              <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wider mb-4">
+                {t('home.profit_title')}
+              </h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                {/* Profit — le chiffre clé */}
+                <motion.div 
+                  className="text-center p-4 rounded-2xl bg-gradient-to-br from-emerald-50 to-white border border-emerald-100"
+                  whileHover={{ scale: 1.02 }}
+                  transition={{ type: 'spring', stiffness: 400 }}
+                >
+                  <p className={`text-4xl font-bold ${profitColor} mb-1`}>
+                    {totals.profit >= 0 ? '+' : ''}{totals.profit.toFixed(0)}€
+                  </p>
+                  <p className="text-xs font-medium text-slate-500">{t('home.total_profit')}</p>
+                </motion.div>
+                <motion.div 
+                  className="text-center p-4 rounded-2xl bg-gradient-to-br from-blue-50 to-white border border-blue-100"
+                  whileHover={{ scale: 1.02 }}
+                  transition={{ type: 'spring', stiffness: 400 }}
+                >
+                  <p className="text-2xl font-bold text-slate-700 mb-1">
+                    {formatCurrency(totals.sales)}
+                  </p>
+                  <p className="text-xs font-medium text-slate-500">{t('home.total_sales')}</p>
+                </motion.div>
+                <motion.div 
+                  className="text-center p-4 rounded-2xl bg-gradient-to-br from-violet-50 to-white border border-violet-100"
+                  whileHover={{ scale: 1.02 }}
+                  transition={{ type: 'spring', stiffness: 400 }}
+                >
+                  <p className="text-2xl font-bold text-emerald-600 mb-1">
+                    {formatCurrency(totals.revenue)}
+                  </p>
+                  <p className="text-xs font-medium text-slate-500">Redevances estimées</p>
+                </motion.div>
+                <motion.div 
+                  className="text-center p-4 rounded-2xl bg-gradient-to-br from-amber-50 to-white border border-amber-100"
+                  whileHover={{ scale: 1.02 }}
+                  transition={{ type: 'spring', stiffness: 400 }}
+                >
+                  <p className="text-2xl font-bold text-slate-700 mb-1">
+                    {formatCurrency(totals.spend)}
+                  </p>
+                  <p className="text-xs font-medium text-slate-500">{t('home.total_spend')}</p>
+                </motion.div>
               </div>
-              <div className="text-center">
-                <p className="text-xl font-semibold text-slate-700">
-                  {formatCurrency(totals.sales)}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">{t('home.total_sales')}</p>
-              </div>
-              <div className="text-center">
-                <p className="text-xl font-semibold text-emerald-600">
-                  {formatCurrency(totals.revenue)}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">Redevances estimées</p>
-              </div>
-              <div className="text-center">
-                <p className="text-xl font-semibold text-slate-700">
-                  {formatCurrency(totals.spend)}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">{t('home.total_spend')}</p>
-              </div>
-            </div>
 
+              {/* Mini résumé statuts */}
+              <div className="flex items-center justify-center gap-6 mt-6 text-sm">
+                {countByStatus.success > 0 && (
+                  <motion.span 
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 font-medium"
+                    whileHover={{ scale: 1.05 }}
+                  >
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                    {countByStatus.success} rentable{countByStatus.success > 1 ? 's' : ''}
+                  </motion.span>
+                )}
+                {countByStatus.warning > 0 && (
+                  <motion.span 
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 font-medium"
+                    whileHover={{ scale: 1.05 }}
+                  >
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                    {countByStatus.warning} fragile{countByStatus.warning > 1 ? 's' : ''}
+                  </motion.span>
+                )}
+                {countByStatus.danger > 0 && (
+                  <motion.span 
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-100 text-red-800 font-medium"
+                    whileHover={{ scale: 1.05 }}
+                  >
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
+                    {countByStatus.danger} en perte
+                  </motion.span>
+                )}
+              </div>
 
-            {/* Mini résumé statuts */}
-            <div className="flex items-center justify-center gap-4 mt-4 text-xs">
-              {countByStatus.success > 0 && (
-                <span className="inline-flex items-center gap-1 text-emerald-700">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  {countByStatus.success} rentable{countByStatus.success > 1 ? 's' : ''}
-                </span>
-              )}
-              {countByStatus.warning > 0 && (
-                <span className="inline-flex items-center gap-1 text-amber-700">
-                  <span className="w-2 h-2 rounded-full bg-amber-400" />
-                  {countByStatus.warning} fragile{countByStatus.warning > 1 ? 's' : ''}
-                </span>
-              )}
-              {countByStatus.danger > 0 && (
-                <span className="inline-flex items-center gap-1 text-red-600">
-                  <span className="w-2 h-2 rounded-full bg-red-500" />
-                  {countByStatus.danger} en perte
-                </span>
-              )}
-            </div>
-
-            {/* ── Encart pédagogique : ventes pub uniquement ── */}
-            <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
-              <p className="text-xs text-blue-800 leading-relaxed">
-                <span className="font-semibold">Uniquement les ventes pub.</span> Ces chiffres ne comptent que les ventes générées par Amazon Ads, pas tes ventes organiques. Même si le bilan pub semble négatif, ton livre peut être rentable : la pub aide aussi à positionner ton livre en première page sur les bons mots-clés, ce qui génère des ventes organiques non comptées ici.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+              {/* ── Encart pédagogique : ventes pub uniquement ── */}
+              <motion.div 
+                className="mt-6 p-4 bg-gradient-to-r from-blue-50/80 to-indigo-50/80 border border-blue-200/50 rounded-xl"
+                whileHover={{ scale: 1.01 }}
+                transition={{ type: 'spring', stiffness: 400 }}
+              >
+                <p className="text-sm text-blue-800 leading-relaxed">
+                  <span className="font-semibold">Uniquement les ventes pub.</span> Ces chiffres ne comptent que les ventes générées par Amazon Ads, pas tes ventes organiques. Même si le bilan pub semble négatif, ton livre peut être rentable : la pub aide aussi à positionner ton livre en première page sur les bons mots-clés, ce qui génère des ventes organiques non comptées ici.
+                </p>
+              </motion.div>
+            </CardContent>
+          </Card>
+        </motion.div>
       )}
 
       {/* ═══ Onboarding si pas de livres ═══ */}
@@ -277,17 +324,23 @@ export default function HomePage() {
 
       {/* ═══ Catalogue de livres ═══ */}
       {hasBooks && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {books.map((book) => (
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5, delay: 0.3 }}
+          className="grid grid-cols-1 md:grid-cols-2 gap-6"
+        >
+          {books.map((book, index) => (
             <BookCard
               key={book.id}
               book={book}
+              index={index}
               onDeleted={(deletedId) => {
                 setBooks((prev) => prev.filter((b) => b.id !== deletedId));
               }}
             />
           ))}
-        </div>
+        </motion.div>
       )}
 
       {/* ═══ Message si pas de données mais livres présents ═══ */}
@@ -316,6 +369,6 @@ export default function HomePage() {
           onLinked={handleLinkDone}
         />
       )}
-    </div>
+    </motion.div>
   );
 }
