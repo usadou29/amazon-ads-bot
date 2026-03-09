@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import { motion } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { MetricsGrid } from '@/components/ui/MetricCard';
 import { StatusBadge } from '@/components/ui/StatusBadge';
@@ -9,6 +10,7 @@ import { RoyaltyEditor, RoyaltyValues } from '@/components/features/RoyaltyEdito
 import { CampaignDetailView } from '@/components/features/CampaignDetailView';
 import { CardSkeleton } from '@/components/ui/Skeleton';
 import { useSafety } from '@/lib/hooks/useSafety';
+import { toast } from '@/lib/toast';
 import {
   fetchBookDashboard,
   fetchBookCampaignDetails,
