@@ -5,6 +5,7 @@ import { SafetyBanner } from '@/components/ui/SafetyBanner';
 import { SyncProgressBar } from '@/components/features/SyncProgressBar';
 import { SyncProvider } from '@/lib/contexts/SyncContext';
 import { useSafety } from '@/lib/hooks/useSafety';
+import { Toaster } from '@/lib/toast';
 
 export function ClientLayout({ children }: { children: React.ReactNode }) {
   const safety = useSafety();
@@ -15,6 +16,7 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
         <Navbar />
         <SyncProgressBar />
         <main className="max-w-5xl mx-auto px-4 py-6">{children}</main>
+        <Toaster />
       </div>
     </SyncProvider>
   );

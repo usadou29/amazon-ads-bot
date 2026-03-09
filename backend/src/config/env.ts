@@ -6,6 +6,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.string().transform(Number).default('3001'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  CORS_ORIGIN: z.string().optional(), // Comma-separated list of allowed origins
 
   // Database
   DATABASE_URL: z.string().url(),
@@ -58,6 +59,7 @@ export const configuration = () => ({
     nodeEnv: env.NODE_ENV,
     port: env.PORT,
     logLevel: env.LOG_LEVEL,
+    corsOrigin: env.CORS_ORIGIN,
   },
   database: {
     url: env.DATABASE_URL,

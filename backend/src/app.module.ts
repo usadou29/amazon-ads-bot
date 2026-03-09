@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { configuration } from '@/config/env';
 import { DatabaseModule } from '@/db/database.module';
 import { SystemModule } from '@/modules/system/system.module';
@@ -29,6 +31,11 @@ import { CampaignEvolutionModule } from '@/modules/campaign-evolution/campaign-e
       envFilePath: ['.env'],
       load: [configuration],
     }),
+    // ✅ SECURITY: Rate limiting - 10 requêtes par 60 secondes par IP
+    ThrottlerModule.forRoot([{
+      ttl: 60000,
+      limit: 10,
+    }]),
     DatabaseModule,
     SystemModule,
     AuthModule,
@@ -49,6 +56,13 @@ import { CampaignEvolutionModule } from '@/modules/campaign-evolution/campaign-e
     LifecycleModule,
     MacroModule,
     CampaignEvolutionModule,
+  ],
+  providers: [
+    // ✅ SECURITY: Apply rate limiting globally
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}
