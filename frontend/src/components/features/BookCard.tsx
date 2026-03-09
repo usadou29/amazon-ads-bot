@@ -32,24 +32,24 @@ export interface BookCardData {
 
 const statusConfig = {
   success: {
-    bg: 'border-l-emerald-500 bg-emerald-50/50',
-    badge: 'bg-emerald-100 text-emerald-800',
-    shadow: 'shadow-emerald-100',
+    bg: 'border-l-emerald-500 bg-emerald-500/10',
+    badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+    shadow: 'shadow-emerald-500/10',
   },
   warning: {
-    bg: 'border-l-amber-400 bg-amber-50/50',
-    badge: 'bg-amber-100 text-amber-800',
-    shadow: 'shadow-amber-100',
+    bg: 'border-l-amber-400 bg-amber-500/10',
+    badge: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+    shadow: 'shadow-amber-500/10',
   },
   danger: {
-    bg: 'border-l-red-500 bg-red-50/50',
-    badge: 'bg-red-100 text-red-800',
-    shadow: 'shadow-red-100',
+    bg: 'border-l-red-500 bg-red-500/10',
+    badge: 'bg-red-500/20 text-red-300 border-red-500/30',
+    shadow: 'shadow-red-500/10',
   },
 };
 
 const profitColor = (profit: number) =>
-  profit > 0 ? 'text-emerald-700' : profit < 0 ? 'text-red-600' : 'text-slate-600';
+  profit > 0 ? 'text-emerald-400' : profit < 0 ? 'text-red-400' : 'text-slate-400';
 
 interface BookCardProps {
   book: BookCardData;
@@ -112,7 +112,7 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
     >
       <Link href={`/books/${book.id}`} className="block">
         <motion.div
-          className={`rounded-xl border-l-4 border border-slate-200 p-4 cursor-pointer relative overflow-hidden ${status.bg}`}
+          className={`rounded-xl border-l-4 border border-white/10 p-4 cursor-pointer relative overflow-hidden backdrop-blur-sm ${status.bg}`}
           animate={{
             boxShadow: isHovered 
               ? '0 12px 24px -8px rgba(0, 0, 0, 0.15), 0 4px 8px -4px rgba(0, 0, 0, 0.1)' 
@@ -128,7 +128,7 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
                 animate={{ opacity: 1, backdropFilter: 'blur(4px)' }}
                 exit={{ opacity: 0, backdropFilter: 'blur(0px)' }}
                 transition={{ duration: 0.2 }}
-                className="absolute inset-0 z-10 bg-white/95 flex flex-col items-center justify-center gap-3 p-4"
+                className="absolute inset-0 z-10 bg-slate-900/95 flex flex-col items-center justify-center gap-3 p-4"
                 onClick={(e) => e.preventDefault()}
               >
                 <motion.div
@@ -137,16 +137,16 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
                   exit={{ scale: 0.9, opacity: 0 }}
                   className="text-center"
                 >
-                  <p className="text-sm font-medium text-slate-900 text-center mb-1">
+                  <p className="text-sm font-medium text-white text-center mb-1">
                     Supprimer « {book.title || book.asin} » ?
                   </p>
-                  <p className="text-xs text-slate-500 text-center mb-4">
+                  <p className="text-xs text-slate-400 text-center mb-4">
                     Les campagnes associées ne seront pas supprimées.
                   </p>
                   <div className="flex gap-2 justify-center">
                     <button
                       onClick={handleCancelDelete}
-                      className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                      className="px-4 py-2 text-sm font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors"
                     >
                       Annuler
                     </button>
@@ -179,7 +179,7 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
                 exit={{ opacity: 0, scale: 0.8 }}
                 transition={{ duration: 0.15 }}
                 onClick={handleDeleteClick}
-                className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white border border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-300 transition-colors flex items-center justify-center text-sm z-[5]"
+                className="absolute top-3 right-3 w-7 h-7 rounded-full bg-slate-800 border border-white/10 text-slate-400 hover:text-red-400 hover:border-red-400/50 transition-colors flex items-center justify-center text-sm z-[5]"
                 title="Supprimer ce livre"
               >
                 ×
@@ -191,7 +191,7 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
           <div className="flex items-start justify-between gap-3 mb-3">
             <div className="flex-1 min-w-0">
               <motion.h3 
-                className="text-base font-semibold text-slate-900 truncate leading-tight"
+                className="text-base font-semibold text-white truncate leading-tight"
                 layoutId={`title-${book.id}`}
               >
                 {book.title || book.asin}
@@ -212,7 +212,7 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
                   className="w-28 h-40 rounded-lg object-cover flex-shrink-0 shadow-md"
                 />
               ) : (
-                <div className="w-28 h-40 rounded-lg bg-slate-200 flex-shrink-0 flex items-center justify-center text-3xl shadow-md">
+                <div className="w-28 h-40 rounded-lg bg-slate-700 flex-shrink-0 flex items-center justify-center text-3xl shadow-md">
                   {book.status.emoji}
                 </div>
               )}
@@ -234,19 +234,19 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
                 decimals={0}
               />
             </motion.p>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-400">
               gains réels ce mois-ci{book.isEstimated ? ' (estimé)' : ''}
             </p>
           </div>
 
           {/* ── Résumé en langage naturel ── */}
-          <p className="text-sm text-slate-600 mb-3 leading-relaxed">
+          <p className="text-sm text-slate-300 mb-3 leading-relaxed">
             {book.status.description}
           </p>
 
           {/* ── Mini KPIs animés ── */}
           <motion.div 
-            className="flex items-center gap-4 text-xs text-slate-500 mb-3"
+            className="flex items-center gap-4 text-xs text-slate-400 mb-3"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: index * 0.1 + 0.3 }}
@@ -268,7 +268,7 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
               <motion.span 
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
-                className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-1 rounded-full"
+                className="inline-flex items-center gap-1 text-xs font-medium text-amber-300 bg-amber-500/20 border border-amber-500/30 px-2 py-1 rounded-full"
               >
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
@@ -280,7 +280,7 @@ export function BookCard({ book, onDeleted, index = 0 }: BookCardProps) {
               <span />
             )}
             <motion.span 
-              className="text-xs font-medium text-brand-600 flex items-center gap-1"
+              className="text-xs font-medium text-indigo-400 flex items-center gap-1"
               animate={{ x: isHovered ? 4 : 0 }}
               transition={{ type: 'spring', stiffness: 400 }}
             >
